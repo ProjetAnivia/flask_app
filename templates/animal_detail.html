@@ -54,6 +54,40 @@
   </div>
 </div>
 
+<!-- ─── Pipeline status ─── -->
+<div class="card" style="padding:16px 24px;">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:0;">
+    {% for step in pipeline %}
+    <div style="display:flex;align-items:center;flex:1;">
+      <!-- Étape -->
+      <div style="display:flex;flex-direction:column;align-items:center;gap:6px;min-width:100px;">
+        <div style="width:36px;height:36px;border-radius:50%;display:flex;align-items:center;
+                    justify-content:center;font-size:16px;
+                    background:{% if step.ok %}var(--teal-bg){% else %}var(--bg3){% endif %};
+                    border:2px solid {% if step.ok %}var(--teal){% else %}var(--border2){% endif %};
+                    color:{% if step.ok %}var(--teal){% else %}var(--hint){% endif %};">
+          {% if step.ok %}✓{% else %}{{ step.icon }}{% endif %}
+        </div>
+        <div style="text-align:center;">
+          <div style="font-size:12px;font-weight:500;color:{% if step.ok %}var(--teal){% else %}var(--muted){% endif %};">
+            {{ step.label }}
+          </div>
+          <div style="font-family:var(--font-mono);font-size:9px;color:var(--hint);margin-top:2px;">
+            {{ step.sub }}
+          </div>
+        </div>
+      </div>
+      <!-- Connecteur (sauf après le dernier) -->
+      {% if not loop.last %}
+      <div style="flex:1;height:2px;
+                  background:{% if step.ok %}var(--teal){% else %}var(--border2){% endif %};
+                  margin:0 4px;margin-bottom:24px;transition:background 0.3s;"></div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
 <!-- ─── Viewer NIfTI / NiiVue ─── -->
 {% set nifti_acqs = acqs | selectattr("nifti_url") | list %}
 {% if nifti_acqs %}

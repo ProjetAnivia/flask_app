@@ -14,7 +14,7 @@ from flask import Flask, render_template, jsonify, request, redirect, url_for, s
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from functools import wraps
 from pathlib import Path
-import json, sqlite3, hashlib, os, re, csv, io, socket, threading
+import json, sqlite3, hashlib, os, re, csv, io, socket, threading, bcrypt as _bcrypt
 from datetime import datetime
 
 def sanitize_animal_id(raw: str) -> str:
@@ -166,11 +166,14 @@ def init_db():
             ("admin",      hash_pw("admin123"),   "admin"),
             ("nicolas",    hash_pw("nico123"),     "admin"),
             ("clemence",   hash_pw("clem123"),     "admin"),
-            ("florent",    hash_pw("flo123"),      "operateur"),
+            ("florent",    hash_pw("flo123"),      "admin"),
+            ("pauline",    hash_pw("Pauline45"),   "operateur"),
             ("chercheur",  hash_pw("ch123"),       "chercheur"),
         ]
         for u in users_demo:
             db.execute("INSERT OR IGNORE INTO users (username,password,role) VALUES (?,?,?)", u)
+        # Mise à jour du rôle de florent en admin (migration pour bases existantes)
+        db.execute("UPDATE users SET role='admin' WHERE username='florent'")
 
         # Projets et animaux démo — uniquement si la base est vide (évite d'écraser les données réelles)
         if db.execute("SELECT COUNT(*) FROM projets").fetchone()[0] == 0:
@@ -195,7 +198,22 @@ def init_db():
         db.commit()
 
 def hash_pw(pw: str) -> str:
-    return hashlib.sha256(pw.encode()).hexdigest()
+    """Hache avec bcrypt (nouveau standard). Retourne un hash préfixé $2b$."""
+    return _bcrypt.hashpw(pw.encode(), _bcrypt.gensalt()).decode()
+
+def verify_pw(pw: str, stored: str) -> bool:
+    """
+    Vérifie le mot de passe en supportant les deux schémas :
+    - bcrypt ($2b$...) : nouveaux comptes et comptes migrés
+    - SHA-256 (64 hex) : anciens comptes — acceptés et auto-migrés à la connexion
+    """
+    if stored.startswith("$2"):
+        try:
+            return _bcrypt.checkpw(pw.encode(), stored.encode())
+        except Exception:
+            return False
+    # Schéma SHA-256 hérité
+    return hashlib.sha256(pw.encode()).hexdigest() == stored
 
 def validate_password(pw: str) -> str | None:
     """Retourne un message d'erreur ou None si le mot de passe est valide."""
@@ -247,11 +265,14 @@ def login():
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
         with get_db() as db:
-            row = db.execute(
-                "SELECT * FROM users WHERE username=? AND password=?",
-                (username, hash_pw(password))
-            ).fetchone()
-        if row:
+            row = db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+        if row and verify_pw(password, row["password"]):
+            # Migration transparente SHA-256 → bcrypt au premier login
+            if not row["password"].startswith("$2"):
+                with get_db() as db2:
+                    db2.execute("UPDATE users SET password=? WHERE id=?",
+                                (hash_pw(password), row["id"]))
+                    db2.commit()
             login_user(User(row["id"], row["username"], row["role"]))
             with get_db() as db2:
                 db2.execute(
@@ -599,6 +620,89 @@ from werkzeug.utils import secure_filename
 
 ALLOWED_EXTENSIONS = {".dcm", ".ima", ".nii", ".nii.gz", ""}
 
+def dicom_series_to_nifti(dcm_files: list, dest_dir: Path, stem: str = "series") -> tuple:
+    """
+    Empile plusieurs coupes DICOM (une série) en un volume 3D NIfTI.
+    Retourne (nifti_path, metadata_dict).
+    """
+    import pydicom, nibabel as nib, numpy as np
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    slices, meta = [], {}
+    for f in dcm_files:
+        try:
+            ds = pydicom.dcmread(str(f), force=True)
+            slices.append(ds)
+        except Exception:
+            pass
+
+    if not slices:
+        raise ValueError("Aucune coupe DICOM lisible dans la série")
+
+    # Trier par InstanceNumber puis SliceLocation
+    def _sort_key(ds):
+        inst = getattr(ds, "InstanceNumber", None)
+        loc  = getattr(ds, "SliceLocation",  None)
+        return (int(inst) if inst is not None else 0,
+                float(loc) if loc is not None else 0.0)
+    slices.sort(key=_sort_key)
+
+    # Lire les métadonnées du premier slice
+    ds0 = slices[0]
+    for attr, key in [("PatientID","animal_id"), ("StudyDate","date_acq"),
+                       ("SeriesDescription","sequence"), ("Modality","modality")]:
+        v = getattr(ds0, attr, None)
+        if v:
+            meta[key] = str(v)
+
+    # Empiler les pixels
+    arrays = []
+    for ds in slices:
+        try:
+            arr = ds.pixel_array.astype(np.float32)
+            if arr.ndim == 2:
+                arrays.append(arr)
+        except Exception:
+            pass
+
+    if not arrays:
+        raise ValueError("Impossible de lire les pixels des coupes DICOM")
+
+    volume = np.stack(arrays, axis=-1)   # (rows, cols, n_slices)
+
+    # Affine depuis métadonnées
+    affine = np.eye(4)
+    try:
+        ps = ds0.PixelSpacing
+        st = float(getattr(ds0, "SliceThickness", 1.0))
+        affine = np.diag([float(ps[0]), float(ps[1]), st, 1.0])
+    except Exception:
+        pass
+
+    mn, mx = volume.min(), volume.max()
+    if mx > mn:
+        volume = (volume - mn) / (mx - mn) * 1000.0
+
+    out_path = dest_dir / f"{stem}.nii.gz"
+    nib.save(nib.Nifti1Image(volume, affine), str(out_path))
+    return out_path, meta
+
+
+def extract_dicom_from_zip(zip_path: Path, tmp_dir: Path) -> list:
+    """Extrait tous les fichiers DICOM d'une archive zip."""
+    import zipfile
+    dcm_files = []
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        for name in zf.namelist():
+            low = name.lower()
+            if low.endswith((".dcm", ".ima")) or ("." not in Path(name).name):
+                out = tmp_dir / Path(name).name
+                out.write_bytes(zf.read(name))
+                dcm_files.append(out)
+    return dcm_files
+
+
 def dicom_to_nifti(dicom_path: Path, dest_dir: Path) -> Path:
     """
     Convertit un fichier DICOM en NIfTI.
@@ -718,81 +822,249 @@ def process_uploaded_file(src: Path, project: str, animal_id: str,
     }
 
 
+@app.route("/api/pipeline/dicom-meta", methods=["POST"])
+@login_required
+def api_dicom_meta():
+    """Lit les métadonnées DICOM du premier fichier envoyé (sans le stocker)."""
+    files = request.files.getlist("files")
+    if not files:
+        return jsonify({}), 200
+    with tempfile.TemporaryDirectory() as tmp:
+        f0   = files[0]
+        path = Path(tmp) / secure_filename(f0.filename)
+        f0.save(str(path))
+        try:
+            import pydicom
+            ds   = pydicom.dcmread(str(path), stop_before_pixels=True, force=True)
+            meta = {}
+
+            # Tags standard
+            if getattr(ds, "PatientID",         None): meta["animal_id"] = str(ds.PatientID).strip()
+            if getattr(ds, "StudyDate",          None): meta["date_acq"]  = str(ds.StudyDate).strip()
+            if getattr(ds, "SeriesDescription",  None): meta["sequence"]  = str(ds.SeriesDescription).strip()
+            if getattr(ds, "Modality",           None): meta["modality"]  = str(ds.Modality).strip()
+            if getattr(ds, "PatientName",        None): meta["patient_name"] = str(ds.PatientName).strip()
+            if getattr(ds, "ProtocolName",       None): meta["protocol"]  = str(ds.ProtocolName).strip()
+            if getattr(ds, "StudyDescription",   None): meta["study_desc"] = str(ds.StudyDescription).strip()
+            if getattr(ds, "InstitutionName",    None): meta["institution"] = str(ds.InstitutionName).strip()
+
+            # Paravision exporte parfois le nom de la séquence dans SequenceName
+            if not meta.get("sequence") and getattr(ds, "SequenceName", None):
+                meta["sequence"] = str(ds.SequenceName).strip()
+            # Ou dans SeriesDescription avec un préfixe à nettoyer
+            if meta.get("sequence"):
+                # Nettoyer les noms Paravision du type "* T1_FLASH" ou "FLASH_T2"
+                seq = re.sub(r"^[\*\s]+", "", meta["sequence"])
+                seq = sanitize_animal_id(seq)
+                meta["sequence"] = seq
+
+            # Normaliser l'animal_id selon convention FAIR
+            if meta.get("animal_id"):
+                meta["animal_id"] = sanitize_animal_id(meta["animal_id"])
+
+            return jsonify(meta)
+        except Exception:
+            return jsonify({}), 200
+
+
+@app.route("/api/pipeline/fair-preview", methods=["POST"])
+@login_required
+def api_fair_preview():
+    """Retourne le chemin FAIR calculé pour un import donné."""
+    data      = request.json or {}
+    animal_id = data.get("animal_id", "").strip()
+    project   = data.get("project",   "").strip()
+    sequence  = data.get("sequence",  "SEQ").strip()
+    date_acq  = data.get("date_acq",  "").strip()
+    if not animal_id or not project:
+        return jsonify({"error": "animal_id et project requis"}), 400
+    folder  = build_animal_folder(animal_id, date_acq or datetime.now().strftime("%Y%m%d"))
+    seq_dir = sanitize_animal_id(sequence)
+    preview = f"{project}/{folder}/{seq_dir}/<fichier>.nii.gz"
+    return jsonify({"preview": preview, "folder": folder, "seq": seq_dir})
+
+
+@app.route("/api/nas/scan-names")
+@login_required
+@role_required("admin", "operateur")
+def api_nas_scan_names():
+    """
+    Scanne le NAS pour trouver des dossiers dont le nom ne respecte pas
+    la convention FAIR : AAAAMMJJ_AnimalID (sans espace ni caractère spécial).
+    """
+    import re as _re
+    pattern = _re.compile(r"^\d{8}_[A-Za-z0-9_\-]+$")
+    bad, ok_count = [], 0
+    for projet_dir in sorted(NAS_ROOT.iterdir()):
+        if not projet_dir.is_dir():
+            continue
+        for animal_dir in sorted(projet_dir.iterdir()):
+            if not animal_dir.is_dir():
+                continue
+            name = animal_dir.name
+            if pattern.match(name):
+                ok_count += 1
+            else:
+                bad.append({
+                    "projet":   projet_dir.name,
+                    "nom":      name,
+                    "suggere":  _re.sub(r"[* ]+", "-", name).strip("-_"),
+                    "chemin":   str(animal_dir.relative_to(NAS_ROOT)),
+                })
+    return jsonify({"non_conformes": bad, "ok": ok_count, "total": ok_count + len(bad)})
+
+
+@app.route("/api/nas/rename", methods=["POST"])
+@login_required
+@role_required("admin")
+def api_nas_rename():
+    """Renomme un dossier NAS et met à jour les chemins en base."""
+    data     = request.json or {}
+    projet   = data.get("projet",    "").strip()
+    old_name = data.get("old_name",  "").strip()
+    new_name = sanitize_animal_id(data.get("new_name", "").strip())
+
+    if not projet or not old_name or not new_name:
+        return jsonify({"error": "projet, old_name et new_name requis"}), 400
+
+    old_path = NAS_ROOT / projet / old_name
+    new_path = NAS_ROOT / projet / new_name
+
+    if not old_path.exists():
+        return jsonify({"error": "Dossier source introuvable"}), 404
+    if new_path.exists():
+        return jsonify({"error": "Un dossier avec ce nom existe déjà"}), 409
+
+    old_path.rename(new_path)
+
+    # Mettre à jour les chemins dans acquisitions
+    with get_db() as db:
+        acqs = db.execute(
+            "SELECT id, fichier_dest FROM acquisitions WHERE projet=?", (projet,)
+        ).fetchall()
+        for a in acqs:
+            if a["fichier_dest"] and old_name in a["fichier_dest"]:
+                new_dest = a["fichier_dest"].replace(
+                    str(old_path), str(new_path)
+                ).replace(
+                    f"/{old_name}/", f"/{new_name}/"
+                )
+                db.execute("UPDATE acquisitions SET fichier_dest=? WHERE id=?",
+                           (new_dest, a["id"]))
+        db.commit()
+
+    return jsonify({"ok": True, "nouveau_nom": new_name})
+
+
 @app.route("/api/pipeline/upload", methods=["POST"])
 @login_required
 @role_required("admin", "operateur")
 def api_upload_file():
-    """Upload d'un fichier DICOM ou NIfTI depuis le navigateur."""
-    if "file" not in request.files:
-        return jsonify({"error": "Aucun fichier reçu"}), 400
-
-    f         = request.files["file"]
-    project   = request.form.get("project", "").strip()
+    """Upload DICOM (un ou plusieurs fichiers / zip) ou NIfTI depuis le navigateur."""
+    files     = request.files.getlist("files")
+    project   = request.form.get("project",   "").strip()
     animal_id = request.form.get("animal_id", "").strip()
-    sequence  = request.form.get("sequence", "SEQ").strip()
-    date_acq  = request.form.get("date_acq", datetime.now().strftime("%Y-%m-%d")).strip()
+    sequence  = request.form.get("sequence",  "SEQ").strip()
+    date_acq  = request.form.get("date_acq",  datetime.now().strftime("%Y-%m-%d")).strip()
+    espece    = request.form.get("espece",    "—").strip() or "—"
 
+    if not files or files[0].filename == "":
+        return jsonify({"error": "Aucun fichier reçu"}), 400
     if not project or not animal_id:
         return jsonify({"error": "project et animal_id requis"}), 400
-    if f.filename == "":
-        return jsonify({"error": "Nom de fichier vide"}), 400
 
-    filename = secure_filename(f.filename)
+    now = datetime.now().isoformat()
 
-    # Sauvegarder temporairement
     with tempfile.TemporaryDirectory() as tmp:
-        tmp_path = Path(tmp) / filename
-        f.save(str(tmp_path))
+        tmp_dir  = Path(tmp)
+        saved    = []
+        for f in files:
+            p = tmp_dir / secure_filename(f.filename)
+            f.save(str(p))
+            saved.append(p)
+
+        # Détecter le mode : zip / série DICOM / fichier unique
+        is_zip    = len(saved) == 1 and saved[0].suffix.lower() == ".zip"
+        is_nifti  = len(saved) == 1 and "".join(saved[0].suffixes).lower() in {".nii", ".nii.gz"}
+        is_series = (not is_zip and not is_nifti and len(saved) > 1)
+
+        dest_dir = NAS_ROOT / project / build_animal_folder(animal_id, date_acq) / sanitize_animal_id(sequence)
+        dest_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            result = process_uploaded_file(
-                tmp_path, project, animal_id, sequence, date_acq
-            )
+            if is_zip:
+                dcm_files = extract_dicom_from_zip(saved[0], tmp_dir / "extracted")
+                if not dcm_files:
+                    return jsonify({"error": "Aucun fichier DICOM trouvé dans l'archive"}), 400
+                nifti_path, detected = dicom_series_to_nifti(dcm_files, dest_dir, stem=sanitize_animal_id(sequence))
+                file_type = f"ZIP→NIfTI ({len(dcm_files)} coupes)"
+
+            elif is_series:
+                nifti_path, detected = dicom_series_to_nifti(saved, dest_dir, stem=sanitize_animal_id(sequence))
+                file_type = f"Série DICOM→NIfTI ({len(saved)} coupes)"
+
+            elif is_nifti:
+                import shutil as _sh
+                nifti_path = dest_dir / saved[0].name
+                _sh.copy2(saved[0], nifti_path)
+                detected  = {}
+                file_type = "NIfTI"
+
+            else:
+                # Fichier DICOM unique
+                result = process_uploaded_file(saved[0], project, animal_id, sequence, date_acq)
+                nifti_path = Path(result["dest"])
+                detected   = result["meta"]
+                file_type  = result["file_type"]
+
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
-    # Enregistrer en base
+        md5 = hashlib.md5(open(nifti_path, "rb").read()).hexdigest()
+
+    # Priorité aux valeurs saisies par l'utilisateur sur les métadonnées DICOM
+    final_animal = animal_id or detected.get("animal_id", animal_id)
+    final_date   = date_acq  or detected.get("date_acq",  date_acq)
+    final_seq    = sequence  or detected.get("sequence",  sequence)
+
     with get_db() as db:
         db.execute(
-            """INSERT INTO acquisitions
-               (animal_id, projet, sequence, date_acq, fichier_dest, md5, statut, importé_par, importé_le)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
-            (result["meta"]["animal_id"], project, result["meta"]["sequence"],
-             result["meta"]["date_acq"], result["dest"], result["md5"],
-             "ok", current_user.username, datetime.now().isoformat())
+            "INSERT INTO acquisitions "
+            "(animal_id,projet,sequence,date_acq,fichier_dest,md5,statut,importé_par,importé_le) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (final_animal, project, final_seq, final_date,
+             str(nifti_path), md5, "ok", current_user.username, now)
         )
-        # Mettre à jour ou créer l'animal
         existing = db.execute(
             "SELECT id FROM animaux WHERE animal_id=? AND projet=?",
-            (result["meta"]["animal_id"], project)
+            (final_animal, project)
         ).fetchone()
         if existing:
             db.execute(
-                "UPDATE animaux SET nb_acquisitions=nb_acquisitions+1, statut='en_cours' WHERE animal_id=? AND projet=?",
-                (result["meta"]["animal_id"], project)
+                "UPDATE animaux SET nb_acquisitions=nb_acquisitions+1, statut='en_cours' "
+                "WHERE animal_id=? AND projet=?",
+                (final_animal, project)
             )
         else:
             db.execute(
-                """INSERT INTO animaux (animal_id, espece, projet, date_premiere_acq, nb_acquisitions, statut)
-                   VALUES (?,?,?,?,?,?)""",
-                (result["meta"]["animal_id"], "—", project,
-                 result["meta"]["date_acq"], 1, "en_cours")
+                "INSERT INTO animaux (animal_id,espece,projet,date_premiere_acq,nb_acquisitions,statut) "
+                "VALUES (?,?,?,?,?,?)",
+                (final_animal, espece, project, final_date, 1, "en_cours")
             )
-        # Log pipeline
         db.execute(
-            """INSERT INTO pipeline_logs (timestamp, source, dest, animal_id, sequence, statut, md5, erreur)
-               VALUES (?,?,?,?,?,?,?,?)""",
-            (datetime.now().isoformat(), filename, result["dest"],
-             result["meta"]["animal_id"], result["meta"]["sequence"],
-             "IMPORTED", result["md5"], None)
+            "INSERT INTO pipeline_logs (timestamp,source,dest,animal_id,sequence,statut,md5) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (now, f"{len(files)} fichier(s)", str(nifti_path),
+             final_animal, final_seq, "IMPORTED", md5)
         )
         db.commit()
 
     return jsonify({
-        "ok":      True,
-        "message": f"Fichier importé ({result['file_type']})",
-        "dest":    result["dest_rel"],
-        "md5":     result["md5"],
+        "ok":       True,
+        "message":  f"{file_type} importé avec succès",
+        "dest":     str(nifti_path.relative_to(NAS_ROOT)),
+        "md5":      md5,
+        "nb_files": len(files),
     })
 
 
@@ -1139,7 +1411,7 @@ def api_change_password(user_id):
     if current_user.id == user_id:
         with get_db() as db:
             row = db.execute("SELECT password FROM users WHERE id=?", (user_id,)).fetchone()
-        if not row or row["password"] != hash_pw(current_pw):
+        if not row or not verify_pw(current_pw, row["password"]):
             return jsonify({"error": "Mot de passe actuel incorrect"}), 400
 
     pw_err = validate_password(new_pw)
@@ -1283,6 +1555,20 @@ def page_animal(projet, animal_id):
         d["volumetrie"] = vol_by_acq.get(d["id"])
         acqs_enriched.append(d)
 
+    # Statut pipeline : 4 étapes
+    has_acqs  = len(acqs_enriched) > 0
+    has_nifti = any(a.get("fichier_dest") for a in acqs_enriched)
+    has_post  = any(
+        a.get("volumetrie") and a["volumetrie"].get("statut") == "ok"
+        for a in acqs_enriched
+    )
+    pipeline = [
+        {"label": "IRM",        "sub": "Scan enregistré",   "ok": has_acqs,  "icon": "◎"},
+        {"label": "NAS / DICOM","sub": "Fichiers transférés","ok": has_acqs,  "icon": "⬡"},
+        {"label": "NIfTI",      "sub": "Conversion faite",  "ok": has_nifti, "icon": "⬢"},
+        {"label": "Post-traité","sub": "Volumétrie calculée","ok": has_post,  "icon": "★"},
+    ]
+
     return render_template("animal_detail.html",
         animal       = dict(animal),
         acqs         = acqs_enriched,
@@ -1290,6 +1576,7 @@ def page_animal(projet, animal_id):
         logs         = [dict(l) for l in logs],
         dossier_nas  = dossier_nas,
         projet       = projet,
+        pipeline     = pipeline,
     )
 
 
@@ -1386,6 +1673,8 @@ def compute_volumetry_bg(vol_id: int, fichier_dest: str):
         import numpy as np
         from sklearn.cluster import KMeans
 
+        from scipy import ndimage as ndi
+
         now        = datetime.now().isoformat()
         real_path  = resolve_nifti_path(fichier_dest)
         img        = nib.load(real_path)
@@ -1396,27 +1685,47 @@ def compute_volumetry_bg(vol_id: int, fichier_dest: str):
         if voxel_vol <= 0:
             voxel_vol = 1.0
 
-        # Masque cerveau : exclure le fond (intensité quasi nulle)
+        # ── Étape 1 : masque grossier (fond = voxels quasi nuls) ──────────────
         nonzero = data[data > 0]
         if nonzero.size < 10:
             raise ValueError("Volume trop petit ou données vides — vérifiez le fichier NIfTI")
-        threshold   = float(np.percentile(nonzero, 5))
-        brain_mask  = data > threshold
-        n_brain     = int(brain_mask.sum())
+        threshold_bg = float(np.percentile(nonzero, 3))
+        rough_mask   = data > threshold_bg
+
+        # ── Étape 2 : garder uniquement la plus grande composante connexe ─────
+        labeled, n_components = ndi.label(rough_mask)
+        if n_components == 0:
+            raise ValueError("Aucune région détectée dans l'image")
+        component_sizes = ndi.sum(rough_mask, labeled, range(1, n_components + 1))
+        largest = int(np.argmax(component_sizes)) + 1
+        brain_mask = labeled == largest
+
+        # ── Étape 3 : boucher les trous internes (cavités ventriculaires etc.) ─
+        brain_mask = ndi.binary_fill_holes(brain_mask)
+        n_brain    = int(brain_mask.sum())
 
         brain_vals = data[brain_mask].reshape(-1, 1)
 
-        # K-means 3 classes : LCR, substance grise, substance blanche
-        km      = KMeans(n_clusters=3, n_init=10, random_state=42)
+        # ── Étape 4 : K-means 4 classes ───────────────────────────────────────
+        # Classe 0 → LCR / hypo-intense  (liquide céphalo-rachidien)
+        # Classe 1 → Substance grise      (intensité intermédiaire basse)
+        # Classe 2 → Substance blanche    (intensité intermédiaire haute)
+        # Classe 3 → Vaisseaux / artefacts (hyper-intense)
+        km      = KMeans(n_clusters=4, n_init=10, random_state=42)
         km.fit(brain_vals)
         labels  = km.labels_
         centers = km.cluster_centers_.flatten()
-        order   = np.argsort(centers)  # 0=hypointense → 2=hyperintense
+        order   = np.argsort(centers)  # du plus sombre au plus lumineux
 
-        tissue_names = {order[0]: "LCR / fond", order[1]: "Substance grise", order[2]: "Substance blanche"}
+        tissue_names = {
+            order[0]: "LCR / ventricules",
+            order[1]: "Substance grise",
+            order[2]: "Substance blanche",
+            order[3]: "Vaisseaux / hyper-intenses",
+        }
 
         tissus = []
-        for i in range(3):
+        for i in range(4):
             cnt = int((labels == i).sum())
             tissus.append({
                 "nom":     tissue_names[i],

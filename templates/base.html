@@ -38,8 +38,9 @@
       --blue:     #1d4ed8;
       --blue-bg:  rgba(29,78,216,0.08);
 
-      --sidebar-w: 210px;
-      --topbar-h:  48px;
+      --sidebar-w:   210px;
+      --sidebar-col: 52px;   /* largeur réduite */
+      --topbar-h:    48px;
     }
 
     html, body { height: 100%; }
@@ -59,6 +60,10 @@
       grid-template-rows: var(--topbar-h) 1fr;
       height: 100vh;
       overflow: hidden;
+      transition: grid-template-columns 0.22s ease;
+    }
+    .shell.collapsed {
+      grid-template-columns: var(--sidebar-col) 1fr;
     }
 
     /* ── Topbar ── */
@@ -69,16 +74,38 @@
       box-shadow: 0 1px 3px rgba(0,0,0,0.06);
       display: flex;
       align-items: center;
-      padding: 0 20px;
-      gap: 16px;
+      padding: 0 16px 0 0;
+      gap: 12px;
       z-index: 100;
     }
+
+    /* Bouton hamburger / collapse */
+    .sidebar-toggle {
+      display: flex; align-items: center; justify-content: center;
+      width: var(--sidebar-w);
+      min-width: var(--sidebar-w);
+      height: var(--topbar-h);
+      background: none; border: none; cursor: pointer;
+      font-family: var(--font-mono); font-size: 11px; color: var(--hint);
+      gap: 10px;
+      border-right: 1px solid var(--border);
+      transition: background 0.12s, width 0.22s, min-width 0.22s;
+      flex-shrink: 0;
+    }
+    .sidebar-toggle:hover { background: var(--bg3); color: var(--text); }
+    .shell.collapsed .sidebar-toggle { width: var(--sidebar-col); min-width: var(--sidebar-col); }
+    .sidebar-toggle .toggle-label { transition: opacity 0.15s; white-space: nowrap; }
+    .shell.collapsed .sidebar-toggle .toggle-label { display: none; }
+    .toggle-icon { font-size: 14px; transition: transform 0.22s; }
+    .shell.collapsed .toggle-icon { transform: scaleX(-1); }
+
     .topbar-logo {
       font-family: var(--font-mono);
       font-size: 13px;
       font-weight: 500;
       letter-spacing: 0.12em;
       color: var(--text);
+      text-decoration: none;
     }
     .topbar-logo em { color: var(--teal); font-style: normal; }
     .topbar-sep { flex: 1; }
@@ -132,11 +159,13 @@
     .sidebar {
       background: var(--bg2);
       border-right: 1px solid var(--border);
-      padding: 20px 0;
+      padding: 16px 0;
       display: flex;
       flex-direction: column;
       gap: 1px;
       overflow-y: auto;
+      overflow-x: hidden;
+      transition: width 0.22s ease;
     }
     .nav-section {
       font-family: var(--font-mono);
@@ -144,18 +173,25 @@
       letter-spacing: 0.15em;
       text-transform: uppercase;
       color: var(--hint);
-      padding: 16px 20px 6px;
+      padding: 14px 18px 5px;
+      white-space: nowrap;
+      overflow: hidden;
+      transition: opacity 0.15s, padding 0.22s;
     }
+    .shell.collapsed .nav-section { opacity: 0; padding: 8px 0; pointer-events: none; }
+
     .nav-item {
       display: flex;
       align-items: center;
       gap: 10px;
-      padding: 8px 20px;
+      padding: 9px 18px;
       font-size: 13px;
       color: var(--muted);
       text-decoration: none;
-      transition: background 0.12s, color 0.12s;
+      transition: background 0.12s, color 0.12s, padding 0.22s;
       border-left: 2px solid transparent;
+      white-space: nowrap;
+      overflow: hidden;
     }
     .nav-item:hover { background: var(--bg3); color: var(--text); }
     .nav-item.active {
@@ -164,14 +200,25 @@
       border-left-color: var(--teal);
       font-weight: 500;
     }
-    .nav-item.active .nav-icon { color: var(--teal); opacity: 1; }
     .nav-icon {
       font-family: var(--font-mono);
-      font-size: 11px;
-      width: 14px;
+      font-size: 12px;
+      width: 16px;
+      min-width: 16px;
       text-align: center;
       opacity: 0.5;
+      transition: opacity 0.12s;
     }
+    .nav-item.active .nav-icon { opacity: 1; }
+    .nav-label { transition: opacity 0.15s; }
+
+    /* Collapsed : centrer les icônes */
+    .shell.collapsed .nav-item { padding: 9px 0; justify-content: center; border-left-color: transparent !important; }
+    .shell.collapsed .nav-item.active { border-left-color: var(--teal) !important; }
+    .shell.collapsed .nav-label { display: none; }
+    .shell.collapsed .nav-icon { width: auto; min-width: auto; font-size: 14px; opacity: 0.7; }
+    .shell.collapsed .nav-item.active .nav-icon { opacity: 1; }
+
     .nav-badge {
       margin-left: auto;
       font-family: var(--font-mono);
@@ -182,6 +229,7 @@
       color: var(--red);
       border: 1px solid rgba(220,38,38,0.2);
     }
+    .shell.collapsed .nav-badge { display: none; }
 
     /* ── Main ── */
     .main {
@@ -333,13 +381,88 @@
     .main > *:nth-child(2) { animation-delay: 0.07s; }
     .main > *:nth-child(3) { animation-delay: 0.11s; }
     .main > *:nth-child(4) { animation-delay: 0.15s; }
+
+    /* ── Overlay mobile ── */
+    .sidebar-overlay {
+      display: none;
+      position: fixed; inset: 0; top: var(--topbar-h);
+      background: rgba(0,0,0,0.35);
+      z-index: 40;
+    }
+
+    /* ── RESPONSIVE MOBILE (≤ 700px) ── */
+    @media (max-width: 700px) {
+      .shell {
+        grid-template-columns: 1fr !important;
+        grid-template-rows: var(--topbar-h) 1fr;
+      }
+
+      /* Sidebar devient un drawer latéral fixe */
+      .sidebar {
+        position: fixed;
+        top: var(--topbar-h);
+        left: 0;
+        height: calc(100vh - var(--topbar-h));
+        width: 220px;
+        z-index: 50;
+        transform: translateX(-100%);
+        transition: transform 0.22s ease;
+        box-shadow: 4px 0 24px rgba(0,0,0,0.15);
+      }
+      .sidebar.mobile-open {
+        transform: translateX(0);
+      }
+      .sidebar-overlay.active { display: block; }
+
+      /* Topbar : cacher le toggle-label, garder bouton hamburger compact */
+      .sidebar-toggle {
+        width: 48px; min-width: 48px;
+        border-right: none;
+      }
+      .sidebar-toggle .toggle-label { display: none; }
+      .shell.collapsed .sidebar-toggle { width: 48px; min-width: 48px; }
+
+      /* Le logo reprend toute la place */
+      .topbar-logo { font-size: 12px; }
+
+      /* Tag rôle masqué sur mobile pour gagner de la place */
+      .topbar-tag { display: none; }
+
+      /* Main */
+      .main { padding: 14px 12px; gap: 14px; }
+
+      /* Métriques : 2 colonnes */
+      .metrics-row { grid-template-columns: 1fr 1fr; }
+
+      /* Grilles : 1 colonne */
+      .grid-2 { grid-template-columns: 1fr; }
+      .form-grid { grid-template-columns: 1fr; }
+
+      /* Tables défilables horizontalement */
+      .card { padding: 14px; overflow-x: auto; }
+      .data-table { min-width: 480px; }
+
+      /* Boutons plus grands (touch) */
+      .btn-primary, .btn-ghost { padding: 11px 18px; }
+    }
+
+    /* ── RESPONSIVE TABLETTE (701–1024px) ── */
+    @media (min-width: 701px) and (max-width: 1024px) {
+      :root { --sidebar-w: 170px; }
+      .main { padding: 20px 20px; }
+      .metrics-row { grid-template-columns: repeat(2, 1fr); }
+    }
   </style>
 </head>
 <body>
-<div class="shell">
+<div class="shell" id="shell">
 
   <div class="topbar">
-    <a href="/" class="topbar-logo" style="text-decoration:none;">IRM<em>.</em>FAIR</a>
+    <button class="sidebar-toggle" onclick="toggleSidebar()" aria-label="Réduire le menu" title="Réduire / agrandir le menu">
+      <span class="toggle-icon">☰</span>
+      <span class="toggle-label">Réduire</span>
+    </button>
+    <a href="/" class="topbar-logo">IRM<em>.</em>FAIR</a>
     <div class="topbar-sep"></div>
     {% if current_user.is_authenticated %}
       <div class="topbar-user-wrap" id="userMenuWrap">
@@ -358,36 +481,39 @@
     {% endif %}
   </div>
 
-  <nav class="sidebar">
+  <!-- Overlay pour fermer la sidebar sur mobile -->
+  <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeMobileSidebar()"></div>
+
+  <nav class="sidebar" id="sidebar">
     <div class="nav-section">Vue générale</div>
     <a href="/" class="nav-item {% if request.path == '/' %}active{% endif %}">
-      <span class="nav-icon">#</span> Dashboard
+      <span class="nav-icon">#</span><span class="nav-label"> Dashboard</span>
     </a>
     <a href="/animaux" class="nav-item {% if request.path == '/animaux' %}active{% endif %}">
-      <span class="nav-icon">~</span> Animaux
+      <span class="nav-icon">~</span><span class="nav-label"> Animaux</span>
     </a>
     <a href="/projets" class="nav-item {% if request.path == '/projets' %}active{% endif %}">
-      <span class="nav-icon">*</span> Projets
+      <span class="nav-icon">*</span><span class="nav-label"> Projets</span>
     </a>
     <a href="/planification" class="nav-item {% if request.path == '/planification' %}active{% endif %}">
-      <span class="nav-icon">→</span> Planification
+      <span class="nav-icon">→</span><span class="nav-label"> Planification</span>
     </a>
 
     <div class="nav-section">Pipeline</div>
     <a href="/import" class="nav-item {% if request.path == '/import' %}active{% endif %}">
-      <span class="nav-icon">↑</span> Import
+      <span class="nav-icon">↑</span><span class="nav-label"> Import</span>
     </a>
     <a href="/logs" class="nav-item {% if request.path == '/logs' %}active{% endif %}">
-      <span class="nav-icon">!</span> Logs
+      <span class="nav-icon">!</span><span class="nav-label"> Logs</span>
     </a>
 
     {% if current_user.role == 'admin' %}
     <div class="nav-section">Administration</div>
     <a href="/users" class="nav-item {% if request.path == '/users' %}active{% endif %}">
-      <span class="nav-icon">@</span> Utilisateurs
+      <span class="nav-icon">@</span><span class="nav-label"> Utilisateurs</span>
     </a>
     <a href="/connexions" class="nav-item {% if request.path == '/connexions' %}active{% endif %}">
-      <span class="nav-icon">§</span> Connexions
+      <span class="nav-icon">§</span><span class="nav-label"> Connexions</span>
     </a>
     {% endif %}
   </nav>
@@ -399,6 +525,38 @@
 </div>
 
 <script>
+// ── Sidebar collapse (desktop) ────────────────────────────────────────────────
+const shell    = document.getElementById('shell');
+const sidebar  = document.getElementById('sidebar');
+const overlay  = document.getElementById('sidebarOverlay');
+const isMobile = () => window.innerWidth <= 700;
+
+function toggleSidebar() {
+  if (isMobile()) {
+    sidebar.classList.toggle('mobile-open');
+    overlay.classList.toggle('active');
+  } else {
+    const collapsed = shell.classList.toggle('collapsed');
+    localStorage.setItem('sidebar-collapsed', collapsed ? '1' : '0');
+  }
+}
+
+function closeMobileSidebar() {
+  sidebar.classList.remove('mobile-open');
+  overlay.classList.remove('active');
+}
+
+// Fermer la sidebar mobile en naviguant
+sidebar.querySelectorAll('.nav-item').forEach(a => {
+  a.addEventListener('click', () => { if (isMobile()) closeMobileSidebar(); });
+});
+
+// Restaurer l'état desktop au chargement
+if (!isMobile() && localStorage.getItem('sidebar-collapsed') === '1') {
+  shell.classList.add('collapsed');
+}
+
+// ── Dropdown profil ───────────────────────────────────────────────────────────
 function toggleUserMenu(e) {
   e.stopPropagation();
   document.getElementById('userMenuWrap').classList.toggle('open');
@@ -407,6 +565,7 @@ document.addEventListener('click', () => {
   document.getElementById('userMenuWrap')?.classList.remove('open');
 });
 
+// ── Afficher/masquer mot de passe ─────────────────────────────────────────────
 function togglePw(inputId, btn) {
   const inp = document.getElementById(inputId);
   if (inp.type === 'password') {

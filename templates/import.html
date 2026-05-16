@@ -3,13 +3,15 @@
 {% block content %}
 
 <div class="page-header">
-  <div class="page-title">Import de fichier</div>
-  <div class="page-sub">Upload DICOM ou NIfTI — conversion automatique en NIfTI</div>
+  <div class="page-title">Import de fichiers</div>
+  <div class="page-sub">DICOM (fichier unique, série multi-coupes ou archive .zip) · NIfTI</div>
 </div>
 
+<!-- Formulaire -->
 <div class="card">
-  <div class="card-title">Paramètres</div>
+  <div class="card-title">Paramètres de l'acquisition</div>
   <div style="display:flex;flex-direction:column;gap:14px;">
+
     <div class="form-grid">
       <div class="form-row">
         <label class="form-label">Projet</label>
@@ -21,13 +23,14 @@
       </div>
       <div class="form-row">
         <label class="form-label">ID Animal</label>
-        <input class="form-input" type="text" id="inp-animal" placeholder="ex : B3">
+        <input class="form-input" type="text" id="inp-animal" placeholder="ex : Rat-1, B3">
       </div>
     </div>
+
     <div class="form-grid">
       <div class="form-row">
         <label class="form-label">Séquence</label>
-        <input class="form-input" type="text" id="inp-sequence" placeholder="ex : DTI, Anatomique, fMRI">
+        <input class="form-input" type="text" id="inp-sequence" placeholder="ex : T1_SE, DTI, fMRI">
       </div>
       <div class="form-row">
         <label class="form-label">Date d'acquisition</label>
@@ -35,29 +38,94 @@
       </div>
     </div>
 
+    <div class="form-row" style="max-width:260px;">
+      <label class="form-label">Espèce</label>
+      <select class="form-select" id="inp-espece">
+        <option value="Rat">Rat</option>
+        <option value="Souris">Souris</option>
+        <option value="Lapin">Lapin</option>
+        <option value="Autre">Autre</option>
+      </select>
+    </div>
+
+    <!-- Zone de dépôt -->
     <div class="form-row">
-      <label class="form-label">Fichier (.dcm / .ima / .nii / .nii.gz)</label>
+      <label class="form-label">Fichier(s)</label>
       <div id="drop-zone" onclick="document.getElementById('file-input').click()">
-        <input type="file" id="file-input" accept=".dcm,.ima,.nii,.gz" style="display:none" onchange="onFileSelected(this)">
+        <input type="file" id="file-input" multiple
+               accept=".dcm,.ima,.nii,.gz,.zip"
+               style="display:none" onchange="onFilesSelected(this)">
         <div id="drop-label">
-          <span style="font-size:20px;opacity:0.25;">↑</span><br>
-          Cliquer pour sélectionner un fichier<br>
-          <span style="font-size:10px;color:var(--hint);">DICOM (.dcm, .ima) ou NIfTI (.nii, .nii.gz)</span>
+          <span style="font-size:24px;opacity:0.2;">↑</span><br>
+          Cliquer ou glisser-déposer<br>
+          <span style="font-size:10px;color:var(--hint);">
+            DICOM (.dcm, .ima) · NIfTI (.nii, .nii.gz) · Archive (.zip)<br>
+            Sélectionnez plusieurs .dcm pour une série multi-coupes
+          </span>
         </div>
-        <div id="file-selected" style="display:none;color:var(--teal);"></div>
+        <div id="file-selected" style="display:none;">
+          <div id="file-list" style="text-align:left;max-height:120px;overflow-y:auto;"></div>
+        </div>
       </div>
     </div>
+
+    <!-- Bandeau métadonnées DICOM détectées -->
+    <div id="dicom-meta-banner" style="display:none;background:var(--teal-bg);border:1px solid rgba(13,148,112,0.2);
+         border-radius:4px;padding:10px 14px;font-family:var(--font-mono);font-size:11px;color:var(--teal);">
+      <strong>Métadonnées DICOM détectées</strong> — champs pré-remplis ci-dessus (modifiables)
+      <span id="meta-detail" style="color:var(--muted);margin-left:8px;"></span>
+    </div>
+
+    <!-- Preview chemin FAIR -->
+    <div id="fair-preview" style="display:none;background:var(--bg3);border:1px solid var(--border2);
+         border-radius:4px;padding:10px 14px;font-family:var(--font-mono);font-size:11px;color:var(--muted);">
+      <span style="color:var(--hint);">Sera stocké comme → </span>
+      <span id="fair-preview-path" style="color:var(--text);"></span>
+    </div>
+
+    <!-- Séparateur -->
+    <div style="border-top:1px solid var(--border);margin:4px 0;"></div>
 
     <div id="import-error"   style="display:none;" class="msg-box msg-error"></div>
     <div id="import-success" style="display:none;" class="msg-box msg-success"></div>
 
     <div style="display:flex;gap:10px;align-items:center;">
       <button class="btn-primary" id="btn-import" onclick="launchImport()">Importer →</button>
-      <span id="import-spinner" style="display:none;font-family:var(--font-mono);font-size:12px;color:var(--muted);">conversion en cours...</span>
+      <span id="import-spinner" style="display:none;font-family:var(--font-mono);font-size:12px;color:var(--muted);">
+        conversion en cours…
+      </span>
     </div>
   </div>
 </div>
 
+<!-- Scanner NAS Paravision -->
+<div class="card">
+  <div class="card-title">Scanner NAS — dossiers non conformes FAIR</div>
+  <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">
+    Détecte les dossiers Paravision dont le nom ne suit pas la convention <code>AAAAMMJJ_AnimalID</code> et propose de les renommer.
+  </div>
+  <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;">
+    <button class="btn-primary" onclick="scanNas()">Analyser le NAS →</button>
+    <span id="nas-scan-spinner" style="display:none;font-family:var(--font-mono);font-size:12px;color:var(--muted);">analyse en cours…</span>
+  </div>
+  <div id="nas-scan-result" style="display:none;">
+    <div id="nas-scan-ok"  style="display:none;" class="msg-box msg-success">Tous les dossiers sont conformes FAIR.</div>
+    <div id="nas-scan-err" style="display:none;" class="msg-box msg-error"></div>
+    <table id="nas-table" style="display:none;width:100%;border-collapse:collapse;font-size:12px;font-family:var(--font-mono);">
+      <thead>
+        <tr style="border-bottom:1px solid var(--border2);color:var(--hint);font-size:10px;text-transform:uppercase;letter-spacing:.08em;">
+          <th style="text-align:left;padding:6px 8px;">Dossier actuel</th>
+          <th style="text-align:left;padding:6px 8px;">Projet</th>
+          <th style="text-align:left;padding:6px 8px;">Nouveau nom (FAIR)</th>
+          <th style="text-align:right;padding:6px 8px;">Action</th>
+        </tr>
+      </thead>
+      <tbody id="nas-table-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Stats dernière session -->
 <div class="card">
   <div class="card-title">Dernière session — {{ last_ts }}</div>
   <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
@@ -76,50 +144,238 @@
   </div>
 </div>
 
+<!-- Guide rapide -->
+<div class="card" style="background:var(--bg3);border-color:var(--border);">
+  <div class="card-title">Formats acceptés</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;font-size:13px;">
+    <div>
+      <div style="font-weight:500;margin-bottom:6px;font-family:var(--font-mono);font-size:11px;">Fichier DICOM unique</div>
+      <div style="color:var(--muted);font-size:12px;">Un seul fichier <code>.dcm</code> ou <code>.ima</code>. Converti en NIfTI 2D ou 3D selon les frames.</div>
+    </div>
+    <div>
+      <div style="font-weight:500;margin-bottom:6px;font-family:var(--font-mono);font-size:11px;">Série multi-coupes</div>
+      <div style="color:var(--muted);font-size:12px;">Sélectionnez plusieurs <code>.dcm</code> en même temps (Ctrl+clic). Les coupes sont triées et empilées en un volume 3D.</div>
+    </div>
+    <div>
+      <div style="font-weight:500;margin-bottom:6px;font-family:var(--font-mono);font-size:11px;">Archive ZIP</div>
+      <div style="color:var(--muted);font-size:12px;">Un <code>.zip</code> contenant tous les <code>.dcm</code> d'une série. Extraction et conversion automatiques.</div>
+    </div>
+  </div>
+</div>
+
 <style>
   #drop-zone {
     background: var(--bg3);
-    border: 1px dashed var(--border2);
-    border-radius: 4px;
-    padding: 32px;
+    border: 1.5px dashed var(--border2);
+    border-radius: 6px;
+    padding: 28px 24px;
     text-align: center;
     font-family: var(--font-mono);
     font-size: 12px;
     color: var(--muted);
     cursor: pointer;
     transition: border-color 0.15s, background 0.15s;
-    line-height: 2;
+    line-height: 1.9;
+    min-height: 100px;
   }
   #drop-zone:hover, #drop-zone.dragover {
     border-color: var(--teal-dim);
     background: var(--teal-bg);
   }
+  .file-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 0; border-bottom: 1px solid var(--border);
+    font-size: 11px;
+  }
+  .file-item:last-child { border-bottom: none; }
+  .file-ext {
+    font-family: var(--font-mono); font-size: 9px; padding: 1px 6px;
+    border-radius: 2px; background: var(--bg4); color: var(--hint);
+    border: 1px solid var(--border2); flex-shrink: 0;
+  }
   .msg-box { font-family: var(--font-mono); font-size: 11px; border-radius: 3px; padding: 10px 12px; line-height: 1.8; }
   .msg-error   { color: var(--red);  background: var(--red-bg);  border: 1px solid rgba(240,68,56,0.2); }
   .msg-success { color: var(--teal); background: var(--teal-bg); border: 1px solid rgba(45,212,160,0.2); }
+  code { font-family: var(--font-mono); font-size: 11px; background: var(--bg4); padding: 1px 4px; border-radius: 2px; }
 </style>
 
 <script>
-let selectedFile = null;
+let selectedFiles = [];
 
 const dz = document.getElementById('drop-zone');
 dz.addEventListener('dragover',  e => { e.preventDefault(); dz.classList.add('dragover'); });
 dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
 dz.addEventListener('drop', e => {
   e.preventDefault(); dz.classList.remove('dragover');
-  if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
+  if (e.dataTransfer.files.length) setFiles(Array.from(e.dataTransfer.files));
 });
 
-function onFileSelected(input) {
-  if (input.files[0]) setFile(input.files[0]);
+function onFilesSelected(input) {
+  if (input.files.length) setFiles(Array.from(input.files));
 }
 
-function setFile(f) {
-  selectedFile = f;
-  document.getElementById('drop-label').style.display    = 'none';
-  document.getElementById('file-selected').style.display = 'block';
-  document.getElementById('file-selected').textContent   = `✓  ${f.name}   (${(f.size/1024).toFixed(1)} Ko)`;
+function setFiles(files) {
+  selectedFiles = files;
+  const label   = document.getElementById('drop-label');
+  const sel     = document.getElementById('file-selected');
+  const list    = document.getElementById('file-list');
+
+  label.style.display = 'none';
+  sel.style.display   = 'block';
+
+  const extOf = f => f.name.includes('.nii.gz') ? '.nii.gz' : (f.name.lastIndexOf('.') > -1 ? f.name.slice(f.name.lastIndexOf('.')) : '');
+  const fmtKo = b => b < 1024*1024 ? `${(b/1024).toFixed(0)} Ko` : `${(b/1024/1024).toFixed(1)} Mo`;
+
+  if (files.length <= 6) {
+    list.innerHTML = files.map(f =>
+      `<div class="file-item">
+        <span class="file-ext">${extOf(f)}</span>
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${f.name}</span>
+        <span style="color:var(--hint);flex-shrink:0;">${fmtKo(f.size)}</span>
+       </div>`
+    ).join('');
+  } else {
+    const total = files.reduce((s, f) => s + f.size, 0);
+    list.innerHTML = `<div style="padding:8px 0;color:var(--teal);">
+      ✓ ${files.length} fichiers sélectionnés — ${fmtKo(total)} total
+    </div>`;
+  }
+
+  // Auto-détecter les métadonnées DICOM du premier fichier
+  const ext0 = extOf(files[0]).toLowerCase();
+  if (['.dcm', '.ima', ''].includes(ext0)) {
+    fetchDicomMeta(files[0]);
+  }
 }
+
+async function fetchDicomMeta(file) {
+  try {
+    const fd = new FormData();
+    fd.append('files', file);
+    const res  = await fetch('/api/pipeline/dicom-meta', { method: 'POST', body: fd });
+    const meta = await res.json();
+    if (!Object.keys(meta).length) return;
+
+    const banner = document.getElementById('dicom-meta-banner');
+    const detail = document.getElementById('meta-detail');
+    const parts  = [];
+
+    if (meta.animal_id && !document.getElementById('inp-animal').value) {
+      document.getElementById('inp-animal').value = meta.animal_id;
+      parts.push(`ID: ${meta.animal_id}`);
+    }
+    if (meta.date_acq && meta.date_acq.length === 8) {
+      const d = meta.date_acq;
+      const iso = `${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`;
+      document.getElementById('inp-date').value = iso;
+      parts.push(`Date: ${iso}`);
+    }
+    if (meta.sequence && !document.getElementById('inp-sequence').value) {
+      document.getElementById('inp-sequence').value = meta.sequence;
+      parts.push(`Séquence: ${meta.sequence}`);
+    }
+    if (parts.length) {
+      detail.textContent = parts.join(' · ');
+      banner.style.display = 'block';
+    }
+  } catch(e) { /* silencieux */ }
+}
+
+async function scanNas() {
+  const spinner = document.getElementById('nas-scan-spinner');
+  const result  = document.getElementById('nas-scan-result');
+  const ok      = document.getElementById('nas-scan-ok');
+  const err     = document.getElementById('nas-scan-err');
+  const table   = document.getElementById('nas-table');
+  const tbody   = document.getElementById('nas-table-body');
+
+  spinner.style.display = 'inline';
+  result.style.display  = 'none';
+  ok.style.display = 'none'; err.style.display = 'none'; table.style.display = 'none';
+
+  try {
+    const res  = await fetch('/api/nas/scan-names');
+    const data = await res.json();
+    result.style.display = 'block';
+
+    if (!res.ok) {
+      err.textContent = data.error || 'Erreur serveur.';
+      err.style.display = 'block';
+      return;
+    }
+
+    const items = data.non_conformes || [];
+    if (!items.length) { ok.style.display = 'block'; return; }
+
+    tbody.innerHTML = items.map(item => `
+      <tr style="border-bottom:1px solid var(--border);" id="row-${CSS.escape(item.current)}">
+        <td style="padding:7px 8px;color:var(--amber);">${item.current}</td>
+        <td style="padding:7px 8px;color:var(--muted);">${item.project}</td>
+        <td style="padding:7px 8px;color:var(--teal);">${item.suggested}</td>
+        <td style="padding:7px 8px;text-align:right;">
+          <button class="btn-primary" style="font-size:11px;padding:3px 10px;"
+            onclick="renameFolder('${item.project}','${item.current}','${item.suggested}')">
+            Renommer
+          </button>
+        </td>
+      </tr>`).join('');
+    table.style.display = 'table';
+  } catch(e) {
+    result.style.display = 'block';
+    err.textContent = 'Erreur réseau : ' + e.message;
+    err.style.display = 'block';
+  } finally {
+    spinner.style.display = 'none';
+  }
+}
+
+async function renameFolder(project, oldName, newName) {
+  try {
+    const res  = await fetch('/api/nas/rename', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project, old_name: oldName, new_name: newName })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      const row = document.getElementById('row-' + CSS.escape(oldName));
+      if (row) row.innerHTML = `<td colspan="4" style="padding:7px 8px;color:var(--teal);">✓ Renommé → ${newName}</td>`;
+    } else {
+      alert('Erreur : ' + (data.error || 'serveur'));
+    }
+  } catch(e) {
+    alert('Erreur réseau : ' + e.message);
+  }
+}
+
+function updateFairPreview() {
+  const project  = document.getElementById('sel-project').value;
+  const animal   = document.getElementById('inp-animal').value.trim();
+  const sequence = document.getElementById('inp-sequence').value.trim();
+  const date     = document.getElementById('inp-date').value;
+  const preview  = document.getElementById('fair-preview');
+
+  if (!animal || !sequence || !date) { preview.style.display = 'none'; return; }
+
+  fetch('/api/pipeline/fair-preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project, animal_id: animal, sequence, date_acq: date })
+  })
+  .then(r => r.json())
+  .then(d => {
+    if (d.path) {
+      document.getElementById('fair-preview-path').textContent = d.path;
+      preview.style.display = 'block';
+    }
+  })
+  .catch(() => {});
+}
+
+['sel-project','inp-animal','inp-sequence','inp-date'].forEach(id => {
+  document.getElementById(id).addEventListener('input', updateFairPreview);
+  document.getElementById(id).addEventListener('change', updateFairPreview);
+});
 
 async function launchImport() {
   const errDiv = document.getElementById('import-error');
@@ -127,7 +383,7 @@ async function launchImport() {
   errDiv.style.display = 'none';
   okDiv.style.display  = 'none';
 
-  if (!selectedFile) {
+  if (!selectedFiles.length) {
     errDiv.textContent = 'Aucun fichier sélectionné.';
     errDiv.style.display = 'block'; return;
   }
@@ -139,36 +395,46 @@ async function launchImport() {
 
   const btn  = document.getElementById('btn-import');
   const spin = document.getElementById('import-spinner');
-  btn.disabled = true; spin.style.display = 'inline';
+  btn.disabled = true;
+  spin.textContent = selectedFiles.length > 1
+    ? `empilement de ${selectedFiles.length} coupes…`
+    : 'conversion en cours…';
+  spin.style.display = 'inline';
 
   const fd = new FormData();
-  fd.append('file',      selectedFile);
+  selectedFiles.forEach(f => fd.append('files', f));
   fd.append('project',   document.getElementById('sel-project').value);
   fd.append('animal_id', animal);
   fd.append('sequence',  document.getElementById('inp-sequence').value.trim() || 'SEQ');
   fd.append('date_acq',  document.getElementById('inp-date').value);
+  fd.append('espece',    document.getElementById('inp-espece').value);
 
   try {
-    const res  = await fetch('/api/pipeline/upload', {method: 'POST', body: fd});
+    const res  = await fetch('/api/pipeline/upload', { method: 'POST', body: fd });
     const data = await res.json();
     if (!res.ok) {
       errDiv.textContent = data.error || 'Erreur serveur.';
       errDiv.style.display = 'block';
     } else {
       okDiv.innerHTML = `✓ ${data.message}<br>
-        <span style="color:var(--muted);">Chemin : ${data.dest}</span><br>
+        <span style="color:var(--muted);">Destination : ${data.dest}</span><br>
         <span style="color:var(--hint);">MD5 : ${data.md5}</span>`;
       okDiv.style.display = 'block';
-      selectedFile = null;
+      // Réinitialiser
+      selectedFiles = [];
       document.getElementById('drop-label').style.display    = 'block';
       document.getElementById('file-selected').style.display = 'none';
       document.getElementById('file-input').value = '';
+      document.getElementById('dicom-meta-banner').style.display = 'none';
+      document.getElementById('inp-animal').value   = '';
+      document.getElementById('inp-sequence').value = '';
     }
   } catch(e) {
     errDiv.textContent = 'Erreur réseau : ' + e.message;
     errDiv.style.display = 'block';
   } finally {
-    btn.disabled = false; spin.style.display = 'none';
+    btn.disabled = false;
+    spin.style.display = 'none';
   }
 }
 </script>
