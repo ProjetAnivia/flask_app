@@ -1,0 +1,40 @@
+# ─────────────────────────────────────────────────
+#  docker-compose.yml — IRM FAIR
+#  Version LOCAL (Mac) — identique au NAS, seuls les volumes changent
+# ─────────────────────────────────────────────────
+
+services:
+
+  irm-app:
+    build: .
+    image: irm-fair:latest
+    container_name: irm_fair_app
+    restart: unless-stopped
+
+    ports:
+      - "5001:5000"
+
+    environment:
+      - NAS_ROOT=/nas/structured
+      - DB_DIR=/data
+      - SECRET_KEY=dev_secret_change_in_prod
+
+    volumes:
+      # ── LOCAL MAC ──────────────────────────────
+      # Dossier nas_simule créé automatiquement à côté de flask_app
+      - ./nas_simule:/nas
+
+      # Base SQLite persistée en local
+      - ./db:/data
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/login"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+# ── Pour déployer sur le NAS Synology :
+# Remplacer les volumes par :
+#   - /volume1/IRM_preclinique:/nas
+#   - /volume1/IRM_preclinique/db:/data

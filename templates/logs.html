@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Logs{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <div class="page-title">Journal du pipeline</div>
+  <div class="page-sub">3 erreurs détectées — dernière mise à jour 2025-03-12 14:32</div>
+</div>
+
+<div class="card">
+  <div class="card-title">Entrées récentes</div>
+  <div style="display:flex;flex-direction:column;">
+    <div class="log-line"><span class="log-ts">2025-03-12 14:32:01</span><span class="log-ok">IMPORTED</span><span class="log-msg">B3_0001.dcm → B3_20250312/DTI_2/</span></div>
+    <div class="log-line"><span class="log-ts">2025-03-12 14:32:03</span><span class="log-ok">IMPORTED</span><span class="log-msg">B3_0002.dcm → B3_20250312/DTI_2/</span></div>
+    <div class="log-line"><span class="log-ts">2025-03-12 14:32:05</span><span class="log-dup">DUPLICATE</span><span class="log-msg">B3_0001.dcm — MD5 identique, ignoré</span></div>
+    <div class="log-line"><span class="log-ts">2025-03-12 14:31:58</span><span class="log-ok">IMPORTED</span><span class="log-msg">B5_0001.nii.gz → B5_20250312/fMRI_3/</span></div>
+    <div class="log-line"><span class="log-ts">2025-03-11 09:14:22</span><span class="log-err">ERROR</span><span class="log-msg">R12_0003.dcm — métadonnées manquantes (PatientID vide)</span></div>
+    <div class="log-line"><span class="log-ts">2025-03-11 09:14:20</span><span class="log-ok">IMPORTED</span><span class="log-msg">R12_0001.dcm → R12_20250311/Anatomique_1/</span></div>
+    <div class="log-line"><span class="log-ts">2025-03-10 16:05:11</span><span class="log-err">ERROR</span><span class="log-msg">S07_0002.dcm — fichier corrompu, copie échouée</span></div>
+    <div class="log-line"><span class="log-ts">2025-03-10 16:05:08</span><span class="log-ok">IMPORTED</span><span class="log-msg">S07_0001.dcm → S07_20250310/T1_1/</span></div>
+    <div class="log-line"><span class="log-ts">2025-03-10 09:00:01</span><span class="log-ok">IMPORTED</span><span class="log-msg">R09_0001.dcm → R09_20250310/DTI_2/</span></div>
+  </div>
+</div>
+
+{% endblock %}

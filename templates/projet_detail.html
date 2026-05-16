@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+{% block title %}{{ projet.nom | replace("_"," ") | title }}{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+    <a href="/projets" style="font-family:var(--font-mono);font-size:12px;color:var(--hint);text-decoration:none;">← Projets</a>
+    <span style="color:var(--border2);">/</span>
+    <div class="page-title">{{ projet.nom | replace("_"," ") | title }}</div>
+    {% if pct >= 75 %}<span class="pill pill-ok">actif</span>
+    {% elif pct >= 40 %}<span class="pill pill-prog">en cours</span>
+    {% elif total_acq == 0 %}<span class="pill pill-wait">démarrage</span>
+    {% else %}<span class="pill pill-redo">retard</span>{% endif %}
+    <div style="margin-left:auto;display:flex;gap:8px;">
+      <a href="/api/export/projet/{{ projet.nom }}/rapport.csv" class="btn-ghost" style="font-size:11px;padding:5px 14px;">↓ Rapport CSV</a>
+      <a href="/api/export/animaux.csv?projet={{ projet.nom }}" class="btn-ghost" style="font-size:11px;padding:5px 14px;">↓ Animaux CSV</a>
+    </div>
+  </div>
+  <div class="page-sub">Resp. {{ projet.resp or "—" }} · {{ projet.nb_animaux_prevus }} animaux prévus</div>
+</div>
+
+<!-- Métriques -->
+<div class="metrics-row">
+  <div class="metric-card">
+    <div class="metric-label">Animaux</div>
+    <div class="metric-value accent">{{ animaux | length }}</div>
+    <div class="metric-sub">/ {{ projet.nb_animaux_prevus }} prévus</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Acquisitions</div>
+    <div class="metric-value">{{ total_acq }}</div>
+    <div class="metric-sub">/ {{ prevues }} planifiées</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Validées</div>
+    <div class="metric-value">{{ acq_ok }}</div>
+    <div class="metric-sub">acquisitions OK</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Avancement</div>
+    <div class="metric-value accent">{{ pct }}%</div>
+    <div class="metric-sub">du protocole</div>
+  </div>
+</div>
+
+<!-- Barre progression + statuts -->
+<div class="card">
+  <div class="card-title">Progression</div>
+  <div class="prog-wrap" style="height:8px;margin-bottom:14px;">
+    <div class="prog-bar {{ 'amber' if pct < 75 and pct >= 40 else ('red' if pct < 40 else '') }}"
+         style="width:{{ pct }}%"></div>
+  </div>
+  <div style="display:flex;gap:10px;flex-wrap:wrap;">
+    {% if sm.get('ok') %}<span class="pill pill-ok">{{ sm.ok }} complets</span>{% endif %}
+    {% if sm.get('en_cours') %}<span class="pill pill-prog">{{ sm.en_cours }} en cours</span>{% endif %}
+    {% if sm.get('en_attente') %}<span class="pill pill-wait">{{ sm.en_attente }} en attente</span>{% endif %}
+    {% if sm.get('a_refaire') %}<span class="pill pill-redo">{{ sm.a_refaire }} à refaire</span>{% endif %}
+  </div>
+</div>
+
+<!-- Filtres -->
+<div class="card">
+  <div class="card-title">Filtrer les animaux</div>
+  <form method="GET" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
+    <div class="form-row">
+      <label class="form-label">Recherche ID</label>
+      <input class="form-input" type="text" name="q" value="{{ filtre_q }}"
+             placeholder="ex : Rat-1" style="width:140px;">
+    </div>
+    <div class="form-row">
+      <label class="form-label">Espèce</label>
+      <select class="form-select" name="espece" style="width:140px;">
+        <option value="">Toutes</option>
+        {% for e in especes %}
+          <option value="{{ e }}" {% if filtre_espece == e %}selected{% endif %}>{{ e }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-row">
+      <label class="form-label">Statut</label>
+      <select class="form-select" name="statut" style="width:150px;">
+        <option value="">Tous</option>
+        <option value="ok"         {% if filtre_statut == "ok" %}selected{% endif %}>Complet</option>
+        <option value="en_cours"   {% if filtre_statut == "en_cours" %}selected{% endif %}>En cours</option>
+        <option value="en_attente" {% if filtre_statut == "en_attente" %}selected{% endif %}>En attente</option>
+        <option value="a_refaire"  {% if filtre_statut == "a_refaire" %}selected{% endif %}>À refaire</option>
+      </select>
+    </div>
+    <button type="submit" class="btn-primary">Filtrer</button>
+    {% if filtre_statut or filtre_espece or filtre_q %}
+      <a href="/projet/{{ projet.nom }}" class="btn-ghost" style="text-decoration:none;padding:9px 16px;">Réinitialiser</a>
+    {% endif %}
+  </form>
+</div>
+
+<!-- Tableau animaux -->
+<div class="card">
+  <div class="card-title">Animaux — {{ animaux | length }} résultat(s)</div>
+  {% if animaux %}
+  <table class="data-table">
+    <thead>
+      <tr><th>ID</th><th>Dossier NAS</th><th>Espèce</th><th>1ère acq.</th><th>Nb acq.</th><th>Statut</th></tr>
+    </thead>
+    <tbody>
+    {% for a in animaux %}
+      <tr>
+        <td>
+          <a href="/animal/{{ projet.nom }}/{{ a.animal_id }}"
+             style="color:var(--teal);text-decoration:none;font-weight:500;">
+            {{ a.animal_id }}
+          </a>
+        </td>
+        <td class="mono" style="font-size:10px;color:var(--hint);">
+          {{ a.date_premiere_acq or "00000000" }}_{{ a.animal_id }}/
+        </td>
+        <td>{{ a.espece or "—" }}</td>
+        <td class="mono">{{ a.date_premiere_acq or "—" }}</td>
+        <td class="mono">{{ a.nb_acquisitions }}</td>
+        <td>
+          {% if a.statut == "ok" %}<span class="pill pill-ok">complet</span>
+          {% elif a.statut == "a_refaire" %}<span class="pill pill-redo">à refaire</span>
+          {% elif a.statut == "en_cours" %}<span class="pill pill-prog">en cours</span>
+          {% else %}<span class="pill pill-wait">en attente</span>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <div class="mono" style="color:var(--hint);">Aucun animal ne correspond aux filtres.</div>
+  {% endif %}
+</div>
+
+<!-- Dernières acquisitions -->
+{% if dernieres %}
+<div class="card">
+  <div class="card-title">Dernières acquisitions importées</div>
+  <table class="data-table">
+    <thead>
+      <tr><th>Animal</th><th>Séquence</th><th>Date</th><th>Importé par</th><th>Statut</th></tr>
+    </thead>
+    <tbody>
+    {% for d in dernieres %}
+      <tr>
+        <td><a href="/animal/{{ projet.nom }}/{{ d.animal_id }}"
+               style="color:var(--teal);text-decoration:none;">{{ d.animal_id }}</a></td>
+        <td class="mono">{{ d.sequence or "—" }}</td>
+        <td class="mono">{{ d.date_acq or "—" }}</td>
+        <td class="mono">{{ d.importé_par or "—" }}</td>
+        <td>
+          {% if d.statut == "ok" %}<span class="pill pill-ok">OK</span>
+          {% elif d.statut == "a_refaire" %}<span class="pill pill-redo">à refaire</span>
+          {% elif d.statut == "en_cours" %}<span class="pill pill-prog">en cours</span>
+          {% else %}<span class="pill pill-wait">en attente</span>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% endblock %}

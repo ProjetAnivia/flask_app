@@ -1,0 +1,382 @@
+{% extends "base.html" %}
+{% block title %}{{ animal.animal_id }} — {{ projet }}{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <div style="display:flex;align-items:center;gap:12px;">
+    <a href="/animaux" style="font-family:var(--font-mono);font-size:12px;color:var(--hint);text-decoration:none;">← Animaux</a>
+    <span style="color:var(--border2);">/</span>
+    <div class="page-title">{{ animal.animal_id }}</div>
+    {% if animal.statut == "ok" %}<span class="pill pill-ok">complet</span>
+    {% elif animal.statut == "a_refaire" %}<span class="pill pill-redo">à refaire</span>
+    {% elif animal.statut == "en_cours" %}<span class="pill pill-prog">en cours</span>
+    {% else %}<span class="pill pill-wait">en attente</span>{% endif %}
+  </div>
+  <div class="page-sub">{{ projet | replace("_"," ") | title }} · {{ animal.espece or "Espèce inconnue" }}</div>
+</div>
+
+<!-- Infos générales -->
+<div class="grid-2">
+  <div class="card">
+    <div class="card-title">Identité</div>
+    <table class="data-table">
+      <tr><td style="color:var(--hint);width:140px;" class="mono">ID animal</td><td><strong>{{ animal.animal_id }}</strong></td></tr>
+      <tr><td class="mono" style="color:var(--hint);">Dossier NAS</td><td class="mono">{{ dossier_nas }}/</td></tr>
+      <tr><td class="mono" style="color:var(--hint);">Projet</td><td>{{ projet | replace("_"," ") | title }}</td></tr>
+      <tr><td class="mono" style="color:var(--hint);">Espèce</td><td>{{ animal.espece or "—" }}</td></tr>
+      <tr><td class="mono" style="color:var(--hint);">1ère acquisition</td><td class="mono">{{ animal.date_premiere_acq or "—" }}</td></tr>
+      <tr><td class="mono" style="color:var(--hint);">Nb acquisitions</td><td class="mono">{{ animal.nb_acquisitions }}</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Avancement</div>
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      {% set total_acq = acqs | length %}
+      {% set ok_acq    = acqs | selectattr("statut","equalto","ok") | list | length %}
+      {% set pct = (ok_acq / total_acq * 100) | int if total_acq > 0 else 0 %}
+      <div>
+        <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
+          <span style="font-size:13px;">Acquisitions validées</span>
+          <span class="mono">{{ ok_acq }} / {{ total_acq }}</span>
+        </div>
+        <div class="prog-wrap"><div class="prog-bar {{ 'amber' if pct < 75 else '' }}" style="width:{{ pct }}%"></div></div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;">
+        {% for a in acqs %}
+          {% if a.statut == "ok" %}<span class="pill pill-ok">{{ a.sequence or "?" }}</span>
+          {% elif a.statut == "a_refaire" %}<span class="pill pill-redo">{{ a.sequence or "?" }}</span>
+          {% elif a.statut == "en_cours" %}<span class="pill pill-prog">{{ a.sequence or "?" }}</span>
+          {% else %}<span class="pill pill-wait">{{ a.sequence or "?" }}</span>{% endif %}
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Viewer NIfTI / NiiVue ─── -->
+{% set nifti_acqs = acqs | selectattr("nifti_url") | list %}
+{% if nifti_acqs %}
+<div class="card" id="viewer-card">
+  <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">
+    <span>Viewer IRM</span>
+    <div style="display:flex;gap:6px;align-items:center;">
+      <span class="mono" style="font-size:10px;color:var(--hint);" id="viewer-dims"></span>
+      <button class="btn-ghost" style="font-size:10px;padding:3px 10px;" onclick="toggleColormap()">colormap</button>
+      <button class="btn-ghost" style="font-size:10px;padding:3px 10px;" onclick="toggleView()">vue</button>
+    </div>
+  </div>
+
+  <!-- Onglets par acquisition -->
+  {% if nifti_acqs | length > 1 %}
+  <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap;">
+    {% for a in nifti_acqs %}
+    <button class="btn-ghost viewer-tab {% if loop.first %}tab-active{% endif %}"
+            style="font-size:11px;padding:5px 14px;"
+            onclick="loadVolume('{{ a.nifti_url }}', '{{ a.sequence }}', this)">
+      {{ a.sequence or ("Séq. " + loop.index|string) }}
+    </button>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <div style="background:#111;border-radius:4px;overflow:hidden;position:relative;">
+    <canvas id="niivue-gl" height="420" style="width:100%;height:420px;display:block;"></canvas>
+    <div id="viewer-loading" style="position:absolute;inset:0;display:flex;align-items:center;
+         justify-content:center;color:#9ca3af;font-family:monospace;font-size:12px;">
+      Chargement du viewer…
+    </div>
+    <div id="viewer-error" style="display:none;position:absolute;inset:0;
+         display:none;align-items:center;justify-content:center;flex-direction:column;
+         color:#9ca3af;font-family:monospace;font-size:12px;text-align:center;padding:20px;"></div>
+  </div>
+
+  <div style="display:flex;justify-content:space-between;margin-top:8px;">
+    <span class="mono" style="font-size:10px;color:var(--hint);" id="viewer-meta">
+      Molette pour zoomer · glisser pour faire pivoter · clic droit pour les coupes
+    </span>
+    <span class="mono" style="font-size:10px;color:var(--hint);" id="viewer-current">
+      {{ nifti_acqs[0].sequence }}
+    </span>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@niivue/niivue/dist/niivue.umd.js"></script>
+<script>
+let nv        = null;
+let cmapIndex = 0;
+let viewIndex = 0;
+const cmaps   = ['gray', 'hot', 'cool', 'viridis', 'inferno'];
+const views   = [0, 1, 2, 3];  // 0=axial, 1=coronal, 2=sagittal, 3=3D render
+
+// Le build UMD peut exposer la classe sous window.Niivue ou window.niivue.Niivue
+const NiivueClass = window.Niivue || (window.niivue && window.niivue.Niivue);
+
+async function initNiivue() {
+  const canvas  = document.getElementById('niivue-gl');
+  const loading = document.getElementById('viewer-loading');
+  const errDiv  = document.getElementById('viewer-error');
+  try {
+    if (!NiivueClass) throw new Error('Bibliothèque NiiVue non chargée (vérifiez votre connexion internet)');
+    nv = new NiivueClass({
+      loadingText:    '',
+      backColor:      [0.08, 0.08, 0.08, 1],
+      crosshairColor: [0.2, 0.8, 0.6, 0.9],
+      show3Dcrosshair: true,
+    });
+    nv.attachToCanvas(canvas);
+
+    const firstUrl = {{ nifti_acqs[0].nifti_url | tojson }};
+    await nv.loadVolumes([{ url: firstUrl, colormap: 'gray' }]);
+    loading.style.display = 'none';
+
+    // Afficher les dimensions
+    if (nv.volumes && nv.volumes[0]) {
+      const h = nv.volumes[0].hdr;
+      if (h && h.dims) {
+        const d = h.dims;
+        document.getElementById('viewer-dims').textContent =
+          `${d[1]} × ${d[2]} × ${d[3]} voxels`;
+      }
+    }
+  } catch(e) {
+    loading.style.display = 'none';
+    errDiv.style.display  = 'flex';
+    errDiv.innerHTML = `<div>Impossible de charger NiiVue.<br><span style="color:#dc2626">${e.message}</span></div>`;
+  }
+}
+
+async function loadVolume(url, name, btn) {
+  if (!nv) return;
+  document.querySelectorAll('.viewer-tab').forEach(b => b.classList.remove('tab-active'));
+  btn.classList.add('tab-active');
+  document.getElementById('viewer-current').textContent = name;
+  try {
+    await nv.loadVolumes([{ url, colormap: cmaps[cmapIndex] }]);
+    if (nv.volumes && nv.volumes[0]) {
+      const h = nv.volumes[0].hdr;
+      if (h && h.dims) {
+        const d = h.dims;
+        document.getElementById('viewer-dims').textContent = `${d[1]} × ${d[2]} × ${d[3]} voxels`;
+      }
+    }
+  } catch(e) { alert('Erreur chargement : ' + e.message); }
+}
+
+function toggleColormap() {
+  if (!nv || !nv.volumes.length) return;
+  cmapIndex = (cmapIndex + 1) % cmaps.length;
+  nv.setColormap(nv.volumes[0].id, cmaps[cmapIndex]);
+  nv.drawScene();
+}
+
+function toggleView() {
+  if (!nv) return;
+  viewIndex = (viewIndex + 1) % views.length;
+  nv.setSliceType(views[viewIndex]);
+}
+
+initNiivue();
+</script>
+
+<style>
+  .viewer-tab.tab-active {
+    border-color: var(--teal) !important;
+    color: var(--teal) !important;
+    background: var(--teal-bg) !important;
+  }
+</style>
+{% endif %}
+
+<!-- Historique acquisitions -->
+<div class="card">
+  <div class="card-title">Historique des acquisitions</div>
+  {% if acqs %}
+  <table class="data-table">
+    <thead>
+      <tr><th>Séquence</th><th>Date</th><th>Fichier NAS</th><th>Importé par</th><th>Statut</th><th>Modifier</th></tr>
+    </thead>
+    <tbody>
+    {% for a in acqs %}
+      <tr id="acq-row-{{ a.id }}">
+        <td class="mono">{{ a.sequence or "—" }}</td>
+        <td class="mono">{{ a.date_acq or "—" }}</td>
+        <td class="mono" style="font-size:10px;color:var(--hint);" title="{{ a.fichier_dest or '' }}">
+          {% if a.fichier_dest %}…/{{ a.fichier_dest.split('/')[-1] }}{% else %}—{% endif %}
+        </td>
+        <td class="mono">{{ a.importé_par or "—" }}</td>
+        <td id="statut-{{ a.id }}">
+          {% if a.statut == "ok" %}<span class="pill pill-ok">OK</span>
+          {% elif a.statut == "a_refaire" %}<span class="pill pill-redo">à refaire</span>
+          {% elif a.statut == "en_cours" %}<span class="pill pill-prog">en cours</span>
+          {% else %}<span class="pill pill-wait">en attente</span>{% endif %}
+        </td>
+        <td>
+          {% if current_user.role in ['admin','operateur'] %}
+          <select class="form-select" style="width:130px;padding:4px 8px;font-size:11px;"
+                  onchange="updateStatut({{ a.id }}, this.value)">
+            <option value="ok"         {% if a.statut=='ok' %}selected{% endif %}>OK</option>
+            <option value="en_cours"   {% if a.statut=='en_cours' %}selected{% endif %}>En cours</option>
+            <option value="en_attente" {% if a.statut=='en_attente' %}selected{% endif %}>En attente</option>
+            <option value="a_refaire"  {% if a.statut=='a_refaire' %}selected{% endif %}>À refaire</option>
+          </select>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <div class="mono" style="color:var(--hint);">Aucune acquisition enregistrée pour cet animal.</div>
+  {% endif %}
+</div>
+
+<!-- Commentaires & incidents (F8) -->
+<div class="card">
+  <div class="card-title">Commentaires & incidents</div>
+
+  <!-- Formulaire ajout -->
+  <div style="display:grid;grid-template-columns:120px 1fr 100px;gap:10px;align-items:flex-end;margin-bottom:16px;">
+    <div class="form-row">
+      <label class="form-label">Type</label>
+      <select class="form-select" id="com-type">
+        <option value="note">Note</option>
+        <option value="incident">Incident</option>
+        <option value="reprise">Reprise</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label class="form-label">Contenu</label>
+      <input class="form-input" type="text" id="com-contenu" placeholder="ex : Acquisition refaite suite à mouvement animal">
+    </div>
+    <button class="btn-primary" onclick="addCommentaire()" style="height:38px;">Ajouter</button>
+  </div>
+  <div id="com-error" style="display:none;" class="msg-box msg-error"></div>
+
+  <!-- Liste commentaires -->
+  <div id="commentaires-list">
+  {% if commentaires %}
+    {% for c in commentaires %}
+    <div class="comment-row" id="com-{{ c.id }}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+        <div style="display:flex;gap:8px;align-items:center;">
+          {% if c.type == "incident" %}<span class="pill pill-redo">incident</span>
+          {% elif c.type == "reprise" %}<span class="pill pill-prog">reprise</span>
+          {% else %}<span class="pill pill-obs">note</span>{% endif %}
+          <span style="font-size:13px;color:var(--text);">{{ c.contenu }}</span>
+        </div>
+        <div style="display:flex;gap:12px;align-items:center;flex-shrink:0;margin-left:16px;">
+          <span class="mono" style="color:var(--hint);font-size:10px;">{{ c.auteur }} · {{ c.created_at[:16] }}</span>
+          {% if current_user.role == 'admin' %}
+          <button class="btn-delete-com" onclick="deleteCommentaire({{ c.id }})">✕</button>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  {% else %}
+    <div class="mono" style="color:var(--hint);" id="no-comment">Aucun commentaire pour cet animal.</div>
+  {% endif %}
+  </div>
+</div>
+
+<!-- Logs pipeline -->
+<div class="card">
+  <div class="card-title">Logs pipeline</div>
+  {% if logs %}
+  <div style="display:flex;flex-direction:column;">
+    {% for l in logs %}
+    <div class="log-line">
+      <span class="log-ts">{{ l.timestamp[:16] if l.timestamp else "—" }}</span>
+      <span class="{{ 'log-ok' if l.statut == 'IMPORTED' else ('log-dup' if l.statut == 'DUPLICATE_SKIPPED' else 'log-err') }}">
+        {{ l.statut }}
+      </span>
+      <span class="log-msg">{{ l.source or "—" }} → {{ l.dest or "—" }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+    <div class="mono" style="color:var(--hint);">Aucun log pipeline pour cet animal.</div>
+  {% endif %}
+</div>
+
+<style>
+  .comment-row {
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .comment-row:last-child { border-bottom: none; }
+  .btn-delete-com {
+    font-family: var(--font-mono); font-size: 10px;
+    background: transparent; color: var(--hint);
+    border: 1px solid var(--border); border-radius: 3px;
+    padding: 2px 6px; cursor: pointer;
+  }
+  .btn-delete-com:hover { color: var(--red); border-color: rgba(240,68,56,0.3); }
+  .msg-box { font-family: var(--font-mono); font-size: 11px; border-radius: 3px; padding: 8px 12px; margin-bottom: 8px; }
+  .msg-error { color: var(--red); background: var(--red-bg); border: 1px solid rgba(240,68,56,0.2); }
+</style>
+
+<script>
+async function addCommentaire() {
+  const contenu = document.getElementById('com-contenu').value.trim();
+  const type_   = document.getElementById('com-type').value;
+  const errDiv  = document.getElementById('com-error');
+  errDiv.style.display = 'none';
+
+  if (!contenu) {
+    errDiv.textContent = 'Contenu requis.';
+    errDiv.style.display = 'block'; return;
+  }
+
+  const res  = await fetch('/api/commentaires', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      animal_id: "{{ animal.animal_id }}",
+      projet:    "{{ projet }}",
+      type:      type_,
+      contenu:   contenu
+    })
+  });
+  const data = await res.json();
+  if (!res.ok) { errDiv.textContent = data.error; errDiv.style.display = 'block'; return; }
+
+  document.getElementById('com-contenu').value = '';
+  const list    = document.getElementById('commentaires-list');
+  const noMsg   = document.getElementById('no-comment');
+  if (noMsg) noMsg.remove();
+
+  const pillMap  = {note:'pill-obs', incident:'pill-redo', reprise:'pill-prog'};
+  const now      = new Date().toISOString().slice(0,16);
+  const div      = document.createElement('div');
+  div.className  = 'comment-row';
+  div.id         = 'com-new-' + Date.now();
+  div.innerHTML  = `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+      <div style="display:flex;gap:8px;align-items:center;">
+        <span class="pill ${pillMap[type_]}">${type_}</span>
+        <span style="font-size:13px;color:var(--text);">${contenu}</span>
+      </div>
+      <div style="display:flex;gap:12px;align-items:center;flex-shrink:0;margin-left:16px;">
+        <span class="mono" style="color:var(--hint);font-size:10px;">${data.auteur} · ${now}</span>
+      </div>
+    </div>`;
+  list.insertBefore(div, list.firstChild);
+}
+
+async function deleteCommentaire(id) {
+  if (!confirm('Supprimer ce commentaire ?')) return;
+  const res = await fetch(`/api/commentaires/${id}`, {method: 'DELETE'});
+  if (res.ok) document.getElementById(`com-${id}`).remove();
+}
+
+async function updateStatut(acqId, newStatut) {
+  const res = await fetch(`/api/acquisitions/${acqId}/statut`, {
+    method: 'PATCH', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({statut: newStatut})
+  });
+  if (!res.ok) alert('Erreur lors de la mise à jour du statut.');
+}
+</script>
+
+{% endblock %}

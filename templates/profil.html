@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Mon profil{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <div class="page-title">Mon profil</div>
+  <div class="page-sub">{{ current_user.username }} · {{ current_user.role }}</div>
+</div>
+
+<div class="card" style="max-width:480px;">
+  <div class="card-title">Informations</div>
+  <div style="display:flex;flex-direction:column;gap:0;">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);">
+      <span class="mono" style="color:var(--hint);">Identifiant</span>
+      <strong>{{ current_user.username }}</strong>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;">
+      <span class="mono" style="color:var(--hint);">Rôle</span>
+      {% if current_user.role == "admin" %}<span class="pill pill-admin">admin</span>
+      {% elif current_user.role == "operateur" %}<span class="pill pill-op">opérateur</span>
+      {% else %}<span class="pill pill-obs">observateur</span>{% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="card" style="max-width:480px;">
+  <div class="card-title">Changer mon mot de passe</div>
+
+  <div id="pw-error"   style="display:none;" class="msg-box msg-error"></div>
+  <div id="pw-success" style="display:none;" class="msg-box msg-success"></div>
+
+  <div style="display:flex;flex-direction:column;gap:14px;">
+    <div class="form-row">
+      <label class="form-label">Mot de passe actuel</label>
+      <div class="pw-wrap">
+        <input class="form-input" type="password" id="pw-current" autocomplete="current-password">
+        <button class="pw-toggle" type="button" onclick="togglePw('pw-current', this)">afficher</button>
+      </div>
+    </div>
+    <div class="form-row">
+      <label class="form-label">Nouveau mot de passe</label>
+      <div class="pw-wrap">
+        <input class="form-input" type="password" id="pw-new" autocomplete="new-password"
+               oninput="checkStrength(this.value)">
+        <button class="pw-toggle" type="button" onclick="togglePw('pw-new', this)">afficher</button>
+      </div>
+      <div id="pw-strength" style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-top:2px;">
+        8 caractères min · 1 majuscule · 1 chiffre
+      </div>
+    </div>
+    <div class="form-row">
+      <label class="form-label">Confirmer le nouveau mot de passe</label>
+      <div class="pw-wrap">
+        <input class="form-input" type="password" id="pw-confirm" autocomplete="new-password">
+        <button class="pw-toggle" type="button" onclick="togglePw('pw-confirm', this)">afficher</button>
+      </div>
+    </div>
+    <div>
+      <button class="btn-primary" onclick="changePassword()">Enregistrer →</button>
+    </div>
+  </div>
+</div>
+
+<style>
+  .msg-box { font-family:var(--font-mono);font-size:11px;border-radius:3px;padding:8px 12px;margin-bottom:12px; }
+  .msg-error   { color:var(--red);  background:var(--red-bg);  border:1px solid rgba(220,38,38,0.2); }
+  .msg-success { color:var(--teal); background:var(--teal-bg); border:1px solid rgba(13,148,112,0.2); }
+</style>
+
+<script>
+function checkStrength(pw) {
+  const el     = document.getElementById('pw-strength');
+  const checks = [
+    { ok: pw.length >= 8,   label: '8 car.' },
+    { ok: /[A-Z]/.test(pw), label: 'majuscule' },
+    { ok: /[0-9]/.test(pw), label: 'chiffre' },
+  ];
+  const passed = checks.filter(c => c.ok).length;
+  const colors  = ['var(--red)', 'var(--amber)', 'var(--amber)', 'var(--teal)'];
+  el.style.color = colors[passed];
+  el.textContent = passed === 3
+    ? 'Fort — toutes les exigences satisfaites'
+    : checks.filter(c => !c.ok).map(c => c.label + ' manquant').join(' · ');
+}
+
+async function changePassword() {
+  const current = document.getElementById('pw-current').value;
+  const newPw   = document.getElementById('pw-new').value;
+  const confirm = document.getElementById('pw-confirm').value;
+  const errDiv  = document.getElementById('pw-error');
+  const okDiv   = document.getElementById('pw-success');
+  errDiv.style.display = 'none'; okDiv.style.display = 'none';
+
+  if (!current || !newPw || !confirm) {
+    errDiv.textContent = 'Tous les champs sont requis.';
+    errDiv.style.display = 'block'; return;
+  }
+  if (newPw !== confirm) {
+    errDiv.textContent = 'Les deux nouveaux mots de passe ne correspondent pas.';
+    errDiv.style.display = 'block'; return;
+  }
+  const res  = await fetch('/api/users/{{ current_user.id }}/password', {
+    method: 'PATCH', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ current_password: current, new_password: newPw })
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    errDiv.textContent = data.error || 'Erreur inconnue.';
+    errDiv.style.display = 'block';
+  } else {
+    okDiv.textContent = 'Mot de passe mis à jour avec succès.';
+    okDiv.style.display = 'block';
+    ['pw-current','pw-new','pw-confirm'].forEach(id => document.getElementById(id).value = '');
+    document.getElementById('pw-strength').textContent = '8 caractères min · 1 majuscule · 1 chiffre';
+    document.getElementById('pw-strength').style.color = 'var(--hint)';
+  }
+}
+</script>
+{% endblock %}

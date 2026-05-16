@@ -1,0 +1,10 @@
+flask>=3.0
+flask-login>=0.6
+pydicom>=2.4
+nibabel>=5.0
+gunicorn>=21.0
+werkzeug>=3.0
+pylibjpeg>=2.0
+pylibjpeg-openjpeg>=2.0
+pillow>=10.0
+numpy>=1.24

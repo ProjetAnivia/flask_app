@@ -1,0 +1,232 @@
+{% extends "base.html" %}
+{% block title %}Planification{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <div style="display:flex;align-items:center;gap:12px;">
+    <div class="page-title">Planification expérimentale</div>
+    {% if nb_alertes > 0 %}
+      <span style="font-family:var(--font-mono);font-size:11px;padding:3px 10px;border-radius:2px;
+                   background:var(--red-bg);color:var(--red);border:1px solid rgba(220,38,38,0.2);">
+        {{ nb_alertes }} alerte(s)
+      </span>
+    {% endif %}
+  </div>
+  <div class="page-sub">Suivi des séries restantes · statuts modifiables directement dans le tableau</div>
+</div>
+
+<!-- Légende -->
+<div class="card" style="background:var(--bg3);border-color:var(--border);">
+  <div class="card-title">Comment lire cette page</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;font-size:13px;">
+    <div>
+      <div style="font-weight:500;margin-bottom:6px;">Barre d'avancement</div>
+      <div style="color:var(--muted);">
+        <span style="font-family:var(--font-mono);font-size:11px;">
+          acquisitions enregistrées ÷ (animaux prévus × séquences/animal)
+        </span><br>
+        Ex : 6 acq. / (10 animaux × 3 séq.) = <strong>20%</strong>
+      </div>
+    </div>
+    <div>
+      <div style="font-weight:500;margin-bottom:6px;">Statut animal</div>
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        <div><span class="pill pill-ok">OK</span> — toutes les acquisitions sont validées</div>
+        <div><span class="pill pill-prog">en cours</span> — acquisitions en train de se faire</div>
+        <div><span class="pill pill-wait">en attente</span> — pas encore démarré</div>
+        <div><span class="pill pill-redo">à refaire</span> — une acquisition a échoué</div>
+      </div>
+    </div>
+    <div>
+      <div style="font-weight:500;margin-bottom:6px;">Types d'alertes</div>
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        <div style="color:var(--red);font-family:var(--font-mono);font-size:11px;">REPRISE</div>
+        <div style="color:var(--muted);font-size:12px;margin-bottom:4px;">Statut « à refaire » — l'acquisition a échoué et doit être recommencée.</div>
+        <div style="color:var(--amber);font-family:var(--font-mono);font-size:11px;">MANQUANT</div>
+        <div style="color:var(--muted);font-size:12px;margin-bottom:4px;">Moins d'acquisitions que prévu pour cet animal.</div>
+        <div style="color:var(--blue);font-family:var(--font-mono);font-size:11px;">RETARD</div>
+        <div style="color:var(--muted);font-size:12px;">Projet global en dessous de 50% d'avancement.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Alertes actives -->
+{% if alertes %}
+<div class="card">
+  <div class="card-title" style="color:var(--red);">Alertes actives ({{ nb_alertes }})</div>
+  <div style="display:flex;flex-direction:column;gap:6px;">
+    {% for a in alertes %}
+    <div style="display:flex;align-items:center;gap:12px;padding:8px 12px;border-radius:4px;
+                background:{% if a.type == 'reprise' %}var(--red-bg){% elif a.type == 'manquant' %}var(--amber-bg){% else %}var(--blue-bg){% endif %};
+                border:1px solid {% if a.type == 'reprise' %}rgba(220,38,38,0.2){% elif a.type == 'manquant' %}rgba(180,83,9,0.2){% else %}rgba(29,78,216,0.2){% endif %};">
+      <span style="font-family:var(--font-mono);font-size:10px;font-weight:500;min-width:64px;
+                   color:{% if a.type == 'reprise' %}var(--red){% elif a.type == 'manquant' %}var(--amber){% else %}var(--blue){% endif %};">
+        {{ a.type | upper }}
+      </span>
+      <span style="font-size:13px;flex:1;color:var(--text);">{{ a.msg }}</span>
+      {% if a.animal_id %}
+        <a href="/animal/{{ a.projet }}/{{ a.animal_id }}"
+           style="font-family:var(--font-mono);font-size:11px;color:var(--muted);text-decoration:none;white-space:nowrap;">
+          voir fiche →
+        </a>
+      {% else %}
+        <a href="/projet/{{ a.projet }}"
+           style="font-family:var(--font-mono);font-size:11px;color:var(--muted);text-decoration:none;white-space:nowrap;">
+          voir projet →
+        </a>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% else %}
+<div class="card" style="border-color:rgba(13,148,112,0.2);background:var(--teal-bg);">
+  <div style="text-align:center;padding:8px 0;font-size:13px;color:var(--teal);">
+    Aucune alerte — tous les projets sont dans les temps.
+  </div>
+</div>
+{% endif %}
+
+<!-- Par projet -->
+{% for p in projets %}
+<div class="card">
+  <!-- En-tête projet -->
+  <div style="display:flex;justify-content:space-between;align-items:center;
+              margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--border);">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <a href="/projet/{{ p.nom }}" style="font-size:15px;font-weight:500;color:var(--text);text-decoration:none;">
+        {{ p.nom | replace("_"," ") | title }}
+      </a>
+      <span class="mono" style="color:var(--hint);">resp. {{ p.resp or "—" }}</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:20px;">
+      <span class="mono" style="font-size:12px;">{{ p.nb_inscrits }} / {{ p.nb_prevus }} animaux inscrits</span>
+      <span class="mono" style="font-size:12px;">{{ p.faites }} / {{ p.prevues }} acquisitions</span>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <div style="width:100px;">
+          <div class="prog-wrap">
+            <div class="prog-bar {{ p.couleur if p.couleur != 'teal' else '' }}" style="width:{{ p.pct }}%"></div>
+          </div>
+        </div>
+        <span class="mono" style="font-size:11px;min-width:36px;">{{ p.pct }}%</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Résumé statuts -->
+  <div style="display:flex;gap:8px;margin-bottom:14px;">
+    {% if p.nb_ok %}      <span class="pill pill-ok">{{ p.nb_ok }} ok</span>{% endif %}
+    {% if p.nb_cours %}   <span class="pill pill-prog">{{ p.nb_cours }} en cours</span>{% endif %}
+    {% if p.nb_attente %} <span class="pill pill-wait">{{ p.nb_attente }} en attente</span>{% endif %}
+    {% if p.nb_refaire %} <span class="pill pill-redo">{{ p.nb_refaire }} à refaire</span>{% endif %}
+    {% if p.nb_manquant %}
+      <span style="font-family:var(--font-mono);font-size:10px;padding:2px 8px;border-radius:3px;
+                   background:var(--amber-bg);color:var(--amber);border:1px solid rgba(180,83,9,0.2);">
+        {{ p.nb_manquant }} avec acq. manquantes
+      </span>
+    {% endif %}
+  </div>
+
+  <!-- Tableau animaux -->
+  {% if p.animaux %}
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Animal</th>
+        <th>Espèce</th>
+        <th>1ère acq.</th>
+        <th>Acq. faites / attendues</th>
+        <th>Restantes</th>
+        <th>Statut <span style="font-weight:400;opacity:0.7;">(modifiable)</span></th>
+        <th>Dossier NAS</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for a in p.animaux %}
+      <tr>
+        <td>
+          <a href="/animal/{{ p.nom }}/{{ a.animal_id }}" style="color:var(--teal);text-decoration:none;">
+            {{ a.animal_id }}
+          </a>
+        </td>
+        <td class="mono">{{ a.espece or "—" }}</td>
+        <td class="mono">{{ a.date_premiere_acq or "—" }}</td>
+        <td>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span class="mono">{{ a.acq_faites }} / {{ a.seq_attendues }}</span>
+            <div style="width:56px;">
+              <div class="prog-wrap">
+                {% set pct_a = [(a.acq_faites / a.seq_attendues * 100) | round | int, 100] | min if a.seq_attendues else 0 %}
+                <div class="prog-bar {% if pct_a >= 100 %}{% elif pct_a >= 50 %}amber{% else %}red{% endif %}"
+                     style="width:{{ pct_a }}%"></div>
+              </div>
+            </div>
+          </div>
+        </td>
+        <td>
+          {% if a.restantes == 0 %}
+            <span class="pill pill-ok">complet</span>
+          {% else %}
+            <span class="pill pill-wait">{{ a.restantes }} restante(s)</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if current_user.role in ('admin', 'operateur') %}
+          <select class="statut-select" style="font-family:var(--font-mono);font-size:11px;
+                  padding:3px 8px;border-radius:3px;border:1px solid var(--border2);
+                  background:var(--bg3);color:var(--text);cursor:pointer;"
+                  onchange="updateStatut('{{ p.nom }}', '{{ a.animal_id }}', this)"
+                  data-current="{{ a.statut }}">
+            <option value="en_attente" {% if a.statut == 'en_attente' %}selected{% endif %}>En attente</option>
+            <option value="en_cours"   {% if a.statut == 'en_cours'   %}selected{% endif %}>En cours</option>
+            <option value="ok"         {% if a.statut == 'ok'         %}selected{% endif %}>OK</option>
+            <option value="a_refaire"  {% if a.statut == 'a_refaire'  %}selected{% endif %}>À refaire</option>
+          </select>
+          {% else %}
+            {% if a.statut == 'ok' %}<span class="pill pill-ok">OK</span>
+            {% elif a.statut == 'a_refaire' %}<span class="pill pill-redo">à refaire</span>
+            {% elif a.statut == 'en_cours' %}<span class="pill pill-prog">en cours</span>
+            {% else %}<span class="pill pill-wait">en attente</span>{% endif %}
+          {% endif %}
+        </td>
+        <td class="mono" style="font-size:10px;color:var(--hint);">{{ a.dossier_nas }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="mono" style="color:var(--hint);padding:12px 0;">Aucun animal enregistré dans ce projet.</div>
+  {% endif %}
+</div>
+{% endfor %}
+
+{% if not projets %}
+<div class="card">
+  <div class="mono" style="color:var(--hint);text-align:center;padding:24px 0;">
+    Aucun projet en base. Créez d'abord un projet via la page Projets.
+  </div>
+</div>
+{% endif %}
+
+<script>
+async function updateStatut(projet, animalId, select) {
+  const statut = select.value;
+  const prev   = select.dataset.current;
+  const res    = await fetch(`/api/animaux/${projet}/${animalId}/statut`, {
+    method: 'PATCH', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ statut })
+  });
+  if (!res.ok) {
+    alert('Erreur lors de la mise à jour du statut.');
+    select.value = prev;
+  } else {
+    select.dataset.current = statut;
+    // Feedback visuel bref
+    select.style.borderColor = 'var(--teal)';
+    setTimeout(() => select.style.borderColor = '', 1200);
+  }
+}
+</script>
+
+{% endblock %}

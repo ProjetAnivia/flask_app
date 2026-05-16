@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+{% block title %}Import{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <div class="page-title">Import de fichier</div>
+  <div class="page-sub">Upload DICOM ou NIfTI — conversion automatique en NIfTI</div>
+</div>
+
+<div class="card">
+  <div class="card-title">Paramètres</div>
+  <div style="display:flex;flex-direction:column;gap:14px;">
+    <div class="form-grid">
+      <div class="form-row">
+        <label class="form-label">Projet</label>
+        <select class="form-select" id="sel-project">
+          {% for p in projets %}
+            <option value="{{ p }}">{{ p | replace("_"," ") | title }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-row">
+        <label class="form-label">ID Animal</label>
+        <input class="form-input" type="text" id="inp-animal" placeholder="ex : B3">
+      </div>
+    </div>
+    <div class="form-grid">
+      <div class="form-row">
+        <label class="form-label">Séquence</label>
+        <input class="form-input" type="text" id="inp-sequence" placeholder="ex : DTI, Anatomique, fMRI">
+      </div>
+      <div class="form-row">
+        <label class="form-label">Date d'acquisition</label>
+        <input class="form-input" type="date" id="inp-date" value="{{ today }}">
+      </div>
+    </div>
+
+    <div class="form-row">
+      <label class="form-label">Fichier (.dcm / .ima / .nii / .nii.gz)</label>
+      <div id="drop-zone" onclick="document.getElementById('file-input').click()">
+        <input type="file" id="file-input" accept=".dcm,.ima,.nii,.gz" style="display:none" onchange="onFileSelected(this)">
+        <div id="drop-label">
+          <span style="font-size:20px;opacity:0.25;">↑</span><br>
+          Cliquer pour sélectionner un fichier<br>
+          <span style="font-size:10px;color:var(--hint);">DICOM (.dcm, .ima) ou NIfTI (.nii, .nii.gz)</span>
+        </div>
+        <div id="file-selected" style="display:none;color:var(--teal);"></div>
+      </div>
+    </div>
+
+    <div id="import-error"   style="display:none;" class="msg-box msg-error"></div>
+    <div id="import-success" style="display:none;" class="msg-box msg-success"></div>
+
+    <div style="display:flex;gap:10px;align-items:center;">
+      <button class="btn-primary" id="btn-import" onclick="launchImport()">Importer →</button>
+      <span id="import-spinner" style="display:none;font-family:var(--font-mono);font-size:12px;color:var(--muted);">conversion en cours...</span>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-title">Dernière session — {{ last_ts }}</div>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
+    <div style="background:var(--bg3);border:1px solid var(--border);border-radius:3px;padding:14px;">
+      <div class="mono" style="color:var(--teal);font-size:9px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px;">Importés</div>
+      <div style="font-family:var(--font-mono);font-size:22px;color:var(--teal);">{{ nb_importes }}</div>
+    </div>
+    <div style="background:var(--bg3);border:1px solid var(--border);border-radius:3px;padding:14px;">
+      <div class="mono" style="color:var(--amber);font-size:9px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px;">Doublons</div>
+      <div style="font-family:var(--font-mono);font-size:22px;color:var(--amber);">{{ nb_doublons }}</div>
+    </div>
+    <div style="background:var(--bg3);border:1px solid var(--border);border-radius:3px;padding:14px;">
+      <div class="mono" style="color:var(--red);font-size:9px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px;">Erreurs</div>
+      <div style="font-family:var(--font-mono);font-size:22px;color:var(--red);">{{ nb_erreurs }}</div>
+    </div>
+  </div>
+</div>
+
+<style>
+  #drop-zone {
+    background: var(--bg3);
+    border: 1px dashed var(--border2);
+    border-radius: 4px;
+    padding: 32px;
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--muted);
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+    line-height: 2;
+  }
+  #drop-zone:hover, #drop-zone.dragover {
+    border-color: var(--teal-dim);
+    background: var(--teal-bg);
+  }
+  .msg-box { font-family: var(--font-mono); font-size: 11px; border-radius: 3px; padding: 10px 12px; line-height: 1.8; }
+  .msg-error   { color: var(--red);  background: var(--red-bg);  border: 1px solid rgba(240,68,56,0.2); }
+  .msg-success { color: var(--teal); background: var(--teal-bg); border: 1px solid rgba(45,212,160,0.2); }
+</style>
+
+<script>
+let selectedFile = null;
+
+const dz = document.getElementById('drop-zone');
+dz.addEventListener('dragover',  e => { e.preventDefault(); dz.classList.add('dragover'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
+dz.addEventListener('drop', e => {
+  e.preventDefault(); dz.classList.remove('dragover');
+  if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
+});
+
+function onFileSelected(input) {
+  if (input.files[0]) setFile(input.files[0]);
+}
+
+function setFile(f) {
+  selectedFile = f;
+  document.getElementById('drop-label').style.display    = 'none';
+  document.getElementById('file-selected').style.display = 'block';
+  document.getElementById('file-selected').textContent   = `✓  ${f.name}   (${(f.size/1024).toFixed(1)} Ko)`;
+}
+
+async function launchImport() {
+  const errDiv = document.getElementById('import-error');
+  const okDiv  = document.getElementById('import-success');
+  errDiv.style.display = 'none';
+  okDiv.style.display  = 'none';
+
+  if (!selectedFile) {
+    errDiv.textContent = 'Aucun fichier sélectionné.';
+    errDiv.style.display = 'block'; return;
+  }
+  const animal = document.getElementById('inp-animal').value.trim();
+  if (!animal) {
+    errDiv.textContent = 'ID animal requis.';
+    errDiv.style.display = 'block'; return;
+  }
+
+  const btn  = document.getElementById('btn-import');
+  const spin = document.getElementById('import-spinner');
+  btn.disabled = true; spin.style.display = 'inline';
+
+  const fd = new FormData();
+  fd.append('file',      selectedFile);
+  fd.append('project',   document.getElementById('sel-project').value);
+  fd.append('animal_id', animal);
+  fd.append('sequence',  document.getElementById('inp-sequence').value.trim() || 'SEQ');
+  fd.append('date_acq',  document.getElementById('inp-date').value);
+
+  try {
+    const res  = await fetch('/api/pipeline/upload', {method: 'POST', body: fd});
+    const data = await res.json();
+    if (!res.ok) {
+      errDiv.textContent = data.error || 'Erreur serveur.';
+      errDiv.style.display = 'block';
+    } else {
+      okDiv.innerHTML = `✓ ${data.message}<br>
+        <span style="color:var(--muted);">Chemin : ${data.dest}</span><br>
+        <span style="color:var(--hint);">MD5 : ${data.md5}</span>`;
+      okDiv.style.display = 'block';
+      selectedFile = null;
+      document.getElementById('drop-label').style.display    = 'block';
+      document.getElementById('file-selected').style.display = 'none';
+      document.getElementById('file-input').value = '';
+    }
+  } catch(e) {
+    errDiv.textContent = 'Erreur réseau : ' + e.message;
+    errDiv.style.display = 'block';
+  } finally {
+    btn.disabled = false; spin.style.display = 'none';
+  }
+}
+</script>
+
+{% endblock %}

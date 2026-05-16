@@ -1,0 +1,207 @@
+{% extends "base.html" %}
+{% block title %}Projets{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <div class="page-title">Projets</div>
+  <div class="page-sub">{{ projets | length }} projet(s) actif(s)</div>
+</div>
+
+<!-- Formulaire création -->
+<div class="card">
+  <div class="card-title">Créer un projet</div>
+  <div id="proj-error"   style="display:none;" class="msg-box msg-error"></div>
+  <div id="proj-success" style="display:none;" class="msg-box msg-success"></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr 130px 120px 120px;gap:12px;align-items:flex-end;">
+    <div class="form-row">
+      <label class="form-label">Nom du projet</label>
+      <input class="form-input" type="text" id="proj-nom" placeholder="ex : cardiologie">
+    </div>
+    <div class="form-row">
+      <label class="form-label">Responsable</label>
+      <input class="form-input" type="text" id="proj-resp" placeholder="ex : Nicolas">
+    </div>
+    <div class="form-row">
+      <label class="form-label">Nb animaux prévus</label>
+      <input class="form-input" type="number" id="proj-nb" placeholder="20" min="0">
+    </div>
+    <div class="form-row">
+      <label class="form-label">Séq. / animal</label>
+      <input class="form-input" type="number" id="proj-seq" placeholder="3" min="1" max="10" value="3">
+    </div>
+    <button class="btn-primary" onclick="createProjet()" style="height:38px;">Créer →</button>
+  </div>
+  <div class="mono" style="margin-top:10px;color:var(--hint);font-size:10px;">
+    Le nom sera converti en minuscules sans espaces · Séq./animal = nombre de passages IRM prévus (défaut 3)
+  </div>
+</div>
+
+<!-- Recherche -->
+<div class="card" style="padding:14px 20px;">
+  <input class="form-input" type="text" id="search-proj"
+         placeholder="Rechercher par nom ou responsable…"
+         oninput="filterProjets(this.value)"
+         style="max-width:400px;">
+</div>
+
+<!-- Liste des projets -->
+<div class="card">
+  <table class="data-table" id="projets-table">
+    <thead>
+      <tr>
+        <th>Projet</th>
+        <th>Responsable</th>
+        <th>Animaux</th>
+        <th>Séq./animal</th>
+        <th>Acquisitions</th>
+        <th>Avancement</th>
+        <th>Statuts animaux</th>
+        {% if current_user.role == 'admin' %}<th></th>{% endif %}
+      </tr>
+    </thead>
+    <tbody id="projets-tbody">
+    {% for p in projets %}
+      <tr id="proj-row-{{ p.nom }}" data-search="{{ p.nom }} {{ p.resp | lower }}">
+        <td>
+          <a href="/projet/{{ p.nom }}" style="color:var(--teal);text-decoration:none;font-weight:500;">
+            {{ p.nom | replace("_"," ") | title }}
+          </a>
+        </td>
+        <td class="mono">{{ p.resp or "—" }}</td>
+        <td class="mono">{{ p.nb_prevus }}</td>
+        <td class="mono">{{ p.seq_par_animal }}</td>
+        <td>
+          <span class="mono">{{ p.faites }} / {{ p.prevues }}</span>
+        </td>
+        <td style="min-width:120px;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div class="prog-wrap" style="flex:1;">
+              <div class="prog-bar {{ p.couleur if p.couleur != 'teal' else '' }}" style="width:{{ p.pct }}%"></div>
+            </div>
+            <span class="mono" style="font-size:10px;min-width:32px;text-align:right;">{{ p.pct }}%</span>
+          </div>
+        </td>
+        <td>
+          <div style="display:flex;gap:4px;flex-wrap:wrap;">
+            {% if p.nb_ok > 0 %}<span class="pill pill-ok">{{ p.nb_ok }} ok</span>{% endif %}
+            {% if p.nb_cours > 0 %}<span class="pill pill-prog">{{ p.nb_cours }} cours</span>{% endif %}
+            {% if p.nb_attente > 0 %}<span class="pill pill-wait">{{ p.nb_attente }} att.</span>{% endif %}
+            {% if p.nb_refaire > 0 %}<span class="pill pill-redo">{{ p.nb_refaire }} refaire</span>{% endif %}
+            {% if p.nb_ok == 0 and p.nb_cours == 0 and p.nb_attente == 0 and p.nb_refaire == 0 %}
+              <span class="mono" style="color:var(--hint);">—</span>
+            {% endif %}
+          </div>
+        </td>
+        {% if current_user.role == 'admin' %}
+        <td>
+          {% if p.faites == 0 %}
+          <button class="btn-delete-proj" onclick="deleteProjet('{{ p.nom }}')">✕ Supprimer</button>
+          {% endif %}
+        </td>
+        {% endif %}
+      </tr>
+    {% else %}
+      <tr id="empty-row">
+        <td colspan="8" style="text-align:center;color:var(--hint);padding:24px;">
+          Aucun projet. Créez-en un ci-dessus.
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <div id="no-results" style="display:none;text-align:center;padding:24px;color:var(--hint);font-family:var(--font-mono);font-size:12px;">
+    Aucun projet ne correspond à la recherche.
+  </div>
+</div>
+
+<style>
+  .msg-box { font-family:var(--font-mono);font-size:11px;border-radius:3px;padding:8px 12px;margin-bottom:4px;line-height:1.8; }
+  .msg-error   { color:var(--red);  background:var(--red-bg);  border:1px solid rgba(220,38,38,0.2); }
+  .msg-success { color:var(--teal); background:var(--teal-bg); border:1px solid rgba(13,148,112,0.2); }
+  .btn-delete-proj {
+    font-family:var(--font-mono);font-size:11px;background:transparent;color:var(--hint);
+    border:1px solid var(--border);border-radius:3px;padding:3px 10px;cursor:pointer;
+    transition:color 0.15s,border-color 0.15s;
+  }
+  .btn-delete-proj:hover { color:var(--red);border-color:rgba(220,38,38,0.3); }
+</style>
+
+<script>
+function filterProjets(q) {
+  q = q.toLowerCase().trim();
+  const rows    = document.querySelectorAll('#projets-tbody tr[data-search]');
+  const noRes   = document.getElementById('no-results');
+  let visible   = 0;
+  rows.forEach(row => {
+    const match = !q || row.dataset.search.includes(q);
+    row.style.display = match ? '' : 'none';
+    if (match) visible++;
+  });
+  noRes.style.display = (visible === 0 && q) ? 'block' : 'none';
+}
+
+async function createProjet() {
+  const nom    = document.getElementById('proj-nom').value.trim();
+  const resp   = document.getElementById('proj-resp').value.trim();
+  const nb     = parseInt(document.getElementById('proj-nb').value) || 0;
+  const seq    = parseInt(document.getElementById('proj-seq').value) || 3;
+  const errDiv = document.getElementById('proj-error');
+  const okDiv  = document.getElementById('proj-success');
+  errDiv.style.display = 'none'; okDiv.style.display = 'none';
+
+  if (!nom) { errDiv.textContent = 'Nom du projet requis.'; errDiv.style.display = 'block'; return; }
+
+  const res  = await fetch('/api/projets', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({nom, resp, nb_animaux: nb, seq_par_animal: seq})
+  });
+  const data = await res.json();
+
+  if (!res.ok) {
+    errDiv.textContent = data.error || 'Erreur inconnue.'; errDiv.style.display = 'block';
+  } else {
+    const seqReal = data.seq_par_animal || seq;
+    okDiv.textContent = `Projet « ${data.nom} » créé (${seqReal} séq./animal).`;
+    okDiv.style.display = 'block';
+    ['proj-nom','proj-resp','proj-nb'].forEach(id => document.getElementById(id).value = '');
+    document.getElementById('proj-seq').value = '3';
+
+    // Supprimer la ligne "aucun projet" si présente
+    document.getElementById('empty-row')?.remove();
+
+    const label   = data.nom.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    const prevues = nb * seqReal;
+    const tbody   = document.getElementById('projets-tbody');
+    const tr      = document.createElement('tr');
+    tr.id = `proj-row-${data.nom}`;
+    tr.dataset.search = `${data.nom} ${(resp || '').toLowerCase()}`;
+    tr.innerHTML = `
+      <td><a href="/projet/${data.nom}" style="color:var(--teal);text-decoration:none;font-weight:500;">${label}</a></td>
+      <td class="mono">${resp || '—'}</td>
+      <td class="mono">${nb}</td>
+      <td class="mono">${seqReal}</td>
+      <td><span class="mono">0 / ${prevues}</span></td>
+      <td style="min-width:120px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <div class="prog-wrap" style="flex:1;"><div class="prog-bar red" style="width:0%"></div></div>
+          <span class="mono" style="font-size:10px;min-width:32px;text-align:right;">0%</span>
+        </div>
+      </td>
+      <td><span class="mono" style="color:var(--hint);">—</span></td>
+      {% if current_user.role == 'admin' %}
+      <td><button class="btn-delete-proj" onclick="deleteProjet('${data.nom}')">✕ Supprimer</button></td>
+      {% endif %}`;
+    tbody.appendChild(tr);
+  }
+}
+
+async function deleteProjet(nom) {
+  if (!confirm(`Supprimer le projet « ${nom.replace(/_/g,' ')} » ?\n(Uniquement possible si aucune acquisition n'y est liée)`)) return;
+  const res  = await fetch(`/api/projets/${nom}`, {method: 'DELETE'});
+  const data = await res.json();
+  if (!res.ok) { alert(data.error || 'Erreur.'); return; }
+  document.getElementById(`proj-row-${nom}`)?.remove();
+}
+</script>
+
+{% endblock %}

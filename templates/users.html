@@ -1,0 +1,290 @@
+{% extends "base.html" %}
+{% block title %}Utilisateurs{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <div class="page-title">Gestion des utilisateurs</div>
+  <div class="page-sub">{{ total }} compte(s) enregistré(s)</div>
+</div>
+
+<!-- En-tête droits -->
+<div class="card" style="background:var(--bg3);border-color:var(--border);">
+  <div class="card-title">Droits par rôle</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;font-size:13px;">
+    <div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+        <span class="pill pill-admin">admin</span>
+        <span style="font-weight:500;">Administrateur</span>
+      </div>
+      <ul style="margin:0;padding-left:16px;color:var(--muted);font-size:12px;line-height:1.9;">
+        <li>Accès complet à toutes les pages</li>
+        <li>Créer / supprimer des projets et animaux</li>
+        <li>Gérer les comptes utilisateurs</li>
+        <li>Modifier les statuts et rôles</li>
+        <li>Réinitialiser les mots de passe</li>
+        <li>Exporter toutes les données (CSV)</li>
+      </ul>
+      <div style="margin-top:8px;font-size:11px;color:var(--red);font-family:var(--font-mono);">
+        Seul le compte « admin » peut supprimer ou modifier le rôle d'un autre administrateur.
+      </div>
+    </div>
+    <div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+        <span class="pill pill-op">opérateur</span>
+        <span style="font-weight:500;">Opérateur</span>
+      </div>
+      <ul style="margin:0;padding-left:16px;color:var(--muted);font-size:12px;line-height:1.9;">
+        <li>Importer des fichiers DICOM / NIfTI</li>
+        <li>Ajouter des animaux et acquisitions</li>
+        <li>Modifier les statuts (animaux, acquisitions)</li>
+        <li>Ajouter des commentaires et incidents</li>
+        <li>Consulter toutes les fiches et logs</li>
+        <li>Exporter les données (CSV)</li>
+      </ul>
+    </div>
+    <div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+        <span class="pill pill-obs">observateur</span>
+        <span style="font-weight:500;">Observateur (chercheur)</span>
+      </div>
+      <ul style="margin:0;padding-left:16px;color:var(--muted);font-size:12px;line-height:1.9;">
+        <li>Consulter le dashboard et les fiches</li>
+        <li>Visualiser les images NIfTI</li>
+        <li>Ajouter des commentaires (notes)</li>
+        <li>Exporter les données (CSV)</li>
+        <li style="color:var(--red);">Aucune modification de statut</li>
+        <li style="color:var(--red);">Pas d'accès à l'import ni aux logs</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- Formulaire création -->
+<div class="card">
+  <div class="card-title">Ajouter un compte</div>
+  <div id="form-error"   style="display:none;" class="msg-box msg-error"></div>
+  <div id="form-success" style="display:none;" class="msg-box msg-success"></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr 160px 120px;gap:12px;align-items:flex-end;">
+    <div class="form-row">
+      <label class="form-label">Identifiant</label>
+      <input class="form-input" type="text" id="new-username" placeholder="florent">
+    </div>
+    <div class="form-row">
+      <label class="form-label">Mot de passe</label>
+      <div class="pw-wrap">
+        <input class="form-input" type="password" id="new-password"
+               placeholder="8 car. · 1 majuscule · 1 chiffre">
+        <button class="pw-toggle" type="button" onclick="togglePw('new-password', this)">afficher</button>
+      </div>
+    </div>
+    <div class="form-row">
+      <label class="form-label">Rôle</label>
+      <select class="form-select" id="new-role">
+        <option value="chercheur">Observateur</option>
+        <option value="operateur">Opérateur</option>
+        <option value="admin">Admin</option>
+      </select>
+    </div>
+    <button class="btn-primary" onclick="addUser()" style="height:38px;">Ajouter →</button>
+  </div>
+  <div class="mono" style="margin-top:8px;color:var(--hint);font-size:10px;">
+    Exigences : 8 caractères minimum · au moins une majuscule · au moins un chiffre
+  </div>
+</div>
+
+<!-- Liste comptes -->
+<div class="card">
+  <div class="card-title">Comptes actifs</div>
+  <table class="data-table" id="users-table">
+    <thead>
+      <tr>
+        <th>Identifiant</th>
+        <th>Rôle actuel</th>
+        <th>Changer le rôle</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for u in users %}
+      <tr id="row-{{ u.id }}">
+        <td><strong>{{ u.username }}</strong>
+          {% if u.username == current_user.username %}
+            <span class="mono" style="color:var(--hint);font-size:10px;margin-left:6px;">(vous)</span>
+          {% endif %}
+        </td>
+        <td id="pill-{{ u.id }}">
+          {% if u.role == "admin" %}<span class="pill pill-admin">admin</span>
+          {% elif u.role == "operateur" %}<span class="pill pill-op">opérateur</span>
+          {% else %}<span class="pill pill-obs">observateur</span>{% endif %}
+        </td>
+        <td>
+          {% set can_change_role = (u.username != current_user.username) and
+                                   (u.role != 'admin' or current_user.username == 'admin') %}
+          {% if can_change_role %}
+          <select class="form-select" style="width:140px;padding:4px 8px;font-size:11px;"
+                  onchange="changeRole({{ u.id }}, this)">
+            <option value="chercheur" {% if u.role == 'chercheur' %}selected{% endif %}>Observateur</option>
+            <option value="operateur" {% if u.role == 'operateur' %}selected{% endif %}>Opérateur</option>
+            <option value="admin"     {% if u.role == 'admin'     %}selected{% endif %}>Admin</option>
+          </select>
+          {% else %}
+          <span class="mono" style="color:var(--hint);font-size:11px;">—</span>
+          {% endif %}
+        </td>
+        <td style="display:flex;gap:8px;align-items:center;">
+          <button class="btn-ghost" style="font-size:11px;padding:4px 12px;"
+                  onclick="toggleResetForm({{ u.id }})">Réinitialiser MDP</button>
+          {% if u.username != current_user.username %}
+            {% if u.role != 'admin' or current_user.username == 'admin' %}
+            <button class="btn-delete" onclick="deleteUser({{ u.id }}, '{{ u.username }}')">Supprimer</button>
+            {% else %}
+            <span class="mono" style="color:var(--hint);font-size:10px;" title="Seul le compte admin peut supprimer un administrateur">protégé</span>
+            {% endif %}
+          {% else %}
+          <span class="mono" style="color:var(--hint);">compte actif</span>
+          {% endif %}
+        </td>
+      </tr>
+      <!-- Réinitialisation MDP inline -->
+      <tr id="reset-row-{{ u.id }}" style="display:none;">
+        <td colspan="4" style="padding:12px 16px;background:var(--bg3);">
+          <div style="display:flex;gap:12px;align-items:flex-end;max-width:600px;">
+            <div class="form-row" style="flex:1;">
+              <label class="form-label">Nouveau mot de passe pour {{ u.username }}</label>
+              <input class="form-input" type="password" id="reset-pw-{{ u.id }}"
+                     placeholder="8 car. · 1 majuscule · 1 chiffre">
+            </div>
+            <button class="btn-primary" style="height:38px;"
+                    onclick="resetPassword({{ u.id }}, '{{ u.username }}')">Valider →</button>
+            <button class="btn-ghost" style="height:38px;"
+                    onclick="toggleResetForm({{ u.id }})">Annuler</button>
+          </div>
+          <div id="reset-msg-{{ u.id }}" class="mono"
+               style="margin-top:8px;font-size:10px;display:none;"></div>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<style>
+  .msg-box { font-family: var(--font-mono); font-size: 11px; border-radius: 3px; padding: 8px 12px; margin-bottom: 4px; }
+  .msg-error   { color: var(--red);  background: var(--red-bg);  border: 1px solid rgba(240,68,56,0.2); }
+  .msg-success { color: var(--teal); background: var(--teal-bg); border: 1px solid rgba(45,212,160,0.2); }
+  .btn-delete {
+    font-family: var(--font-mono); font-size: 11px;
+    background: transparent; color: var(--red);
+    border: 1px solid rgba(240,68,56,0.3); border-radius: 3px;
+    padding: 4px 12px; cursor: pointer; transition: background 0.15s;
+  }
+  .btn-delete:hover { background: var(--red-bg); }
+</style>
+
+<script>
+function toggleResetForm(userId) {
+  const row = document.getElementById(`reset-row-${userId}`);
+  const msg = document.getElementById(`reset-msg-${userId}`);
+  if (row.style.display === 'none') {
+    row.style.display = '';
+    document.getElementById(`reset-pw-${userId}`).focus();
+  } else {
+    row.style.display = 'none';
+    document.getElementById(`reset-pw-${userId}`).value = '';
+    if (msg) { msg.style.display = 'none'; msg.textContent = ''; }
+  }
+}
+
+async function resetPassword(userId, username) {
+  const pw  = document.getElementById(`reset-pw-${userId}`).value.trim();
+  const msg = document.getElementById(`reset-msg-${userId}`);
+  msg.style.display = 'none';
+  if (!pw) {
+    msg.textContent = 'Mot de passe requis.';
+    msg.style.color = 'var(--red)'; msg.style.display = 'block'; return;
+  }
+  const res  = await fetch(`/api/users/${userId}/password`, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ new_password: pw })
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    msg.textContent = data.error || 'Erreur inconnue.';
+    msg.style.color = 'var(--red)'; msg.style.display = 'block';
+  } else {
+    msg.textContent = `Mot de passe de « ${username} » mis à jour.`;
+    msg.style.color = 'var(--teal)'; msg.style.display = 'block';
+    document.getElementById(`reset-pw-${userId}`).value = '';
+    setTimeout(() => toggleResetForm(userId), 1800);
+  }
+}
+
+async function changeRole(userId, select) {
+  const newRole = select.value;
+  const prev    = select.dataset.prev || select.options[select.selectedIndex === 0 ? 0 : select.selectedIndex - 1]?.value;
+  const res = await fetch(`/api/users/${userId}/role`, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ role: newRole })
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    alert(data.error || 'Erreur lors du changement de rôle.');
+    select.value = select.dataset.prev || '';
+    return;
+  }
+  select.dataset.prev = newRole;
+  // Mettre à jour le pill du rôle
+  const pillMap  = {admin:'pill-admin', operateur:'pill-op', chercheur:'pill-obs'};
+  const labelMap = {admin:'admin', operateur:'opérateur', chercheur:'observateur'};
+  const pillCell = document.getElementById(`pill-${userId}`);
+  if (pillCell) {
+    pillCell.innerHTML = `<span class="pill ${pillMap[newRole]}">${labelMap[newRole]}</span>`;
+  }
+  // Feedback visuel
+  select.style.borderColor = 'var(--teal)';
+  setTimeout(() => select.style.borderColor = '', 1200);
+}
+
+async function addUser() {
+  const username = document.getElementById('new-username').value.trim();
+  const password = document.getElementById('new-password').value.trim();
+  const role     = document.getElementById('new-role').value;
+  const errDiv   = document.getElementById('form-error');
+  const okDiv    = document.getElementById('form-success');
+  errDiv.style.display = 'none';
+  okDiv.style.display  = 'none';
+  if (!username || !password) {
+    errDiv.textContent = 'Identifiant et mot de passe requis.';
+    errDiv.style.display = 'block'; return;
+  }
+  const res  = await fetch('/api/users', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({username, password, role})
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    errDiv.textContent = data.error || 'Erreur inconnue.';
+    errDiv.style.display = 'block';
+  } else {
+    okDiv.textContent = `Compte « ${data.username} » créé avec le rôle ${data.role}.`;
+    okDiv.style.display = 'block';
+    document.getElementById('new-username').value = '';
+    document.getElementById('new-password').value = '';
+    // Recharger pour afficher la ligne correctement avec toutes les permissions
+    setTimeout(() => location.reload(), 1200);
+  }
+}
+
+async function deleteUser(userId, username) {
+  if (!confirm(`Supprimer le compte « ${username} » ?`)) return;
+  const res  = await fetch(`/api/users/${userId}`, {method: 'DELETE'});
+  const data = await res.json();
+  if (!res.ok) { alert(data.error || 'Erreur.'); return; }
+  document.getElementById(`row-${userId}`)?.remove();
+  document.getElementById(`reset-row-${userId}`)?.remove();
+}
+</script>
+
+{% endblock %}

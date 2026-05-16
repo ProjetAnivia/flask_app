@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environnements virtuels
+venv/
+env/
+.venv/
+.env/
+
+# Secrets — NE JAMAIS COMMITTER
+.env
+secrets.env
+
+# SQLite à la racine (doublon local) — la DB de prod est dans db/irm_fair.db
+/irm_fair.db
+
+# Fichiers macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log

@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>IRM.FAIR — Connexion</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #f4f5f7; --bg2: #ffffff; --bg3: #f0f2f5;
+      --text: #111827; --muted: #4b5563; --hint: #9ca3af;
+      --border: rgba(0,0,0,0.07); --border2: rgba(0,0,0,0.13);
+      --teal: #0d9470; --teal-dim: #0a7a5c; --teal-bg: rgba(13,148,112,0.09);
+      --red: #dc2626; --red-bg: rgba(220,38,38,0.08);
+    }
+    body {
+      font-family: 'IBM Plex Sans', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .login-wrap {
+      width: 340px;
+      display: flex;
+      flex-direction: column;
+      gap: 28px;
+      animation: fadeUp 0.4s ease both;
+    }
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .login-logo {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 20px;
+      font-weight: 500;
+      letter-spacing: 0.1em;
+      color: var(--text);
+      text-align: center;
+    }
+    .login-logo em { color: var(--teal); font-style: normal; }
+    .login-sub {
+      font-size: 11px;
+      color: var(--hint);
+      text-align: center;
+      font-family: 'IBM Plex Mono', monospace;
+      margin-top: 4px;
+    }
+    .login-card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .form-row { display: flex; flex-direction: column; gap: 6px; }
+    .form-label {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 9px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--hint);
+    }
+    .form-input {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 12px;
+      background: var(--bg3);
+      border: 1px solid var(--border2);
+      border-radius: 3px;
+      padding: 10px 12px;
+      color: var(--text);
+      outline: none;
+      width: 100%;
+      transition: border-color 0.15s;
+    }
+    .form-input:focus { border-color: var(--teal-dim); }
+    .btn-login {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 12px;
+      background: var(--teal);
+      color: #ffffff;
+      border: none;
+      border-radius: 3px;
+      padding: 11px;
+      cursor: pointer;
+      font-weight: 500;
+      width: 100%;
+      margin-top: 4px;
+      letter-spacing: 0.04em;
+      transition: opacity 0.15s;
+    }
+    .btn-login:hover { opacity: 0.85; }
+    .error-msg {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 11px;
+      color: var(--red);
+      background: var(--red-bg);
+      border: 1px solid rgba(240,68,56,0.2);
+      border-radius: 3px;
+      padding: 8px 12px;
+    }
+    .login-hint {
+      font-size: 11px;
+      color: var(--hint);
+      text-align: center;
+      font-family: 'IBM Plex Mono', monospace;
+    }
+  </style>
+</head>
+<body>
+  <div class="login-wrap">
+    <div>
+      <div class="login-logo">IRM<em>.</em>FAIR</div>
+      <div class="login-sub">Plateforme de gestion IRM préclinique</div>
+    </div>
+
+    <div class="login-card">
+      {% if error %}
+        <div class="error-msg">{{ error }}</div>
+      {% endif %}
+      <form method="POST" action="/login">
+        <div style="display:flex;flex-direction:column;gap:14px;">
+          <div class="form-row">
+            <label class="form-label">Identifiant</label>
+            <input class="form-input" type="text" name="username" placeholder="nicolas" autofocus>
+          </div>
+          <div class="form-row">
+            <label class="form-label">Mot de passe</label>
+            <input class="form-input" type="password" name="password" placeholder="••••••••">
+          </div>
+          <button class="btn-login" type="submit">Connexion →</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="login-hint">Comptes démo : admin / admin123</div>
+  </div>
+</body>
+</html>

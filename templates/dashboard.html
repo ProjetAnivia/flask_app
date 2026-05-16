@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <div style="display:flex;align-items:center;gap:16px;">
+    <div class="page-title">Vue d'ensemble</div>
+    <a href="/api/export/acquisitions.csv{% if f_projet %}?projet={{ f_projet }}{% endif %}" class="btn-ghost" style="font-size:11px;padding:5px 14px;">↓ CSV</a>
+  </div>
+  <div class="page-sub">Mise à jour : {{ updated_at }}</div>
+</div>
+
+<!-- Métriques -->
+<div class="metrics-row">
+  <div class="metric-card">
+    <div class="metric-label">Animaux</div>
+    <div class="metric-value accent">{{ nb_animaux }}</div>
+    <div class="metric-sub">enregistrés</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Acquisitions</div>
+    <div class="metric-value">{{ nb_acq }}</div>
+    <div class="metric-sub">importées au total</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Stockage NAS</div>
+    <div class="metric-value">{{ nas_to }}</div>
+    <div class="metric-sub">To / {{ nas_max }} To utilisés</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Doublons</div>
+    <div class="metric-value">{{ nb_doublons }}</div>
+    <div class="metric-sub">ignorés automatiquement</div>
+  </div>
+</div>
+
+<!-- Filtres F4 -->
+<div class="card">
+  <div class="card-title">Filtres</div>
+  <form method="GET" action="/" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
+    <div class="form-row">
+      <label class="form-label">Projet</label>
+      <select class="form-select" name="projet" style="width:180px;">
+        <option value="">Tous</option>
+        {% for p in projets_all %}
+          <option value="{{ p }}" {% if f_projet == p %}selected{% endif %}>{{ p | replace("_"," ") | title }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-row">
+      <label class="form-label">Statut acquisition</label>
+      <select class="form-select" name="statut" style="width:160px;">
+        <option value="">Tous</option>
+        <option value="ok"         {% if f_statut == "ok" %}selected{% endif %}>OK</option>
+        <option value="en_cours"   {% if f_statut == "en_cours" %}selected{% endif %}>En cours</option>
+        <option value="en_attente" {% if f_statut == "en_attente" %}selected{% endif %}>En attente</option>
+        <option value="a_refaire"  {% if f_statut == "a_refaire" %}selected{% endif %}>À refaire</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label class="form-label">Importé par</label>
+      <select class="form-select" name="user" style="width:150px;">
+        <option value="">Tous</option>
+        {% for u in utilisateurs %}
+          <option value="{{ u }}" {% if f_user == u %}selected{% endif %}>{{ u }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-row">
+      <label class="form-label">Date du</label>
+      <input class="form-input" type="date" name="date_from" value="{{ f_date_from }}" style="width:140px;">
+    </div>
+    <div class="form-row">
+      <label class="form-label">au</label>
+      <input class="form-input" type="date" name="date_to" value="{{ f_date_to }}" style="width:140px;">
+    </div>
+    <button class="btn-primary" type="submit" style="height:38px;">Filtrer</button>
+    {% if f_projet or f_statut or f_user or f_date_from or f_date_to %}
+      <a href="/" class="btn-ghost" style="height:38px;line-height:20px;">✕ Réinitialiser</a>
+    {% endif %}
+  </form>
+</div>
+
+<!-- Avancement par projet -->
+<div class="card">
+  <div class="card-title">Avancement par projet</div>
+  {% if projets %}
+    <div style="display:flex;flex-direction:column;gap:18px;">
+    {% for p in projets %}
+      <div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <a href="/projet/{{ p.nom }}" style="font-size:13px;color:var(--text);text-decoration:none;">
+            {{ p.nom | replace("_", " ") | title }}
+            <span class="mono" style="color:var(--hint);margin-left:6px;">{{ p.resp }}</span>
+          </a>
+          <span class="mono">{{ p.faites }} / {{ p.prevues }} acq — {{ p.pct }}%</span>
+        </div>
+        <div class="prog-wrap">
+          <div class="prog-bar {{ p.couleur if p.couleur != 'teal' else '' }}" style="width:{{ p.pct }}%"></div>
+        </div>
+        <!-- Statuts animaux -->
+        <div style="display:flex;gap:8px;margin-top:8px;">
+          {% if p.nb_ok %}
+            <span class="pill pill-ok" title="Terminés">{{ p.nb_ok }} ok</span>
+          {% endif %}
+          {% if p.nb_cours %}
+            <span class="pill pill-prog" title="En cours">{{ p.nb_cours }} en cours</span>
+          {% endif %}
+          {% if p.nb_attente %}
+            <span class="pill pill-wait" title="En attente">{{ p.nb_attente }} attente</span>
+          {% endif %}
+          {% if p.nb_refaire %}
+            <span class="pill pill-redo" title="À refaire">{{ p.nb_refaire }} à refaire</span>
+          {% endif %}
+        </div>
+      </div>
+    {% endfor %}
+    </div>
+  {% else %}
+    <div class="mono" style="color:var(--hint);">Aucun projet correspondant aux filtres.</div>
+  {% endif %}
+</div>
+
+<!-- Dernières acquisitions (filtrées) -->
+<div class="card">
+  <div class="card-title">
+    Acquisitions
+    {% if f_projet or f_statut or f_user or f_date_from or f_date_to %}
+      <span style="color:var(--amber);margin-left:8px;">filtrées</span>
+    {% else %}
+      — 20 dernières
+    {% endif %}
+  </div>
+  {% if dernieres_acq %}
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Animal</th>
+        <th>Projet</th>
+        <th>Séquence</th>
+        <th>Date</th>
+        <th>Importé par</th>
+        <th>Statut</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for a in dernieres_acq %}
+      <tr>
+        <td>
+          <a href="/animal/{{ a.projet }}/{{ a.animal_id }}" style="color:var(--teal);text-decoration:none;">
+            {{ a.animal_id }}
+          </a>
+        </td>
+        <td>
+          <a href="/projet/{{ a.projet }}" style="color:var(--text);text-decoration:none;">
+            {{ a.projet | replace("_", " ") | title }}
+          </a>
+        </td>
+        <td class="mono">{{ a.sequence or "—" }}</td>
+        <td class="mono">{{ a.date_acq or "—" }}</td>
+        <td class="mono" style="color:var(--hint);">{{ a["importé_par"] or "—" }}</td>
+        <td>
+          {% if a.statut == "ok" %}<span class="pill pill-ok">OK</span>
+          {% elif a.statut == "a_refaire" %}<span class="pill pill-redo">à refaire</span>
+          {% elif a.statut == "en_cours" %}<span class="pill pill-prog">en cours</span>
+          {% else %}<span class="pill pill-wait">en attente</span>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <div class="mono" style="color:var(--hint);padding:16px 0;">
+      Aucune acquisition correspondant aux filtres.
+    </div>
+  {% endif %}
+</div>
+
+{% endblock %}

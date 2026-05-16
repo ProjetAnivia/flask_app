@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Connexions{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <div style="display:flex;align-items:center;gap:16px;">
+    <div class="page-title">Journal des connexions</div>
+    <a href="/api/export/connexions.csv" class="btn-ghost" style="font-size:11px;padding:5px 14px;">↓ CSV</a>
+  </div>
+  <div class="page-sub">{{ total }} entrée(s) · {{ nb_fail }} échec(s) de connexion</div>
+</div>
+
+<!-- Filtres -->
+<div class="card">
+  <div class="card-title">Filtres</div>
+  <form method="GET" action="/connexions" style="display:flex;gap:12px;align-items:flex-end;">
+    <div class="form-row">
+      <label class="form-label">Action</label>
+      <select class="form-select" name="action" style="width:180px;">
+        <option value="">Toutes</option>
+        <option value="login"        {% if filtre_action == "login" %}selected{% endif %}>Connexion réussie</option>
+        <option value="login_failed" {% if filtre_action == "login_failed" %}selected{% endif %}>Échec de connexion</option>
+        <option value="logout"       {% if filtre_action == "logout" %}selected{% endif %}>Déconnexion</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label class="form-label">Utilisateur</label>
+      <input class="form-input" type="text" name="username" value="{{ filtre_username }}" placeholder="nicolas…" style="width:160px;">
+    </div>
+    <button class="btn-primary" type="submit" style="height:38px;">Filtrer</button>
+    <a href="/connexions" class="btn-ghost" style="height:38px;line-height:20px;">Réinitialiser</a>
+  </form>
+</div>
+
+<!-- Tableau -->
+<div class="card">
+  <div class="card-title">Événements récents (200 derniers)</div>
+  {% if logs %}
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Horodatage</th>
+        <th>Utilisateur</th>
+        <th>Action</th>
+        <th>IP</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for l in logs %}
+      <tr>
+        <td class="mono">{{ l.timestamp[:19] | replace("T", " ") }}</td>
+        <td><strong>{{ l.username }}</strong></td>
+        <td>
+          {% if l.action == "login" %}
+            <span class="pill pill-ok">connexion</span>
+          {% elif l.action == "login_failed" %}
+            <span class="pill pill-redo">echec</span>
+          {% elif l.action == "logout" %}
+            <span class="pill pill-obs">deconnexion</span>
+          {% else %}
+            <span class="pill pill-obs">{{ l.action }}</span>
+          {% endif %}
+        </td>
+        <td class="mono" style="color:var(--hint);">{{ l.ip or "—" }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div style="text-align:center;padding:32px;color:var(--hint);font-family:var(--font-mono);font-size:12px;">
+    Aucun événement enregistré.
+  </div>
+  {% endif %}
+</div>
+
+{% endblock %}
