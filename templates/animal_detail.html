@@ -232,6 +232,7 @@ initNiivue();
         <th>Séquence</th><th>Date</th><th>Fichier NAS</th><th>Importé par</th>
         <th>Statut</th>
         <th>Volumétrie</th>
+        <th>DTI</th>
         <th>Modifier</th>
       </tr>
     </thead>
@@ -293,6 +294,37 @@ initNiivue();
             {% endif %}
           {% else %}
           <span class="mono" style="color:var(--hint);font-size:11px;" title="Pas de fichier NIfTI">—</span>
+          {% endif %}
+        </td>
+        <!-- DTI -->
+        <td id="dti-cell-{{ a.id }}">
+          {% if a.is_dti %}
+            {% if a.dti %}
+              {% if a.dti.statut == 'ok' %}
+                <button class="btn-ghost" style="font-size:10px;padding:3px 10px;color:var(--teal);border-color:var(--teal);"
+                        onclick="showDtiResult({{ a.dti.id }})">
+                  voir FSL ↓
+                </button>
+              {% elif a.dti.statut == 'en_cours' %}
+                <span class="mono" style="font-size:11px;color:var(--amber);"
+                      id="dti-pending-{{ a.id }}"
+                      data-dti-id="{{ a.dti.id }}"
+                      data-acq-id="{{ a.id }}">⟳ en cours…</span>
+              {% else %}
+                <button class="btn-ghost" style="font-size:10px;padding:3px 10px;color:var(--red);"
+                        onclick="startDti({{ a.id }})">relancer</button>
+              {% endif %}
+            {% else %}
+              {% if current_user.role in ['admin','operateur'] %}
+              <button class="btn-ghost" style="font-size:10px;padding:3px 10px;"
+                      id="dti-btn-{{ a.id }}"
+                      onclick="startDti({{ a.id }})">DTI →</button>
+              {% else %}
+              <span class="pill" style="font-size:9px;background:var(--bg3);color:var(--hint);">DTI</span>
+              {% endif %}
+            {% endif %}
+          {% else %}
+            <span class="mono" style="color:var(--border2);font-size:11px;">—</span>
           {% endif %}
         </td>
         <td>
@@ -383,6 +415,32 @@ initNiivue();
   {% endfor %}
 </div>
 {% endif %}
+
+<!-- Modal DTI -->
+<div id="dti-modal" style="display:none;position:fixed;inset:0;z-index:200;
+     background:rgba(0,0,0,0.45);align-items:center;justify-content:center;">
+  <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:6px;
+              padding:28px;width:min(700px,92vw);max-height:80vh;overflow-y:auto;position:relative;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+      <div style="font-family:var(--font-mono);font-size:13px;font-weight:500;">Analyse DTI — Commandes FSL</div>
+      <button onclick="closeDtiModal()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--hint);">✕</button>
+    </div>
+    <div id="dti-modal-fsl-status" style="margin-bottom:12px;font-size:12px;"></div>
+    <div id="dti-modal-bfiles" style="margin-bottom:12px;font-size:12px;color:var(--muted);font-family:var(--font-mono);"></div>
+    <div style="font-size:11px;color:var(--hint);margin-bottom:6px;font-family:var(--font-mono);">Commandes à exécuter dans un terminal :</div>
+    <pre id="dti-modal-cmds" style="background:var(--bg3);border:1px solid var(--border2);border-radius:4px;
+         padding:14px;font-size:11px;font-family:var(--font-mono);overflow-x:auto;white-space:pre-wrap;
+         color:var(--text);"></pre>
+    <div id="dti-modal-fa" style="display:none;margin-top:14px;padding:12px;background:var(--teal-bg);
+         border:1px solid rgba(13,148,112,0.2);border-radius:4px;font-family:var(--font-mono);font-size:12px;">
+      <span style="color:var(--hint);">FA moyen (cerveau) : </span>
+      <span id="dti-modal-fa-val" style="color:var(--teal);font-weight:500;"></span>
+    </div>
+    <div style="margin-top:16px;font-size:11px;color:var(--hint);">
+      Fichiers de sortie : <code>dti_*_FA.nii.gz</code>, <code>dti_*_MD.nii.gz</code>, <code>dti_*_L1.nii.gz</code>, etc.
+    </div>
+  </div>
+</div>
 
 <!-- Commentaires & incidents (F8) -->
 <div class="card">
@@ -579,6 +637,89 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('[data-vol-id]').forEach(el => {
     pollVolumetrie(parseInt(el.dataset.volId), parseInt(el.dataset.acqId));
   });
+  document.querySelectorAll('[data-dti-id]').forEach(el => {
+    pollDti(parseInt(el.dataset.dtiId), parseInt(el.dataset.acqId));
+  });
+});
+
+// ── DTI ───────────────────────────────────────────────────────────────────────
+async function startDti(acqId) {
+  const btn  = document.getElementById(`dti-btn-${acqId}`);
+  const cell = document.getElementById(`dti-cell-${acqId}`);
+  if (btn) { btn.disabled = true; btn.textContent = '⟳ analyse…'; }
+
+  const res  = await fetch(`/api/dti/${acqId}`, { method: 'POST' });
+  const data = await res.json();
+
+  if (!res.ok) {
+    alert(data.error || 'Erreur lors du lancement.');
+    if (btn) { btn.disabled = false; btn.textContent = 'DTI →'; }
+    return;
+  }
+
+  cell.innerHTML = `<span class="mono" style="font-size:11px;color:var(--amber);"
+                         data-dti-id="${data.dti_id}" data-acq-id="${acqId}">⟳ en cours…</span>`;
+  pollDti(data.dti_id, acqId);
+}
+
+function pollDti(dtiId, acqId) {
+  const interval = setInterval(async () => {
+    const res  = await fetch(`/api/dti/status/${dtiId}`);
+    const data = await res.json();
+
+    if (data.statut === 'ok') {
+      clearInterval(interval);
+      const cell = document.getElementById(`dti-cell-${acqId}`);
+      cell.innerHTML = `<button class="btn-ghost" style="font-size:10px;padding:3px 10px;
+                          color:var(--teal);border-color:var(--teal);"
+                          onclick="showDtiResult(${dtiId})">voir FSL ↓</button>`;
+    } else if (data.statut === 'erreur') {
+      clearInterval(interval);
+      const cell = document.getElementById(`dti-cell-${acqId}`);
+      cell.innerHTML = `<button class="btn-ghost" style="font-size:10px;padding:3px 10px;color:var(--red);"
+                          onclick="startDti(${acqId})">relancer</button>`;
+    }
+  }, 2000);
+}
+
+async function showDtiResult(dtiId) {
+  const res  = await fetch(`/api/dti/status/${dtiId}`);
+  const data = await res.json();
+  const r    = data.resultats || {};
+
+  const modal  = document.getElementById('dti-modal');
+  const status = document.getElementById('dti-modal-fsl-status');
+  const bfiles = document.getElementById('dti-modal-bfiles');
+  const cmds   = document.getElementById('dti-modal-cmds');
+  const faDiv  = document.getElementById('dti-modal-fa');
+  const faVal  = document.getElementById('dti-modal-fa-val');
+
+  status.innerHTML = r.fsl_disponible
+    ? `<span style="color:var(--teal);">✓ FSL détecté sur le serveur</span>${r.fsl_execute ? ' — dtifit exécuté automatiquement' : ''}`
+    : `<span style="color:var(--amber);">FSL non installé sur ce serveur</span> — copiez les commandes ci-dessous dans un terminal avec FSL`;
+
+  bfiles.innerHTML = [
+    r.bvec_trouve ? `bvec : <span style="color:var(--teal);">trouvé</span>` : `bvec : <span style="color:var(--red);">non trouvé — ajoutez un fichier .bvec dans le même dossier</span>`,
+    r.bval_trouve ? `bval : <span style="color:var(--teal);">trouvé</span>` : `bval : <span style="color:var(--red);">non trouvé — ajoutez un fichier .bval dans le même dossier</span>`,
+  ].join('<br>');
+
+  cmds.textContent = data.commandes || '# Commandes non disponibles';
+
+  if (r.FA_mean != null) {
+    faDiv.style.display = 'block';
+    faVal.textContent   = r.FA_mean.toFixed(4);
+  } else {
+    faDiv.style.display = 'none';
+  }
+
+  modal.style.display = 'flex';
+}
+
+function closeDtiModal() {
+  document.getElementById('dti-modal').style.display = 'none';
+}
+document.getElementById('dti-modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('dti-modal')) closeDtiModal();
 });
 </script>
 

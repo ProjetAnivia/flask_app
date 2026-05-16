@@ -150,6 +150,20 @@ def init_db():
             calcule_par TEXT,
             erreur      TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS dti_analyses (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            animal_id   TEXT NOT NULL,
+            projet      TEXT NOT NULL,
+            acq_id      INTEGER NOT NULL,
+            sequence    TEXT,
+            statut      TEXT DEFAULT 'en_cours',
+            commandes   TEXT,
+            resultats   TEXT,
+            calcule_le  TEXT,
+            calcule_par TEXT,
+            erreur      TEXT
+        );
         """)
 
         # Migration douce — ajoute les colonnes si absentes (SQLite ne supporte pas IF NOT EXISTS sur ALTER)
@@ -1033,7 +1047,7 @@ def api_upload_file():
             "(animal_id,projet,sequence,date_acq,fichier_dest,md5,statut,importé_par,importé_le) "
             "VALUES (?,?,?,?,?,?,?,?,?)",
             (final_animal, project, final_seq, final_date,
-             str(nifti_path), md5, "ok", current_user.username, now)
+             normalize_path_for_storage(str(nifti_path)), md5, "ok", current_user.username, now)
         )
         existing = db.execute(
             "SELECT id FROM animaux WHERE animal_id=? AND projet=?",
@@ -1547,12 +1561,28 @@ def page_animal(projet, animal_id):
                 d["resultats"] = json.loads(d["resultats"])
             vol_by_acq[v["acq_id"]] = d
 
-    # Enrichir chaque acquisition avec l'URL NIfTI et la volumétrie
+    # Dernière analyse DTI par acquisition
+    with get_db() as db:
+        dtis = db.execute(
+            "SELECT * FROM dti_analyses WHERE animal_id=? AND projet=? ORDER BY id DESC",
+            (animal_id, projet)
+        ).fetchall()
+    dti_by_acq = {}
+    for dti in dtis:
+        if dti["acq_id"] not in dti_by_acq:
+            d = dict(dti)
+            if d.get("resultats"):
+                d["resultats"] = json.loads(d["resultats"])
+            dti_by_acq[dti["acq_id"]] = d
+
+    # Enrichir chaque acquisition avec l'URL NIfTI, la volumétrie et le flag DTI
     acqs_enriched = []
     for a in acqs:
         d = dict(a)
         d["nifti_url"]  = nas_url(d.get("fichier_dest"))
         d["volumetrie"] = vol_by_acq.get(d["id"])
+        d["is_dti"]     = is_dti_sequence(d.get("sequence", ""))
+        d["dti"]        = dti_by_acq.get(d["id"])
         acqs_enriched.append(d)
 
     # Statut pipeline : 4 étapes
@@ -1649,20 +1679,52 @@ def api_update_statut(acq_id):
 #  VOLUMÉTRIE — calcul K-means 3 classes
 # ─────────────────────────────────────────────────
 
-def resolve_nifti_path(stored_path: str) -> str:
-    """Convertit un chemin NIfTI stocké en DB vers le chemin réel du container."""
-    p = Path(stored_path)
-    if p.exists():
-        return str(p)
-    # Le chemin est un chemin hôte absolu (ex: /Users/nolan/.../structured/proj/...)
-    # → on cherche 'structured/' et on reconstruit via NAS_ROOT
-    s = stored_path.replace("\\", "/")
+def is_dti_sequence(seq: str) -> bool:
+    """Détecte si une séquence est de type DTI / DWI."""
+    if not seq:
+        return False
+    return bool(re.search(r'\b(dti|dwi|diffusion|diff)\b', seq.lower()))
+
+
+def normalize_path_for_storage(path: str) -> str:
+    """
+    Normalise un chemin Windows/UNC en chemin POSIX pour stockage en DB.
+    Exemples :
+      C:\\Users\\... → /Users/...
+      \\\\server\\share\\IRM\\... → //server/share/IRM/...  (conservé intact)
+      /Users/... → /Users/...  (inchangé)
+    """
+    p = str(path).replace("\\", "/")
+    # Windows drive letter : C:/... → /C:/... puis on retire le préfixe
+    if len(p) >= 2 and p[1] == ":":
+        p = "/" + p
+    return p
+
+
+def _resolve_by_marker(stored_path: str) -> str | None:
+    """
+    Résout un chemin stocké (hôte ou Windows) vers le chemin réel via le marqueur 'structured/'.
+    Gère les UNC paths (//server/share/...) et les chemins Windows (C:/...).
+    Retourne None si non résolu.
+    """
+    s = normalize_path_for_storage(stored_path)
     marker = "structured/"
     idx = s.find(marker)
     if idx != -1:
         candidate = NAS_ROOT / s[idx + len(marker):]
         if candidate.exists():
             return str(candidate)
+    return None
+
+
+def resolve_nifti_path(stored_path: str) -> str:
+    """Convertit un chemin NIfTI stocké en DB vers le chemin réel du container."""
+    p = Path(stored_path)
+    if p.exists():
+        return str(p)
+    result = _resolve_by_marker(stored_path)
+    if result:
+        return result
     raise FileNotFoundError(f"NIfTI introuvable : {stored_path}")
 
 
@@ -1831,6 +1893,140 @@ def api_volumetrie_csv(vol_id):
     )
 
 
+# ─────────────────────────────────────────────────
+#  DTI — analyse diffusion (FSL dtifit ou commandes manuelles)
+# ─────────────────────────────────────────────────
+
+def compute_dti_bg(dti_id: int, fichier_dest: str):
+    """
+    Thread background : tente de lancer FSL dtifit.
+    Si FSL n'est pas installé, génère les commandes à exécuter manuellement.
+    Cherche automatiquement les fichiers bvec/bval compagnons.
+    """
+    import shutil as _shutil
+    now = datetime.now().isoformat()
+    try:
+        real_path = resolve_nifti_path(fichier_dest)
+        nii_dir   = Path(real_path).parent
+        stem      = Path(real_path).stem.replace(".nii", "")
+
+        # Chercher bvec/bval compagnons (.bvec/.bval ou .bvecs/.bvals)
+        bvec_path = next((nii_dir / f for f in [f"{stem}.bvec", f"{stem}.bvecs",
+                          "grad.bvec", "bvecs"] if (nii_dir / f).exists()), None)
+        bval_path = next((nii_dir / f for f in [f"{stem}.bval", f"{stem}.bvals",
+                          "grad.bval", "bvals"] if (nii_dir / f).exists()), None)
+
+        out_prefix = str(nii_dir / f"dti_{stem}")
+        has_fsl    = bool(_shutil.which("dtifit"))
+
+        cmd_mask = f"bet {real_path} {nii_dir}/{stem}_brain -m -f 0.2"
+        cmd_dti  = (f"dtifit --data={real_path} --out={out_prefix} "
+                    f"--mask={nii_dir}/{stem}_brain_mask.nii.gz "
+                    f"--bvecs={bvec_path or '<fichier.bvec>'} "
+                    f"--bvals={bval_path or '<fichier.bval>'}")
+        cmds = f"{cmd_mask}\n{cmd_dti}"
+
+        resultats = {
+            "fsl_disponible":  has_fsl,
+            "bvec_trouve":     str(bvec_path) if bvec_path else None,
+            "bval_trouve":     str(bval_path) if bval_path else None,
+            "sortie_prefix":   out_prefix,
+            "fichier_nifti":   real_path,
+        }
+
+        if has_fsl and bvec_path and bval_path:
+            import subprocess
+            # Étape 1 : masque cerveau avec bet
+            mask_nii = nii_dir / f"{stem}_brain_mask.nii.gz"
+            subprocess.run(["bet", real_path, str(nii_dir / f"{stem}_brain"),
+                            "-m", "-f", "0.2"],
+                           capture_output=True, timeout=300)
+            # Étape 2 : dtifit
+            ret = subprocess.run(
+                ["dtifit", f"--data={real_path}", f"--out={out_prefix}",
+                 f"--mask={mask_nii}", f"--bvecs={bvec_path}", f"--bvals={bval_path}"],
+                capture_output=True, timeout=600
+            )
+            if ret.returncode == 0:
+                # Lire FA moyen si disponible
+                fa_file = Path(f"{out_prefix}_FA.nii.gz")
+                if fa_file.exists():
+                    import nibabel as nib, numpy as np
+                    fa_img  = nib.load(str(fa_file))
+                    fa_data = np.asarray(fa_img.dataobj, dtype=np.float32)
+                    mask    = fa_data > 0
+                    resultats["FA_mean"] = round(float(fa_data[mask].mean()), 4) if mask.any() else None
+                resultats["fsl_execute"] = True
+                statut = "ok"
+            else:
+                resultats["fsl_execute"] = False
+                resultats["stderr"]      = ret.stderr.decode()[:500]
+                statut = "ok"  # commandes générées même si dtifit a échoué
+        else:
+            statut = "ok"  # commandes manuelles générées
+
+        with get_db() as db:
+            db.execute(
+                "UPDATE dti_analyses SET statut=?, commandes=?, resultats=?, calcule_le=? WHERE id=?",
+                (statut, cmds, json.dumps(resultats), now, dti_id)
+            )
+            db.commit()
+
+    except Exception as exc:
+        with get_db() as db:
+            db.execute(
+                "UPDATE dti_analyses SET statut='erreur', erreur=? WHERE id=?",
+                (str(exc), dti_id)
+            )
+            db.commit()
+
+
+@app.route("/api/dti/<int:acq_id>", methods=["POST"])
+@login_required
+@role_required("admin", "operateur")
+def api_start_dti(acq_id):
+    with get_db() as db:
+        acq = db.execute("SELECT * FROM acquisitions WHERE id=?", (acq_id,)).fetchone()
+        if not acq:
+            return jsonify({"error": "Acquisition introuvable"}), 404
+        if not acq["fichier_dest"]:
+            return jsonify({"error": "Aucun fichier NIfTI associé"}), 400
+        if not is_dti_sequence(acq["sequence"] or ""):
+            return jsonify({"error": "Cette acquisition n'est pas identifiée comme DTI"}), 400
+
+        existing = db.execute(
+            "SELECT id, statut FROM dti_analyses WHERE acq_id=? ORDER BY id DESC LIMIT 1",
+            (acq_id,)
+        ).fetchone()
+        if existing and existing["statut"] == "en_cours":
+            return jsonify({"error": "Analyse déjà en cours", "dti_id": existing["id"]}), 409
+
+        cur = db.execute(
+            "INSERT INTO dti_analyses (animal_id, projet, acq_id, sequence, statut, calcule_par) "
+            "VALUES (?,?,?,?,?,?)",
+            (acq["animal_id"], acq["projet"], acq_id, acq["sequence"],
+             "en_cours", current_user.username)
+        )
+        dti_id = cur.lastrowid
+        db.commit()
+
+    threading.Thread(target=compute_dti_bg, args=(dti_id, acq["fichier_dest"]), daemon=True).start()
+    return jsonify({"ok": True, "dti_id": dti_id, "statut": "en_cours"})
+
+
+@app.route("/api/dti/status/<int:dti_id>")
+@login_required
+def api_dti_status(dti_id):
+    with get_db() as db:
+        row = db.execute("SELECT * FROM dti_analyses WHERE id=?", (dti_id,)).fetchone()
+    if not row:
+        return jsonify({"error": "Introuvable"}), 404
+    d = dict(row)
+    if d.get("resultats"):
+        d["resultats"] = json.loads(d["resultats"])
+    return jsonify(d)
+
+
 @app.route("/nas/<path:filepath>")
 @login_required
 def serve_nas_file(filepath):
@@ -1842,17 +2038,17 @@ def serve_nas_file(filepath):
 
 
 def nas_url(abs_path: str) -> str | None:
-    """Convertit un chemin absolu NIfTI en URL /nas/…"""
+    """
+    Convertit un chemin NIfTI (local, hôte Docker ou UNC Windows) en URL /nas/…
+    Gère les chemins POSIX, Windows (C:\\...) et UNC (\\\\server\\share\\...).
+    """
     if not abs_path:
         return None
     try:
         rel = Path(abs_path).resolve().relative_to(NAS_ROOT.resolve())
-        return f"/nas/{rel}"
+        return f"/nas/{rel.as_posix()}"
     except ValueError:
-        # Fallback Docker : le fichier_dest stocke un chemin hôte absolu
-        # (ex: /Users/nolan/.../nas_simule/structured/proj/…) mais NAS_ROOT
-        # vaut /nas/structured dans le conteneur. On cherche le marqueur "structured/".
-        p = str(abs_path).replace("\\", "/")
+        p = normalize_path_for_storage(abs_path)
         marker = "structured/"
         idx = p.find(marker)
         if idx != -1:

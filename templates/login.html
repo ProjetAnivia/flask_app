@@ -132,7 +132,16 @@
           </div>
           <div class="form-row">
             <label class="form-label">Mot de passe</label>
-            <input class="form-input" type="password" name="password" placeholder="••••••••">
+            <div style="position:relative;">
+              <input class="form-input" type="password" name="password" id="pw-input"
+                     placeholder="••••••••" style="padding-right:40px;">
+              <button type="button" id="pw-toggle"
+                      onclick="togglePw()"
+                      style="position:absolute;right:10px;top:50%;transform:translateY(-50%);
+                             background:none;border:none;cursor:pointer;color:var(--hint);
+                             font-size:14px;padding:0;line-height:1;"
+                      title="Afficher / masquer">👁</button>
+            </div>
           </div>
           <button class="btn-login" type="submit">Connexion →</button>
         </div>
@@ -141,5 +150,14 @@
 
     <div class="login-hint">Comptes démo : admin / admin123</div>
   </div>
+<script>
+function togglePw() {
+  const inp = document.getElementById('pw-input');
+  const btn = document.getElementById('pw-toggle');
+  const show = inp.type === 'password';
+  inp.type   = show ? 'text' : 'password';
+  btn.style.opacity = show ? '0.7' : '0.35';
+}
+</script>
 </body>
 </html>
