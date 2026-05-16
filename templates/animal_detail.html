@@ -194,7 +194,12 @@ initNiivue();
   {% if acqs %}
   <table class="data-table">
     <thead>
-      <tr><th>Séquence</th><th>Date</th><th>Fichier NAS</th><th>Importé par</th><th>Statut</th><th>Modifier</th></tr>
+      <tr>
+        <th>Séquence</th><th>Date</th><th>Fichier NAS</th><th>Importé par</th>
+        <th>Statut</th>
+        <th>Volumétrie</th>
+        <th>Modifier</th>
+      </tr>
     </thead>
     <tbody>
     {% for a in acqs %}
@@ -210,6 +215,51 @@ initNiivue();
           {% elif a.statut == "a_refaire" %}<span class="pill pill-redo">à refaire</span>
           {% elif a.statut == "en_cours" %}<span class="pill pill-prog">en cours</span>
           {% else %}<span class="pill pill-wait">en attente</span>{% endif %}
+        </td>
+        <!-- Volumétrie -->
+        <td id="vol-cell-{{ a.id }}">
+          {% if a.nifti_url %}
+            {% if a.volumetrie %}
+              {% if a.volumetrie.statut == 'ok' %}
+                <div style="display:flex;gap:6px;align-items:center;">
+                  <a href="#vol-results-{{ a.volumetrie.id }}"
+                     style="font-family:var(--font-mono);font-size:11px;color:var(--teal);text-decoration:none;">
+                    voir résultats ↓
+                  </a>
+                  <a href="/api/volumetrie/{{ a.volumetrie.id }}/csv"
+                     style="font-family:var(--font-mono);font-size:10px;color:var(--hint);text-decoration:none;">
+                    CSV
+                  </a>
+                </div>
+              {% elif a.volumetrie.statut == 'en_cours' %}
+                <span class="mono" style="font-size:11px;color:var(--amber);"
+                      id="vol-pending-{{ a.id }}"
+                      data-vol-id="{{ a.volumetrie.id }}"
+                      data-acq-id="{{ a.id }}">
+                  ⟳ en cours…
+                </span>
+              {% else %}
+                <div style="display:flex;gap:6px;align-items:center;">
+                  <span style="font-family:var(--font-mono);font-size:11px;color:var(--red);"
+                        title="{{ a.volumetrie.erreur or '' }}">erreur</span>
+                  {% if current_user.role in ['admin','operateur'] %}
+                  <button class="btn-ghost" style="font-size:10px;padding:2px 8px;"
+                          onclick="startVolumetrie({{ a.id }})">relancer</button>
+                  {% endif %}
+                </div>
+              {% endif %}
+            {% else %}
+              {% if current_user.role in ['admin','operateur'] %}
+              <button class="btn-ghost" style="font-size:11px;padding:3px 10px;"
+                      id="vol-btn-{{ a.id }}"
+                      onclick="startVolumetrie({{ a.id }})">Calculer</button>
+              {% else %}
+              <span class="mono" style="color:var(--hint);font-size:11px;">—</span>
+              {% endif %}
+            {% endif %}
+          {% else %}
+          <span class="mono" style="color:var(--hint);font-size:11px;" title="Pas de fichier NIfTI">—</span>
+          {% endif %}
         </td>
         <td>
           {% if current_user.role in ['admin','operateur'] %}
@@ -230,6 +280,75 @@ initNiivue();
     <div class="mono" style="color:var(--hint);">Aucune acquisition enregistrée pour cet animal.</div>
   {% endif %}
 </div>
+
+<!-- Résultats volumétrie -->
+{% set vol_results = acqs | selectattr("volumetrie") | selectattr("volumetrie.statut", "equalto", "ok") | list %}
+{% if vol_results %}
+<div class="card" id="vol-results-section">
+  <div class="card-title">Résultats volumétrie</div>
+  {% for a in vol_results %}
+  {% set v = a.volumetrie %}
+  <div id="vol-results-{{ v.id }}" style="{% if not loop.first %}margin-top:20px;padding-top:20px;border-top:1px solid var(--border);{% endif %}">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+      <div>
+        <span style="font-weight:500;font-size:13px;">{{ a.sequence }}</span>
+        <span class="mono" style="color:var(--hint);font-size:11px;margin-left:10px;">
+          Méthode : K-means 3 classes · {{ v.calcule_le[:16] if v.calcule_le else '' }}
+          par {{ v.calcule_par or '—' }}
+        </span>
+      </div>
+      <a href="/api/volumetrie/{{ v.id }}/csv"
+         class="btn-ghost" style="font-size:11px;padding:4px 12px;text-decoration:none;">
+        Télécharger CSV
+      </a>
+    </div>
+
+    <!-- Chiffres clés -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;">
+      <div style="background:var(--bg3);border-radius:6px;padding:12px;border:1px solid var(--border);">
+        <div style="font-size:11px;color:var(--hint);font-family:var(--font-mono);margin-bottom:4px;">Volume cerveau</div>
+        <div style="font-size:18px;font-weight:600;">{{ v.resultats.brain_vol_mm3 | round(0) | int }} mm³</div>
+      </div>
+      <div style="background:var(--bg3);border-radius:6px;padding:12px;border:1px solid var(--border);">
+        <div style="font-size:11px;color:var(--hint);font-family:var(--font-mono);margin-bottom:4px;">Taille voxel</div>
+        <div style="font-size:18px;font-weight:600;">{{ v.resultats.voxel_size_mm3 }} mm³</div>
+      </div>
+      <div style="background:var(--bg3);border-radius:6px;padding:12px;border:1px solid var(--border);">
+        <div style="font-size:11px;color:var(--hint);font-family:var(--font-mono);margin-bottom:4px;">Voxels cerveau</div>
+        <div style="font-size:18px;font-weight:600;">{{ v.resultats.brain_voxels }}</div>
+      </div>
+      <div style="background:var(--bg3);border-radius:6px;padding:12px;border:1px solid var(--border);">
+        <div style="font-size:11px;color:var(--hint);font-family:var(--font-mono);margin-bottom:4px;">Dimensions</div>
+        <div style="font-size:15px;font-weight:600;">{{ v.resultats.shape | join(' × ') }}</div>
+      </div>
+    </div>
+
+    <!-- Tableau tissus -->
+    <table class="data-table">
+      <thead>
+        <tr><th>Tissu</th><th>Voxels</th><th>Volume (mm³)</th><th>% cerveau</th><th>Proportion</th></tr>
+      </thead>
+      <tbody>
+      {% for t in v.resultats.tissus %}
+        <tr>
+          <td>{{ t.nom }}</td>
+          <td class="mono">{{ t.voxels }}</td>
+          <td class="mono">{{ t.vol_mm3 }}</td>
+          <td class="mono">{{ t.pct }}%</td>
+          <td style="min-width:120px;">
+            <div class="prog-wrap">
+              <div class="prog-bar {% if loop.index == 2 %}amber{% elif loop.index == 3 %}{% else %}red{% endif %}"
+                   style="width:{{ t.pct }}%"></div>
+            </div>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
 
 <!-- Commentaires & incidents (F8) -->
 <div class="card">
@@ -377,6 +496,56 @@ async function updateStatut(acqId, newStatut) {
   });
   if (!res.ok) alert('Erreur lors de la mise à jour du statut.');
 }
+
+// ── Volumétrie ────────────────────────────────────────────────────────────────
+async function startVolumetrie(acqId) {
+  const btn  = document.getElementById(`vol-btn-${acqId}`);
+  const cell = document.getElementById(`vol-cell-${acqId}`);
+  if (btn) { btn.disabled = true; btn.textContent = '⟳ Calcul…'; }
+
+  const res  = await fetch(`/api/volumetrie/${acqId}`, { method: 'POST' });
+  const data = await res.json();
+
+  if (!res.ok) {
+    alert(data.error || 'Erreur lors du lancement.');
+    if (btn) { btn.disabled = false; btn.textContent = 'Calculer'; }
+    return;
+  }
+
+  // Remplacer le bouton par un indicateur de progression et lancer le polling
+  cell.innerHTML = `<span class="mono" style="font-size:11px;color:var(--amber);">⟳ en cours…</span>`;
+  pollVolumetrie(data.vol_id, acqId);
+}
+
+function pollVolumetrie(volId, acqId) {
+  const interval = setInterval(async () => {
+    const res  = await fetch(`/api/volumetrie/status/${volId}`);
+    const data = await res.json();
+
+    if (data.statut === 'ok') {
+      clearInterval(interval);
+      // Recharger la page pour afficher les résultats complets
+      location.reload();
+    } else if (data.statut === 'erreur') {
+      clearInterval(interval);
+      const cell = document.getElementById(`vol-cell-${acqId}`);
+      cell.innerHTML = `
+        <div style="display:flex;gap:6px;align-items:center;">
+          <span style="font-family:var(--font-mono);font-size:11px;color:var(--red);"
+                title="${data.erreur || ''}">erreur</span>
+          <button class="btn-ghost" style="font-size:10px;padding:2px 8px;"
+                  onclick="startVolumetrie(${acqId})">relancer</button>
+        </div>`;
+    }
+  }, 2000);
+}
+
+// Reprendre le polling pour les calculs déjà en cours au chargement de la page
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('[data-vol-id]').forEach(el => {
+    pollVolumetrie(parseInt(el.dataset.volId), parseInt(el.dataset.acqId));
+  });
+});
 </script>
 
 {% endblock %}

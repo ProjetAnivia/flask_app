@@ -14,7 +14,7 @@ from flask import Flask, render_template, jsonify, request, redirect, url_for, s
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from functools import wraps
 from pathlib import Path
-import json, sqlite3, hashlib, os, re, csv, io, socket
+import json, sqlite3, hashlib, os, re, csv, io, socket, threading
 from datetime import datetime
 
 def sanitize_animal_id(raw: str) -> str:
@@ -134,6 +134,21 @@ def init_db():
             action     TEXT NOT NULL,
             ip         TEXT,
             timestamp  TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS volumetries (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            animal_id   TEXT NOT NULL,
+            projet      TEXT NOT NULL,
+            acq_id      INTEGER NOT NULL,
+            sequence    TEXT,
+            statut      TEXT DEFAULT 'en_cours',
+            methode     TEXT DEFAULT 'kmeans_3classes',
+            resultats   TEXT,
+            fichier_csv TEXT,
+            calcule_le  TEXT,
+            calcule_par TEXT,
+            erreur      TEXT
         );
         """)
 
@@ -1245,11 +1260,27 @@ def page_animal(projet, animal_id):
 
     dossier_nas = build_animal_folder(animal_id, animal["date_premiere_acq"] or "00000000")
 
-    # Enrichir chaque acquisition avec l'URL NIfTI pour NiiVue
+    # Dernière volumétrie par acquisition
+    with get_db() as db:
+        vols = db.execute(
+            "SELECT * FROM volumetries WHERE animal_id=? AND projet=? ORDER BY id DESC",
+            (animal_id, projet)
+        ).fetchall()
+
+    vol_by_acq = {}
+    for v in vols:
+        if v["acq_id"] not in vol_by_acq:
+            d = dict(v)
+            if d.get("resultats"):
+                d["resultats"] = json.loads(d["resultats"])
+            vol_by_acq[v["acq_id"]] = d
+
+    # Enrichir chaque acquisition avec l'URL NIfTI et la volumétrie
     acqs_enriched = []
     for a in acqs:
         d = dict(a)
-        d["nifti_url"] = nas_url(d.get("fichier_dest"))
+        d["nifti_url"]  = nas_url(d.get("fichier_dest"))
+        d["volumetrie"] = vol_by_acq.get(d["id"])
         acqs_enriched.append(d)
 
     return render_template("animal_detail.html",
@@ -1326,6 +1357,152 @@ def api_update_statut(acq_id):
         db.execute("UPDATE acquisitions SET statut=? WHERE id=?", (statut, acq_id))
         db.commit()
     return jsonify({"ok": True})
+
+# ─────────────────────────────────────────────────
+#  VOLUMÉTRIE — calcul K-means 3 classes
+# ─────────────────────────────────────────────────
+
+def compute_volumetry_bg(vol_id: int, fichier_dest: str):
+    """Thread background : segmentation K-means 3 classes sur le NIfTI."""
+    try:
+        import nibabel as nib
+        import numpy as np
+        from sklearn.cluster import KMeans
+
+        now  = datetime.now().isoformat()
+        img  = nib.load(fichier_dest)
+        data = np.asarray(img.dataobj, dtype=np.float32)
+
+        zooms     = img.header.get_zooms()[:3]
+        voxel_vol = float(zooms[0]) * float(zooms[1]) * float(zooms[2])
+        if voxel_vol <= 0:
+            voxel_vol = 1.0
+
+        # Masque cerveau : exclure le fond (intensité quasi nulle)
+        nonzero = data[data > 0]
+        if nonzero.size < 10:
+            raise ValueError("Volume trop petit ou données vides — vérifiez le fichier NIfTI")
+        threshold   = float(np.percentile(nonzero, 5))
+        brain_mask  = data > threshold
+        n_brain     = int(brain_mask.sum())
+
+        brain_vals = data[brain_mask].reshape(-1, 1)
+
+        # K-means 3 classes : LCR, substance grise, substance blanche
+        km      = KMeans(n_clusters=3, n_init=10, random_state=42)
+        km.fit(brain_vals)
+        labels  = km.labels_
+        centers = km.cluster_centers_.flatten()
+        order   = np.argsort(centers)  # 0=hypointense → 2=hyperintense
+
+        tissue_names = {order[0]: "LCR / fond", order[1]: "Substance grise", order[2]: "Substance blanche"}
+
+        tissus = []
+        for i in range(3):
+            cnt = int((labels == i).sum())
+            tissus.append({
+                "nom":     tissue_names[i],
+                "voxels":  cnt,
+                "vol_mm3": round(cnt * voxel_vol, 2),
+                "pct":     round(cnt / n_brain * 100, 1),
+            })
+
+        results = {
+            "voxel_size_mm3": round(voxel_vol, 4),
+            "brain_voxels":   n_brain,
+            "brain_vol_mm3":  round(n_brain * voxel_vol, 2),
+            "shape":          list(data.shape),
+            "tissus":         tissus,
+        }
+
+        # CSV sauvegardé à côté du NIfTI
+        csv_path = Path(fichier_dest).parent / "volumetrie.csv"
+        with open(csv_path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["Tissu", "Voxels", "Volume (mm³)", "% cerveau"])
+            w.writerow(["Cerveau total", n_brain, results["brain_vol_mm3"], "100.0"])
+            for t in tissus:
+                w.writerow([t["nom"], t["voxels"], t["vol_mm3"], t["pct"]])
+
+        with get_db() as db:
+            db.execute(
+                "UPDATE volumetries SET statut='ok', resultats=?, fichier_csv=?, calcule_le=? WHERE id=?",
+                (json.dumps(results), str(csv_path), now, vol_id)
+            )
+            db.commit()
+
+    except Exception as exc:
+        with get_db() as db:
+            db.execute(
+                "UPDATE volumetries SET statut='erreur', erreur=? WHERE id=?",
+                (str(exc), vol_id)
+            )
+            db.commit()
+
+
+@app.route("/api/volumetrie/<int:acq_id>", methods=["POST"])
+@login_required
+@role_required("admin", "operateur")
+def api_start_volumetrie(acq_id):
+    with get_db() as db:
+        acq = db.execute("SELECT * FROM acquisitions WHERE id=?", (acq_id,)).fetchone()
+        if not acq:
+            return jsonify({"error": "Acquisition introuvable"}), 404
+        if not acq["fichier_dest"]:
+            return jsonify({"error": "Aucun fichier NIfTI associé à cette acquisition"}), 400
+
+        # Éviter un double calcul simultané
+        existing = db.execute(
+            "SELECT id, statut FROM volumetries WHERE acq_id=? ORDER BY id DESC LIMIT 1",
+            (acq_id,)
+        ).fetchone()
+        if existing and existing["statut"] == "en_cours":
+            return jsonify({"error": "Calcul déjà en cours", "vol_id": existing["id"]}), 409
+
+        cur = db.execute(
+            "INSERT INTO volumetries (animal_id, projet, acq_id, sequence, statut, methode, calcule_par) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (acq["animal_id"], acq["projet"], acq_id, acq["sequence"],
+             "en_cours", "kmeans_3classes", current_user.username)
+        )
+        vol_id = cur.lastrowid
+        db.commit()
+
+    threading.Thread(target=compute_volumetry_bg, args=(vol_id, acq["fichier_dest"]), daemon=True).start()
+    return jsonify({"ok": True, "vol_id": vol_id, "statut": "en_cours"})
+
+
+@app.route("/api/volumetrie/status/<int:vol_id>")
+@login_required
+def api_volumetrie_status(vol_id):
+    with get_db() as db:
+        row = db.execute("SELECT * FROM volumetries WHERE id=?", (vol_id,)).fetchone()
+    if not row:
+        return jsonify({"error": "Introuvable"}), 404
+    d = dict(row)
+    if d.get("resultats"):
+        d["resultats"] = json.loads(d["resultats"])
+    return jsonify(d)
+
+
+@app.route("/api/volumetrie/<int:vol_id>/csv")
+@login_required
+def api_volumetrie_csv(vol_id):
+    with get_db() as db:
+        row = db.execute(
+            "SELECT fichier_csv, animal_id, sequence FROM volumetries WHERE id=?", (vol_id,)
+        ).fetchone()
+    if not row or not row["fichier_csv"]:
+        return "Fichier non disponible", 404
+    p = Path(row["fichier_csv"])
+    if not p.exists():
+        return "Fichier introuvable sur le serveur", 404
+    return send_from_directory(
+        str(p.parent), p.name,
+        as_attachment=True,
+        download_name=f"volumetrie_{row['animal_id']}_{row['sequence']}.csv"
+    )
+
 
 @app.route("/nas/<path:filepath>")
 @login_required
