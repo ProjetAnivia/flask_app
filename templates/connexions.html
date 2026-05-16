@@ -43,6 +43,7 @@
         <th>Utilisateur</th>
         <th>Action</th>
         <th>IP</th>
+        <th>Pays</th>
       </tr>
     </thead>
     <tbody>
@@ -62,6 +63,7 @@
           {% endif %}
         </td>
         <td class="mono" style="color:var(--hint);">{{ l.ip or "—" }}</td>
+        <td class="mono" style="color:var(--muted);">{{ l.pays or "—" }}</td>
       </tr>
     {% endfor %}
     </tbody>

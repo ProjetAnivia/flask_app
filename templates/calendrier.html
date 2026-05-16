@@ -1,0 +1,186 @@
+{% extends "base.html" %}
+{% block title %}Calendrier{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <div style="display:flex;align-items:center;gap:16px;">
+    <div class="page-title">Calendrier IRM</div>
+  </div>
+  <div class="page-sub">{{ month_name }} {{ year }} — acquisitions enregistrées</div>
+</div>
+
+<!-- Navigation + filtre projet -->
+<div class="card" style="padding:14px 20px;">
+  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+    <!-- Flèches mois -->
+    <div style="display:flex;align-items:center;gap:10px;">
+      <a href="/calendrier?year={{ prev_year }}&month={{ prev_month }}{% if projet %}&projet={{ projet }}{% endif %}"
+         class="btn-ghost" style="padding:5px 14px;font-size:13px;text-decoration:none;">‹</a>
+      <span style="font-family:var(--font-mono);font-size:13px;font-weight:500;min-width:140px;text-align:center;">
+        {{ month_name }} {{ year }}
+      </span>
+      <a href="/calendrier?year={{ next_year }}&month={{ next_month }}{% if projet %}&projet={{ projet }}{% endif %}"
+         class="btn-ghost" style="padding:5px 14px;font-size:13px;text-decoration:none;">›</a>
+      <a href="/calendrier" class="btn-ghost" style="padding:5px 14px;font-size:11px;text-decoration:none;color:var(--hint);">
+        Aujourd'hui
+      </a>
+    </div>
+
+    <!-- Filtre projet -->
+    <form method="GET" action="/calendrier" style="display:flex;gap:8px;align-items:center;">
+      <input type="hidden" name="year"  value="{{ year }}">
+      <input type="hidden" name="month" value="{{ month }}">
+      <select name="projet" class="form-select" style="width:180px;font-size:12px;"
+              onchange="this.form.submit()">
+        <option value="">Tous les projets</option>
+        {% for p in projets %}
+          <option value="{{ p }}" {% if p == projet %}selected{% endif %}>
+            {{ p | replace("_"," ") | title }}
+          </option>
+        {% endfor %}
+      </select>
+    </form>
+
+    <!-- Légende couleurs -->
+    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+      {% for p in projets %}
+      <span style="font-family:var(--font-mono);font-size:10px;display:flex;align-items:center;gap:4px;">
+        <span style="width:8px;height:8px;border-radius:50%;display:inline-block;
+                     background:{% if color_map[p] == 'teal' %}var(--teal)
+                                {% elif color_map[p] == 'blue' %}var(--blue)
+                                {% elif color_map[p] == 'amber' %}var(--amber)
+                                {% else %}var(--red){% endif %};"></span>
+        {{ p | replace("_"," ") | title }}
+      </span>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<!-- Grille calendrier -->
+<div class="card" style="padding:16px;">
+  <!-- Jours de la semaine -->
+  <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:6px;">
+    {% for day in ["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"] %}
+    <div style="text-align:center;font-family:var(--font-mono);font-size:9px;
+                letter-spacing:.08em;text-transform:uppercase;color:var(--hint);padding:4px 0;">
+      {{ day }}
+    </div>
+    {% endfor %}
+  </div>
+
+  <!-- Semaines -->
+  <div style="display:flex;flex-direction:column;gap:4px;">
+    {% for week in cal_weeks %}
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;">
+      {% for day in week %}
+      {% set day_acqs = acqs_by_day.get(day, []) if day > 0 else [] %}
+      <div
+        onclick="{% if day > 0 and day_acqs %}showDay({{ day }}){% endif %}"
+        style="min-height:80px;border-radius:4px;padding:6px;cursor:{% if day > 0 and day_acqs %}pointer{% else %}default{% endif %};
+               border:1px solid {% if day == today_day %}var(--teal){% else %}var(--border){% endif %};
+               background:{% if day == 0 %}var(--bg){% elif day == today_day %}var(--teal-bg){% else %}var(--bg2){% endif %};
+               transition:background .12s;">
+        {% if day > 0 %}
+          <div style="font-family:var(--font-mono);font-size:11px;font-weight:{% if day == today_day %}500{% else %}400{% endif %};
+                      color:{% if day == today_day %}var(--teal){% else %}var(--muted){% endif %};margin-bottom:4px;">
+            {{ day }}
+          </div>
+          {% if day_acqs %}
+            <div style="display:flex;flex-direction:column;gap:2px;">
+              {% for a in day_acqs[:4] %}
+              <div style="font-family:var(--font-mono);font-size:9px;padding:1px 5px;border-radius:2px;
+                          overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+                          background:{% if color_map.get(a.projet,'teal') == 'teal' %}rgba(13,148,112,0.12)
+                                     {% elif color_map.get(a.projet,'teal') == 'blue' %}rgba(29,78,216,0.1)
+                                     {% elif color_map.get(a.projet,'teal') == 'amber' %}rgba(180,83,9,0.1)
+                                     {% else %}rgba(220,38,38,0.1){% endif %};
+                          color:{% if color_map.get(a.projet,'teal') == 'teal' %}var(--teal)
+                                {% elif color_map.get(a.projet,'teal') == 'blue' %}var(--blue)
+                                {% elif color_map.get(a.projet,'teal') == 'amber' %}var(--amber)
+                                {% else %}var(--red){% endif %};"
+                   title="{{ a.animal_id }} — {{ a.sequence }}">
+                {{ a.animal_id }}
+              </div>
+              {% endfor %}
+              {% if day_acqs | length > 4 %}
+              <div style="font-family:var(--font-mono);font-size:9px;color:var(--hint);padding-left:2px;">
+                +{{ day_acqs | length - 4 }} autres
+              </div>
+              {% endif %}
+            </div>
+          {% endif %}
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<!-- Panneau détail jour -->
+<div id="day-panel" style="display:none;" class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+    <div class="card-title" id="day-panel-title" style="margin-bottom:0;padding-bottom:0;border:none;"></div>
+    <button onclick="document.getElementById('day-panel').style.display='none'"
+            style="background:none;border:none;font-size:16px;cursor:pointer;color:var(--hint);">✕</button>
+  </div>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Animal</th><th>Projet</th><th>Séquence</th><th>Statut</th><th>Importé par</th>
+      </tr>
+    </thead>
+    <tbody id="day-panel-body"></tbody>
+  </table>
+</div>
+
+<style>
+  .day-cell:hover { background: var(--bg3) !important; }
+</style>
+
+<script>
+const acqsByDay = {{ acqs_by_day | tojson }};
+const colorMap  = {{ color_map | tojson }};
+
+const colorStyle = {
+  teal:  { bg: 'rgba(13,148,112,0.1)',  text: '#0d9470' },
+  blue:  { bg: 'rgba(29,78,216,0.1)',   text: '#1d4ed8' },
+  amber: { bg: 'rgba(180,83,9,0.1)',    text: '#b45309' },
+  red:   { bg: 'rgba(220,38,38,0.1)',   text: '#dc2626' },
+};
+
+const statuts = {
+  ok:         '<span class="pill pill-ok">OK</span>',
+  en_cours:   '<span class="pill pill-prog">en cours</span>',
+  en_attente: '<span class="pill pill-wait">en attente</span>',
+  a_refaire:  '<span class="pill pill-redo">à refaire</span>',
+};
+
+function showDay(day) {
+  const acqs  = acqsByDay[day] || [];
+  const panel = document.getElementById('day-panel');
+  const title = document.getElementById('day-panel-title');
+  const tbody = document.getElementById('day-panel-body');
+
+  title.textContent = `{{ month_name }} {{ year }} — jour ${day} (${acqs.length} acquisition(s))`;
+
+  tbody.innerHTML = acqs.map(a => {
+    const col = colorMap[a.projet] || 'teal';
+    const cs  = colorStyle[col];
+    return `<tr>
+      <td><strong>${a.animal_id}</strong></td>
+      <td><span style="font-family:var(--font-mono);font-size:10px;padding:1px 6px;border-radius:2px;
+                       background:${cs.bg};color:${cs.text};">${a.projet.replace(/_/g,' ')}</span></td>
+      <td class="mono">${a.sequence || '—'}</td>
+      <td>${statuts[a.statut] || a.statut}</td>
+      <td class="mono">${a.importé_par || '—'}</td>
+    </tr>`;
+  }).join('');
+
+  panel.style.display = 'block';
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+</script>
+
+{% endblock %}

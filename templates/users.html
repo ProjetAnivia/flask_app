@@ -25,7 +25,8 @@
         <li>Exporter toutes les données (CSV)</li>
       </ul>
       <div style="margin-top:8px;font-size:11px;color:var(--red);font-family:var(--font-mono);">
-        Seul le compte « admin » peut supprimer ou modifier le rôle d'un autre administrateur.
+        Seul le compte « admin » peut supprimer, modifier le rôle ou réinitialiser le mot de passe d'un autre administrateur.<br>
+        Toute réinitialisation du MDP d'un autre compte exige une confirmation par mot de passe (+ code 2FA si activé).
       </div>
     </div>
     <div>
@@ -73,7 +74,7 @@
       <label class="form-label">Mot de passe</label>
       <div class="pw-wrap">
         <input class="form-input" type="password" id="new-password"
-               placeholder="8 car. · 1 majuscule · 1 chiffre">
+               placeholder="10 car. · majuscule · chiffre · spécial">
         <button class="pw-toggle" type="button" onclick="togglePw('new-password', this)">afficher</button>
       </div>
     </div>
@@ -88,7 +89,7 @@
     <button class="btn-primary" onclick="addUser()" style="height:38px;">Ajouter →</button>
   </div>
   <div class="mono" style="margin-top:8px;color:var(--hint);font-size:10px;">
-    Exigences : 8 caractères minimum · au moins une majuscule · au moins un chiffre
+    Exigences : 10 caractères minimum · au moins une majuscule · au moins un chiffre · au moins un caractère spécial
   </div>
 </div>
 
@@ -132,8 +133,15 @@
           {% endif %}
         </td>
         <td style="display:flex;gap:8px;align-items:center;">
+          {% set can_reset = (u.username == current_user.username) or
+                             (u.role != 'admin' or current_user.username == 'admin') %}
+          {% if can_reset %}
           <button class="btn-ghost" style="font-size:11px;padding:4px 12px;"
                   onclick="toggleResetForm({{ u.id }})">Réinitialiser MDP</button>
+          {% else %}
+          <span class="mono" style="color:var(--hint);font-size:10px;"
+                title="Seul le compte « admin » peut réinitialiser le MDP d'un administrateur">protégé</span>
+          {% endif %}
           {% if u.username != current_user.username %}
             {% if u.role != 'admin' or current_user.username == 'admin' %}
             <button class="btn-delete" onclick="deleteUser({{ u.id }}, '{{ u.username }}')">Supprimer</button>
@@ -147,20 +155,46 @@
       </tr>
       <!-- Réinitialisation MDP inline -->
       <tr id="reset-row-{{ u.id }}" style="display:none;">
-        <td colspan="4" style="padding:12px 16px;background:var(--bg3);">
-          <div style="display:flex;gap:12px;align-items:flex-end;max-width:600px;">
-            <div class="form-row" style="flex:1;">
+        <td colspan="4" style="padding:14px 16px;background:var(--bg3);">
+          <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;max-width:800px;">
+            <div class="form-row" style="flex:2;min-width:180px;">
               <label class="form-label">Nouveau mot de passe pour {{ u.username }}</label>
               <input class="form-input" type="password" id="reset-pw-{{ u.id }}"
-                     placeholder="8 car. · 1 majuscule · 1 chiffre">
+                     placeholder="10 car. · majuscule · chiffre · spécial">
             </div>
+            {% if u.username == current_user.username %}
+            <div class="form-row" style="flex:1;min-width:160px;">
+              <label class="form-label">Votre mot de passe actuel</label>
+              <input class="form-input" type="password" id="admin-pw-{{ u.id }}" placeholder="Mot de passe actuel">
+            </div>
+            {% else %}
+            <div class="form-row" style="flex:1;min-width:160px;">
+              <label class="form-label">Votre mot de passe (confirmation)</label>
+              <input class="form-input" type="password" id="admin-pw-{{ u.id }}" placeholder="Votre MDP">
+            </div>
+            <div class="form-row" style="flex:0;min-width:130px;">
+              <label class="form-label">Code 2FA (si activé)</label>
+              <input class="form-input" type="text" id="admin-totp-{{ u.id }}"
+                     placeholder="• • • • • •" inputmode="numeric" maxlength="6"
+                     style="letter-spacing:.15em;text-align:center;">
+            </div>
+            {% endif %}
             <button class="btn-primary" style="height:38px;"
-                    onclick="resetPassword({{ u.id }}, '{{ u.username }}')">Valider →</button>
+                    onclick="resetPassword({{ u.id }}, '{{ u.username }}', {{ 'true' if u.username == current_user.username else 'false' }})">
+              Valider →
+            </button>
             <button class="btn-ghost" style="height:38px;"
                     onclick="toggleResetForm({{ u.id }})">Annuler</button>
           </div>
+          <div style="margin-top:6px;font-family:var(--font-mono);font-size:10px;color:var(--hint);">
+            {% if u.username != current_user.username %}
+            Votre confirmation est requise · 10 car. min · majuscule · chiffre · caractère spécial
+            {% else %}
+            10 car. min · au moins une majuscule · au moins un chiffre · au moins un caractère spécial
+            {% endif %}
+          </div>
           <div id="reset-msg-{{ u.id }}" class="mono"
-               style="margin-top:8px;font-size:10px;display:none;"></div>
+               style="margin-top:6px;font-size:10px;display:none;"></div>
         </td>
       </tr>
     {% endfor %}
@@ -195,27 +229,51 @@ function toggleResetForm(userId) {
   }
 }
 
-async function resetPassword(userId, username) {
-  const pw  = document.getElementById(`reset-pw-${userId}`).value.trim();
-  const msg = document.getElementById(`reset-msg-${userId}`);
+async function resetPassword(userId, username, isSelf) {
+  const pw      = document.getElementById(`reset-pw-${userId}`).value.trim();
+  const adminPw = document.getElementById(`admin-pw-${userId}`)?.value.trim() || '';
+  const totp    = document.getElementById(`admin-totp-${userId}`)?.value.trim() || '';
+  const msg     = document.getElementById(`reset-msg-${userId}`);
   msg.style.display = 'none';
+
   if (!pw) {
-    msg.textContent = 'Mot de passe requis.';
+    msg.textContent = 'Nouveau mot de passe requis.';
     msg.style.color = 'var(--red)'; msg.style.display = 'block'; return;
   }
+  if (!adminPw) {
+    msg.textContent = isSelf ? 'Mot de passe actuel requis.' : 'Votre mot de passe de confirmation est requis.';
+    msg.style.color = 'var(--red)'; msg.style.display = 'block'; return;
+  }
+
+  const payload = { new_password: pw };
+  if (isSelf) {
+    payload.current_password = adminPw;
+  } else {
+    payload.admin_password = adminPw;
+    if (totp) payload.totp_code = totp;
+  }
+
   const res  = await fetch(`/api/users/${userId}/password`, {
     method: 'PATCH',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ new_password: pw })
+    body: JSON.stringify(payload)
   });
   const data = await res.json();
   if (!res.ok) {
     msg.textContent = data.error || 'Erreur inconnue.';
     msg.style.color = 'var(--red)'; msg.style.display = 'block';
+    // Si le serveur indique que le 2FA est requis, mettre le focus sur le champ
+    if (data.require_2fa) {
+      document.getElementById(`admin-totp-${userId}`)?.focus();
+    }
   } else {
     msg.textContent = `Mot de passe de « ${username} » mis à jour.`;
     msg.style.color = 'var(--teal)'; msg.style.display = 'block';
     document.getElementById(`reset-pw-${userId}`).value = '';
+    const adminPwEl = document.getElementById(`admin-pw-${userId}`);
+    if (adminPwEl) adminPwEl.value = '';
+    const totpEl = document.getElementById(`admin-totp-${userId}`);
+    if (totpEl) totpEl.value = '';
     setTimeout(() => toggleResetForm(userId), 1800);
   }
 }

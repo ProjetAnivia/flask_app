@@ -5,7 +5,10 @@
       "Bash(find \"/Users/nolan/Downloads/Echantillon Dicom Ok\" -type f | sort | head -60)",
       "Bash(python3 -)",
       "Bash(python3 setup_real_data.py)",
-      "Bash(gh --version)"
+      "Bash(gh --version)",
+      "Bash(python3 -c \"import pyotp; print\\('pyotp ok'\\)\")",
+      "Bash(python3 -c \"import qrcode; print\\('qrcode ok'\\)\")",
+      "Bash(pip3 install *)"
     ]
   }
 }

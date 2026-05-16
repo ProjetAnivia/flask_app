@@ -7,7 +7,8 @@
   <div class="page-sub">{{ current_user.username }} · {{ current_user.role }}</div>
 </div>
 
-<div class="card" style="max-width:480px;">
+<!-- Informations -->
+<div class="card" style="max-width:520px;">
   <div class="card-title">Informations</div>
   <div style="display:flex;flex-direction:column;gap:0;">
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);">
@@ -23,7 +24,8 @@
   </div>
 </div>
 
-<div class="card" style="max-width:480px;">
+<!-- Changer mot de passe -->
+<div class="card" style="max-width:520px;">
   <div class="card-title">Changer mon mot de passe</div>
 
   <div id="pw-error"   style="display:none;" class="msg-box msg-error"></div>
@@ -34,7 +36,9 @@
       <label class="form-label">Mot de passe actuel</label>
       <div class="pw-wrap">
         <input class="form-input" type="password" id="pw-current" autocomplete="current-password">
-        <button class="pw-toggle" type="button" onclick="togglePw('pw-current', this)">afficher</button>
+        <button class="pw-toggle" type="button" onclick="togglePw('pw-current',this)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
       </div>
     </div>
     <div class="form-row">
@@ -42,17 +46,24 @@
       <div class="pw-wrap">
         <input class="form-input" type="password" id="pw-new" autocomplete="new-password"
                oninput="checkStrength(this.value)">
-        <button class="pw-toggle" type="button" onclick="togglePw('pw-new', this)">afficher</button>
+        <button class="pw-toggle" type="button" onclick="togglePw('pw-new',this)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
       </div>
-      <div id="pw-strength" style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-top:2px;">
-        8 caractères min · 1 majuscule · 1 chiffre
+      <div id="pw-strength-bar" style="height:3px;border-radius:2px;background:var(--bg4);margin-top:4px;overflow:hidden;">
+        <div id="pw-strength-fill" style="height:100%;width:0;border-radius:2px;transition:width .3s,background .3s;"></div>
+      </div>
+      <div id="pw-strength" style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-top:3px;">
+        10 car. min · 1 majuscule · 1 chiffre · 1 caractère spécial
       </div>
     </div>
     <div class="form-row">
       <label class="form-label">Confirmer le nouveau mot de passe</label>
       <div class="pw-wrap">
         <input class="form-input" type="password" id="pw-confirm" autocomplete="new-password">
-        <button class="pw-toggle" type="button" onclick="togglePw('pw-confirm', this)">afficher</button>
+        <button class="pw-toggle" type="button" onclick="togglePw('pw-confirm',this)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
       </div>
     </div>
     <div>
@@ -61,26 +72,125 @@
   </div>
 </div>
 
+<!-- Double authentification (2FA) -->
+<div class="card" style="max-width:520px;" id="card-2fa">
+  <div class="card-title">Double authentification (2FA)</div>
+
+  <div id="tfa-status-line" style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+    <span id="tfa-pill"></span>
+    <span id="tfa-desc" style="font-size:12px;color:var(--muted);"></span>
+  </div>
+
+  <!-- État activé -->
+  <div id="tfa-enabled-ui" style="display:none;">
+    <div class="msg-box msg-success" style="margin-bottom:14px;">
+      ✓ Le 2FA est activé sur votre compte. Chaque connexion nécessitera un code depuis votre application.
+    </div>
+    <div id="disable-error" style="display:none;" class="msg-box msg-error"></div>
+    <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+      <div class="form-row" style="flex:1;min-width:180px;">
+        <label class="form-label">Mot de passe pour désactiver</label>
+        <div class="pw-wrap">
+          <input class="form-input" type="password" id="disable-pw">
+          <button class="pw-toggle" type="button" onclick="togglePw('disable-pw',this)">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </div>
+      </div>
+      <button class="btn-ghost" onclick="disable2fa()" style="color:var(--red);border-color:rgba(220,38,38,0.3);">
+        Désactiver le 2FA
+      </button>
+    </div>
+  </div>
+
+  <!-- État désactivé : setup -->
+  <div id="tfa-setup-ui" style="display:none;">
+    <p style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.6;">
+      Protégez votre compte avec une application d'authentification
+      (<strong>Google Authenticator</strong>, <strong>Aegis</strong>, <strong>Authy</strong>…).
+      Chaque connexion demandra un code à 6 chiffres.
+    </p>
+
+    <div id="qr-section" style="display:none;">
+      <!-- QR code -->
+      <div style="display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap;margin-bottom:16px;">
+        <div>
+          <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-bottom:8px;">
+            1. Scannez avec votre application
+          </div>
+          <div id="qr-canvas" style="background:#fff;padding:10px;border-radius:4px;
+               border:1px solid var(--border2);display:inline-block;"></div>
+        </div>
+        <div style="flex:1;min-width:200px;">
+          <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-bottom:8px;">
+            Ou saisissez la clé manuellement
+          </div>
+          <div id="totp-secret" style="font-family:var(--font-mono);font-size:12px;
+               background:var(--bg3);border:1px solid var(--border2);border-radius:3px;
+               padding:10px;letter-spacing:.12em;word-break:break-all;color:var(--text);">
+          </div>
+        </div>
+      </div>
+
+      <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-bottom:8px;">
+        2. Entrez le code généré pour confirmer
+      </div>
+      <div id="enable-error" style="display:none;" class="msg-box msg-error"></div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <input class="form-input" type="text" id="totp-code"
+               inputmode="numeric" maxlength="6" placeholder="• • • • • •"
+               style="width:160px;font-size:18px;letter-spacing:.25em;text-align:center;"
+               oninput="if(this.value.replace(/\s/g,'').length===6) enable2fa()">
+        <button class="btn-primary" onclick="enable2fa()">Activer le 2FA →</button>
+        <button class="btn-ghost" onclick="cancelSetup()">Annuler</button>
+      </div>
+    </div>
+
+    <div id="setup-start" style="display:flex;gap:10px;align-items:center;">
+      <button class="btn-primary" onclick="startSetup()">Configurer le 2FA →</button>
+    </div>
+  </div>
+</div>
+
 <style>
   .msg-box { font-family:var(--font-mono);font-size:11px;border-radius:3px;padding:8px 12px;margin-bottom:12px; }
   .msg-error   { color:var(--red);  background:var(--red-bg);  border:1px solid rgba(220,38,38,0.2); }
   .msg-success { color:var(--teal); background:var(--teal-bg); border:1px solid rgba(13,148,112,0.2); }
+  .alias-row {
+    display:flex; align-items:center; gap:10px; padding:8px 0;
+    border-bottom:1px solid var(--border); font-size:12px; flex-wrap:wrap;
+  }
+  .alias-row:last-child { border-bottom:none; }
+  .pw-toggle { display:flex; align-items:center; justify-content:center; }
 </style>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
+// ── Mot de passe ─────────────────────────────────────────────────────────────
+function togglePw(id, btn) {
+  const inp  = document.getElementById(id);
+  const show = inp.type === 'password';
+  inp.type   = show ? 'text' : 'password';
+  btn.style.opacity = show ? '0.8' : '0.35';
+}
+
 function checkStrength(pw) {
-  const el     = document.getElementById('pw-strength');
-  const checks = [
-    { ok: pw.length >= 8,   label: '8 car.' },
-    { ok: /[A-Z]/.test(pw), label: 'majuscule' },
-    { ok: /[0-9]/.test(pw), label: 'chiffre' },
+  const el   = document.getElementById('pw-strength');
+  const fill = document.getElementById('pw-strength-fill');
+  const rules = [
+    { ok: pw.length >= 10,             label: '10 car.' },
+    { ok: /[A-Z]/.test(pw),            label: 'majuscule' },
+    { ok: /[0-9]/.test(pw),            label: 'chiffre' },
+    { ok: /[^a-zA-Z0-9]/.test(pw),    label: 'spécial' },
   ];
-  const passed = checks.filter(c => c.ok).length;
-  const colors  = ['var(--red)', 'var(--amber)', 'var(--amber)', 'var(--teal)'];
+  const passed = rules.filter(r => r.ok).length;
+  const colors = ['var(--red)','var(--red)','var(--amber)','var(--amber)','var(--teal)'];
+  fill.style.width      = (passed * 25) + '%';
+  fill.style.background = colors[passed];
   el.style.color = colors[passed];
-  el.textContent = passed === 3
-    ? 'Fort — toutes les exigences satisfaites'
-    : checks.filter(c => !c.ok).map(c => c.label + ' manquant').join(' · ');
+  el.textContent = passed === 4
+    ? '✓ Fort — toutes les exigences satisfaites'
+    : rules.filter(r => !r.ok).map(r => r.label + ' manquant').join(' · ');
 }
 
 async function changePassword() {
@@ -90,7 +200,6 @@ async function changePassword() {
   const errDiv  = document.getElementById('pw-error');
   const okDiv   = document.getElementById('pw-success');
   errDiv.style.display = 'none'; okDiv.style.display = 'none';
-
   if (!current || !newPw || !confirm) {
     errDiv.textContent = 'Tous les champs sont requis.';
     errDiv.style.display = 'block'; return;
@@ -100,7 +209,7 @@ async function changePassword() {
     errDiv.style.display = 'block'; return;
   }
   const res  = await fetch('/api/users/{{ current_user.id }}/password', {
-    method: 'PATCH', headers: {'Content-Type': 'application/json'},
+    method: 'PATCH', headers: {'Content-Type':'application/json'},
     body: JSON.stringify({ current_password: current, new_password: newPw })
   });
   const data = await res.json();
@@ -111,9 +220,92 @@ async function changePassword() {
     okDiv.textContent = 'Mot de passe mis à jour avec succès.';
     okDiv.style.display = 'block';
     ['pw-current','pw-new','pw-confirm'].forEach(id => document.getElementById(id).value = '');
-    document.getElementById('pw-strength').textContent = '8 caractères min · 1 majuscule · 1 chiffre';
+    document.getElementById('pw-strength').textContent = '10 car. min · 1 majuscule · 1 chiffre · 1 caractère spécial';
     document.getElementById('pw-strength').style.color = 'var(--hint)';
+    document.getElementById('pw-strength-fill').style.width = '0';
   }
 }
+
+// ── 2FA ──────────────────────────────────────────────────────────────────────
+async function load2faStatus() {
+  const res  = await fetch('/api/2fa/status');
+  const data = await res.json();
+  const pill = document.getElementById('tfa-pill');
+  const desc = document.getElementById('tfa-desc');
+
+  if (data.enabled) {
+    pill.innerHTML = '<span class="pill pill-ok">Activé</span>';
+    desc.textContent = 'Un code est demandé à chaque connexion.';
+    document.getElementById('tfa-enabled-ui').style.display = 'block';
+    document.getElementById('tfa-setup-ui').style.display   = 'none';
+  } else {
+    pill.innerHTML = '<span class="pill pill-obs">Désactivé</span>';
+    desc.textContent = 'Recommandé pour les comptes administrateurs.';
+    document.getElementById('tfa-enabled-ui').style.display = 'none';
+    document.getElementById('tfa-setup-ui').style.display   = 'block';
+  }
+}
+
+async function startSetup() {
+  document.getElementById('setup-start').style.display = 'none';
+  const res  = await fetch('/api/2fa/setup');
+  const data = await res.json();
+
+  document.getElementById('totp-secret').textContent = data.secret;
+  document.getElementById('qr-section').style.display = 'block';
+
+  // Générer le QR code avec qrcodejs
+  document.getElementById('qr-canvas').innerHTML = '';
+  new QRCode(document.getElementById('qr-canvas'), {
+    text:          data.uri,
+    width:         160,
+    height:        160,
+    colorDark:     '#111827',
+    colorLight:    '#ffffff',
+    correctLevel:  QRCode.CorrectLevel.M
+  });
+}
+
+function cancelSetup() {
+  document.getElementById('qr-section').style.display = 'none';
+  document.getElementById('setup-start').style.display = 'flex';
+  document.getElementById('totp-code').value = '';
+  document.getElementById('enable-error').style.display = 'none';
+}
+
+async function enable2fa() {
+  const code = document.getElementById('totp-code').value.trim();
+  const err  = document.getElementById('enable-error');
+  if (code.length < 6) return;
+  err.style.display = 'none';
+  const res  = await fetch('/api/2fa/enable', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ code })
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    err.textContent = data.error; err.style.display = 'block'; return;
+  }
+  await load2faStatus();
+}
+
+async function disable2fa() {
+  const pw  = document.getElementById('disable-pw').value;
+  const err = document.getElementById('disable-error');
+  err.style.display = 'none';
+  const res  = await fetch('/api/2fa/disable', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ password: pw })
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    err.textContent = data.error; err.style.display = 'block'; return;
+  }
+  document.getElementById('disable-pw').value = '';
+  await load2faStatus();
+}
+
+// Init
+load2faStatus();
 </script>
 {% endblock %}

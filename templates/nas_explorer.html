@@ -1,0 +1,341 @@
+{% extends "base.html" %}
+{% block title %}Explorateur NAS{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <div class="page-title">Explorateur NAS</div>
+  <div class="page-sub">Arborescence du stockage FAIR · lecture seule</div>
+</div>
+
+<div class="card" style="padding:0;overflow:hidden;">
+  <!-- Barre chemin courant -->
+  <div style="display:flex;align-items:center;gap:8px;padding:12px 16px;
+              border-bottom:1px solid var(--border);background:var(--bg3);flex-wrap:wrap;">
+    <button class="btn-ghost" style="padding:5px 10px;font-size:11px;" onclick="browseRoot()" title="Racine">
+      ⌂ NAS
+    </button>
+    <span style="color:var(--border2);font-family:var(--font-mono);font-size:12px;">/</span>
+    <span id="breadcrumb" style="font-family:var(--font-mono);font-size:12px;color:var(--muted);
+                                  word-break:break-all;"></span>
+    <div style="margin-left:auto;display:flex;gap:6px;">
+      <span id="nas-stat" style="font-family:var(--font-mono);font-size:10px;color:var(--hint);"></span>
+    </div>
+  </div>
+
+  <!-- Contenu -->
+  <div id="nas-content" style="min-height:320px;">
+    <div id="nas-loading" style="padding:48px;text-align:center;
+         font-family:var(--font-mono);font-size:12px;color:var(--hint);">
+      Chargement…
+    </div>
+  </div>
+</div>
+
+<!-- Panneau aperçu fichier -->
+<div id="file-preview" style="display:none;" class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+    <div class="card-title" style="margin:0;padding:0;border:none;" id="preview-title"></div>
+    <button onclick="closePreview()"
+            style="background:none;border:none;cursor:pointer;color:var(--hint);font-size:16px;">✕</button>
+  </div>
+  <div id="preview-meta" style="font-family:var(--font-mono);font-size:11px;color:var(--muted);
+       display:flex;flex-wrap:wrap;gap:16px;"></div>
+</div>
+
+<style>
+  .nas-row {
+    display: grid;
+    grid-template-columns: 28px 1fr auto auto;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 16px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.1s;
+    font-size: 13px;
+  }
+  .nas-row:last-child { border-bottom: none; }
+  .nas-row:hover      { background: var(--bg3); }
+  .nas-icon { font-family: var(--font-mono); font-size: 13px; text-align: center; opacity: 0.6; }
+  .nas-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nas-name.dir  { font-weight: 500; }
+  .nas-name.file { color: var(--muted); }
+  .nas-meta { font-family: var(--font-mono); font-size: 10px; color: var(--hint);
+              white-space: nowrap; }
+  .nas-badge { font-family: var(--font-mono); font-size: 9px; padding: 1px 6px;
+               border-radius: 2px; background: var(--bg3); color: var(--hint);
+               border: 1px solid var(--border2); white-space: nowrap; }
+  .nas-nifti  { background: var(--teal-bg); color: var(--teal);
+                border-color: rgba(13,148,112,0.25); }
+  .nas-dicom  { background: var(--blue-bg); color: var(--blue);
+                border-color: rgba(29,78,216,0.2); }
+  .nas-empty  { padding: 48px; text-align: center; font-family: var(--font-mono);
+                font-size: 12px; color: var(--hint); }
+  .alias-btn  { font-family: var(--font-mono); font-size: 9px; padding: 2px 7px;
+                border-radius: 2px; background: none; border: 1px solid var(--border2);
+                color: var(--hint); cursor: pointer; white-space: nowrap;
+                transition: color 0.1s, border-color 0.1s; }
+  .alias-btn:hover { color: var(--teal); border-color: var(--teal); }
+  @media (max-width: 600px) {
+    .nas-row { grid-template-columns: 24px 1fr auto; }
+    .nas-row .nas-meta { display: none; }
+  }
+</style>
+
+<script>
+let currentPath = '';
+let userAliases = {};  // real_path → {id, alias_name}
+
+async function loadAliases() {
+  const res = await fetch('/api/aliases');
+  const arr = await res.json();
+  userAliases = {};
+  arr.forEach(a => { userAliases[a.real_path] = a; });
+}
+
+function fmtSize(b) {
+  if (b == null)      return '';
+  if (b < 1024)       return b + ' o';
+  if (b < 1024*1024)  return (b/1024).toFixed(0) + ' Ko';
+  return (b/1024/1024).toFixed(1) + ' Mo';
+}
+
+function getExt(name) {
+  if (name.endsWith('.nii.gz')) return '.nii.gz';
+  const i = name.lastIndexOf('.');
+  return i > 0 ? name.slice(i).toLowerCase() : '';
+}
+
+function badgeFor(name) {
+  const ext = getExt(name);
+  if (['.nii','.nii.gz'].includes(ext)) return `<span class="nas-badge nas-nifti">NIfTI</span>`;
+  if (['.dcm','.ima'].includes(ext))    return `<span class="nas-badge nas-dicom">DICOM</span>`;
+  if (ext === '.zip')                   return `<span class="nas-badge">ZIP</span>`;
+  if (ext === '.csv')                   return `<span class="nas-badge">CSV</span>`;
+  return '';
+}
+
+async function browse(path) {
+  currentPath = path || '';
+  document.getElementById('nas-loading').style.display = 'block';
+  document.getElementById('nas-content').innerHTML =
+    '<div id="nas-loading" style="padding:48px;text-align:center;font-family:var(--font-mono);font-size:12px;color:var(--hint);">Chargement…</div>';
+  closePreview();
+
+  const url = '/api/nas/browse' + (path ? `?path=${encodeURIComponent(path)}` : '');
+  const res  = await fetch(url);
+  if (!res.ok) {
+    document.getElementById('nas-content').innerHTML =
+      `<div class="nas-empty">Erreur : ${(await res.json()).error}</div>`;
+    return;
+  }
+  const data = await res.json();
+
+  // Breadcrumb
+  const parts = data.path ? data.path.split('/') : [];
+  let bc = '';
+  parts.forEach((p, i) => {
+    const pathTo = parts.slice(0, i+1).join('/');
+    bc += `<span onclick="browse('${pathTo}')"
+                 style="cursor:pointer;color:var(--teal);" title="${pathTo}">${p}</span>`;
+    if (i < parts.length - 1)
+      bc += `<span style="color:var(--border2);margin:0 3px;">/</span>`;
+  });
+  document.getElementById('breadcrumb').innerHTML = bc;
+
+  const { entries, parent } = data;
+  const dirs  = entries.filter(e => e.type === 'dir');
+  const files = entries.filter(e => e.type === 'file');
+  document.getElementById('nas-stat').textContent =
+    `${dirs.length} dossier(s) · ${files.length} fichier(s)`;
+
+  if (!entries.length && !parent) {
+    document.getElementById('nas-content').innerHTML =
+      '<div class="nas-empty">NAS vide ou aucun fichier accessible.</div>';
+    return;
+  }
+
+  let html = '';
+
+  // Bouton retour
+  if (parent !== null && parent !== undefined) {
+    html += `<div class="nas-row" onclick="browse('${parent}')">
+      <span class="nas-icon">↑</span>
+      <span class="nas-name" style="color:var(--hint);">..</span>
+      <span></span><span></span>
+    </div>`;
+  }
+
+  // Dossiers
+  dirs.forEach(e => {
+    const alias = userAliases[e.path];
+    const displayName = alias ? alias.alias_name : e.name;
+    const aliasLabel  = alias
+      ? `<span style="font-family:var(--font-mono);font-size:9px;color:var(--teal);margin-left:6px;">✎ ${alias.alias_name}</span>`
+      : '';
+    html += `<div class="nas-row" onclick="browse('${e.path}')">
+      <span class="nas-icon" style="color:var(--amber);">📁</span>
+      <span class="nas-name dir">
+        ${escHtml(e.name)}${aliasLabel}
+      </span>
+      <span class="nas-meta">${e.n ?? ''} élément(s)</span>
+      <button class="alias-btn" title="Renommer (alias personnel)"
+              onclick="event.stopPropagation();promptAlias('${escAttr(e.path)}','${escAttr(displayName)}')">
+        ✎
+      </button>
+    </div>`;
+  });
+
+  // Fichiers
+  files.forEach(e => {
+    html += `<div class="nas-row" onclick="showFile(${JSON.stringify(e)})">
+      <span class="nas-icon" style="opacity:.4;">▪</span>
+      <span class="nas-name file">${escHtml(e.name)}</span>
+      <span class="nas-meta">${e.modified || ''}</span>
+      <span style="display:flex;align-items:center;gap:6px;">
+        ${badgeFor(e.name)}
+        <span class="nas-meta">${fmtSize(e.size)}</span>
+      </span>
+    </div>`;
+  });
+
+  document.getElementById('nas-content').innerHTML = html;
+}
+
+function browseRoot() { browse(''); }
+
+function showFile(e) {
+  const panel = document.getElementById('file-preview');
+  document.getElementById('preview-title').textContent = e.name;
+  document.getElementById('preview-meta').innerHTML = `
+    <span>Chemin : <code style="font-family:var(--font-mono);font-size:10px;">${e.path}</code></span>
+    <span>Taille : <strong>${fmtSize(e.size)}</strong></span>
+    <span>Modifié : ${e.modified || '—'}</span>
+  `;
+  panel.style.display = 'block';
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function closePreview() {
+  document.getElementById('file-preview').style.display = 'none';
+}
+
+async function promptAlias(realPath, currentName) {
+  const newName = window.prompt(`Alias personnel pour :\n${realPath}\n\n(laisser vide pour supprimer)`, currentName);
+  if (newName === null) return;  // annulé
+  if (newName.trim() === '') {
+    // Supprimer l'alias existant
+    const alias = userAliases[realPath];
+    if (alias) {
+      await fetch(`/api/aliases/${alias.id}`, { method: 'DELETE' });
+    }
+  } else {
+    await fetch('/api/aliases', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ real_path: realPath, alias_name: newName.trim() })
+    });
+  }
+  await loadAliases();
+  browse(currentPath);
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function escAttr(s) {
+  return String(s).replace(/'/g,"\\'");
+}
+
+// ── Alias list panel ─────────────────────────────────────────────────────────
+async function loadAliases() {
+  const res = await fetch('/api/aliases');
+  const arr = await res.json();
+  userAliases = {};
+  arr.forEach(a => { userAliases[a.real_path] = a; });
+
+  const cont = document.getElementById('aliases-list');
+  if (!arr.length) {
+    cont.innerHTML = '<div style="font-family:var(--font-mono);font-size:12px;color:var(--hint);">Aucun alias défini. Cliquez sur ✎ dans l\'arborescence pour en créer un.</div>';
+    return;
+  }
+  cont.innerHTML = arr.map(a => `
+    <div class="alias-row" id="alias-${a.id}">
+      <span class="mono" style="flex:1;color:var(--hint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(a.real_path)}</span>
+      <span style="color:var(--border2);flex-shrink:0;">→</span>
+      <span style="flex:1;font-weight:500;color:var(--teal);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(a.alias_name)}</span>
+      <button class="btn-ghost" style="font-size:10px;padding:3px 10px;flex-shrink:0;color:var(--red);border-color:rgba(220,38,38,0.3);"
+              onclick="deleteAlias(${a.id})">Supprimer</button>
+    </div>`).join('');
+}
+
+async function deleteAlias(id) {
+  await fetch(`/api/aliases/${id}`, { method: 'DELETE' });
+  await loadAliases();
+  browse(currentPath);
+}
+
+async function addAlias() {
+  const path = document.getElementById('new-alias-path').value.trim();
+  const name = document.getElementById('new-alias-name').value.trim();
+  const err  = document.getElementById('alias-error');
+  err.style.display = 'none';
+  if (!path || !name) {
+    err.textContent = 'Chemin et nom requis.'; err.style.display = 'block'; return;
+  }
+  const res  = await fetch('/api/aliases', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ real_path: path, alias_name: name })
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    err.textContent = data.error; err.style.display = 'block'; return;
+  }
+  document.getElementById('new-alias-path').value = '';
+  document.getElementById('new-alias-name').value = '';
+  await loadAliases();
+  browse(currentPath);
+}
+
+// Init
+(async () => {
+  await loadAliases();
+  await browse('');
+})();
+</script>
+
+<!-- Aliases panel -->
+<div class="card">
+  <div class="card-title">Mes alias NAS — arborescence personnalisée</div>
+  <p style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.6;">
+    Renommez les dossiers pour votre usage personnel via le bouton <strong>✎</strong> dans l'arborescence,
+    ou ajoutez-en un manuellement ci-dessous.
+    Ces alias n'affectent <strong>pas</strong> l'arborescence FAIR réelle — ils ne sont visibles que par vous.
+  </p>
+  <div id="aliases-list" style="margin-bottom:14px;">
+    <div style="font-family:var(--font-mono);font-size:12px;color:var(--hint);">Chargement…</div>
+  </div>
+  <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+    <div class="form-row" style="flex:2;min-width:200px;">
+      <label class="form-label">Chemin réel (ex : tumorigenese/20250301_B3)</label>
+      <input class="form-input" type="text" id="new-alias-path" placeholder="projet/dossier">
+    </div>
+    <div class="form-row" style="flex:1;min-width:160px;">
+      <label class="form-label">Mon nom personnalisé</label>
+      <input class="form-input" type="text" id="new-alias-name" placeholder="Mon nom">
+    </div>
+    <button class="btn-primary" onclick="addAlias()" style="white-space:nowrap;">Ajouter →</button>
+  </div>
+  <div id="alias-error" style="display:none;margin-top:8px;font-family:var(--font-mono);font-size:11px;
+       color:var(--red);background:var(--red-bg);border:1px solid rgba(220,38,38,0.2);
+       border-radius:3px;padding:8px 12px;"></div>
+</div>
+
+<style>
+  .alias-row {
+    display: flex; align-items: center; gap: 10px; padding: 8px 0;
+    border-bottom: 1px solid var(--border); font-size: 12px;
+  }
+  .alias-row:last-child { border-bottom: none; }
+</style>
+
+{% endblock %}

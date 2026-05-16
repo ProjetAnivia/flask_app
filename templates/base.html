@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
   <title>IRM.FAIR — {% block title %}{% endblock %}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
@@ -438,8 +438,11 @@
       .grid-2 { grid-template-columns: 1fr; }
       .form-grid { grid-template-columns: 1fr; }
 
-      /* Tables défilables horizontalement */
-      .card { padding: 14px; overflow-x: auto; }
+      /* Cards : padding réduit, pas de scroll horizontal global */
+      .card { padding: 14px; }
+
+      /* Tables défilables dans leur propre wrapper */
+      .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
       .data-table { min-width: 480px; }
 
       /* Boutons plus grands (touch) */
@@ -497,6 +500,12 @@
     </a>
     <a href="/planification" class="nav-item {% if request.path == '/planification' %}active{% endif %}">
       <span class="nav-icon">→</span><span class="nav-label"> Planification</span>
+    </a>
+    <a href="/calendrier" class="nav-item {% if request.path == '/calendrier' %}active{% endif %}">
+      <span class="nav-icon">◫</span><span class="nav-label"> Calendrier</span>
+    </a>
+    <a href="/nas-explorer" class="nav-item {% if request.path == '/nas-explorer' %}active{% endif %}">
+      <span class="nav-icon">⊞</span><span class="nav-label"> Explorateur NAS</span>
     </a>
 
     <div class="nav-section">Pipeline</div>

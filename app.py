@@ -14,8 +14,11 @@ from flask import Flask, render_template, jsonify, request, redirect, url_for, s
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from functools import wraps
 from pathlib import Path
-import json, sqlite3, hashlib, os, re, csv, io, socket, threading, bcrypt as _bcrypt
-from datetime import datetime
+import json, sqlite3, hashlib, os, re, csv, io, socket, threading, bcrypt as _bcrypt, secrets, calendar as _cal
+import smtplib, urllib.request as _urllib_req
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from datetime import datetime, timedelta
 
 def sanitize_animal_id(raw: str) -> str:
     """
@@ -40,6 +43,23 @@ def build_animal_folder(animal_id: str, date_acq: str) -> str:
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev_secret_change_in_prod")
+
+# ── SMTP (optionnel — pour les réinitialisations de mot de passe par email) ──
+SMTP_HOST = os.environ.get("SMTP_HOST", "")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_USER = os.environ.get("SMTP_USER", "")
+SMTP_PASS = os.environ.get("SMTP_PASS", "")
+SMTP_FROM = os.environ.get("SMTP_FROM", "noreply@irm-fair.local")
+APP_URL   = os.environ.get("APP_URL",   "http://localhost:5001")
+
+# ── Protection anti-brute-force ──────────────────────────────────────────────
+BRUTEFORCE_MAX_ATTEMPTS = 5   # tentatives max
+BRUTEFORCE_WINDOW_MIN   = 10  # fenêtre de détection (minutes)
+BRUTEFORCE_LOCKOUT_MIN  = 15  # durée de blocage (minutes)
+
+# ── Cache géolocalisation IP ─────────────────────────────────────────────────
+_geo_cache : dict[str, str] = {}
+_geo_lock  = threading.Lock()
 
 login_manager = LoginManager(app)
 login_manager.login_view = "login"
@@ -166,9 +186,33 @@ def init_db():
         );
         """)
 
+        db.executescript("""
+        CREATE TABLE IF NOT EXISTS user_aliases (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    INTEGER NOT NULL,
+            real_path  TEXT NOT NULL,
+            alias_name TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(user_id, real_path)
+        );
+
+        CREATE TABLE IF NOT EXISTS password_resets (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    INTEGER NOT NULL,
+            username   TEXT NOT NULL,
+            token      TEXT UNIQUE NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            used       INTEGER DEFAULT 0
+        );
+        """)
+
         # Migration douce — ajoute les colonnes si absentes (SQLite ne supporte pas IF NOT EXISTS sur ALTER)
         for col_sql in [
             "ALTER TABLE projets ADD COLUMN seq_par_animal INTEGER DEFAULT 3",
+            "ALTER TABLE connexions_log ADD COLUMN pays TEXT DEFAULT '—'",
+            "ALTER TABLE users ADD COLUMN totp_secret TEXT",
+            "ALTER TABLE users ADD COLUMN totp_enabled INTEGER DEFAULT 0",
         ]:
             try:
                 db.execute(col_sql)
@@ -229,14 +273,122 @@ def verify_pw(pw: str, stored: str) -> bool:
     # Schéma SHA-256 hérité
     return hashlib.sha256(pw.encode()).hexdigest() == stored
 
+def get_country(ip: str) -> str:
+    """Résout le pays depuis l'IP via ip-api.com (cache mémoire, timeout 3 s)."""
+    if not ip or ip in ("127.0.0.1", "::1", "localhost", ""):
+        return "Local"
+    with _geo_lock:
+        if ip in _geo_cache:
+            return _geo_cache[ip]
+    try:
+        url = f"http://ip-api.com/json/{ip}?fields=status,country"
+        req = _urllib_req.Request(url, headers={"User-Agent": "IRM-FAIR/1.0"})
+        with _urllib_req.urlopen(req, timeout=3) as r:
+            data = json.loads(r.read())
+        country = data.get("country", "—") if data.get("status") == "success" else "—"
+    except Exception:
+        country = "—"
+    with _geo_lock:
+        _geo_cache[ip] = country
+    return country
+
+
+def log_connexion(username: str, action: str, ip: str) -> None:
+    """Enregistre un événement de connexion et résout le pays en arrière-plan."""
+    ts = datetime.now().isoformat()
+    with get_db() as db:
+        cur = db.execute(
+            "INSERT INTO connexions_log (username, action, ip, timestamp, pays) VALUES (?,?,?,?,?)",
+            (username, action, ip, ts, "—")
+        )
+        log_id = cur.lastrowid
+        db.commit()
+
+    def _resolve_geo():
+        country = get_country(ip)
+        with get_db() as db2:
+            db2.execute("UPDATE connexions_log SET pays=? WHERE id=?", (country, log_id))
+            db2.commit()
+
+    threading.Thread(target=_resolve_geo, daemon=True).start()
+
+
+def count_recent_failures(ip: str) -> int:
+    """Compte les échecs de connexion de cette IP dans la fenêtre de détection."""
+    cutoff = (datetime.now() - timedelta(minutes=BRUTEFORCE_WINDOW_MIN)).isoformat()
+    with get_db() as db:
+        return db.execute(
+            "SELECT COUNT(*) FROM connexions_log "
+            "WHERE ip=? AND action='login_failed' AND timestamp>?",
+            (ip, cutoff)
+        ).fetchone()[0]
+
+
+def get_lockout_remaining(ip: str) -> int:
+    """
+    Retourne les secondes de blocage restantes (0 si pas bloqué).
+    Bloqué si ≥ MAX_ATTEMPTS échecs dans la fenêtre de détection.
+    Le compteur démarre à la Nième tentative et expire après LOCKOUT_MIN.
+    """
+    n = count_recent_failures(ip)
+    if n < BRUTEFORCE_MAX_ATTEMPTS:
+        return 0
+    cutoff = (datetime.now() - timedelta(minutes=BRUTEFORCE_WINDOW_MIN)).isoformat()
+    with get_db() as db:
+        # Nième tentative la plus ancienne dans la fenêtre (index MAX_ATTEMPTS-1)
+        row = db.execute(
+            "SELECT timestamp FROM connexions_log "
+            "WHERE ip=? AND action='login_failed' AND timestamp>? "
+            "ORDER BY timestamp DESC LIMIT 1 OFFSET ?",
+            (ip, cutoff, BRUTEFORCE_MAX_ATTEMPTS - 1)
+        ).fetchone()
+    if not row:
+        return 0
+    trigger = datetime.fromisoformat(row["timestamp"])
+    end     = trigger + timedelta(minutes=BRUTEFORCE_LOCKOUT_MIN)
+    secs    = (end - datetime.now()).total_seconds()
+    return max(0, int(secs))
+
+
+def send_reset_email(to_addr: str, username: str, token: str) -> bool:
+    """Envoie un email de réinitialisation si SMTP est configuré. Retourne True si envoyé."""
+    if not SMTP_HOST or not to_addr:
+        return False
+    reset_url = f"{APP_URL}/reset-password/{token}"
+    body = (
+        f"Bonjour {username},\n\n"
+        f"Une demande de réinitialisation de mot de passe a été effectuée pour votre compte IRM.FAIR.\n\n"
+        f"Cliquez sur ce lien (valable 1 heure) :\n{reset_url}\n\n"
+        f"Si vous n'êtes pas à l'origine de cette demande, ignorez cet email.\n\n"
+        f"— IRM.FAIR"
+    )
+    try:
+        msg = MIMEMultipart()
+        msg["From"]    = SMTP_FROM
+        msg["To"]      = to_addr
+        msg["Subject"] = "IRM.FAIR — Réinitialisation de mot de passe"
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as s:
+            s.ehlo()
+            s.starttls()
+            if SMTP_USER:
+                s.login(SMTP_USER, SMTP_PASS)
+            s.sendmail(SMTP_FROM, to_addr, msg.as_string())
+        return True
+    except Exception:
+        return False
+
+
 def validate_password(pw: str) -> str | None:
     """Retourne un message d'erreur ou None si le mot de passe est valide."""
-    if len(pw) < 8:
-        return "Mot de passe trop court (8 caractères minimum)"
+    if len(pw) < 10:
+        return "Mot de passe trop court (10 caractères minimum)"
     if not re.search(r"[A-Z]", pw):
         return "Le mot de passe doit contenir au moins une majuscule"
     if not re.search(r"[0-9]", pw):
         return "Le mot de passe doit contenir au moins un chiffre"
+    if not re.search(r"[^a-zA-Z0-9]", pw):
+        return "Le mot de passe doit contenir au moins un caractère spécial (@, #, !, …)"
     return None
 
 
@@ -275,11 +427,20 @@ def role_required(*roles):
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
+    ip = request.remote_addr or ""
     if request.method == "POST":
+        # ── Protection anti-brute-force ──────────────────────────────────────
+        secs = get_lockout_remaining(ip)
+        if secs > 0:
+            mins = (secs + 59) // 60
+            return render_template("login.html",
+                error=f"Trop de tentatives échouées. Compte temporairement bloqué — réessayez dans {mins} min.")
+
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
         with get_db() as db:
             row = db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+
         if row and verify_pw(password, row["password"]):
             # Migration transparente SHA-256 → bcrypt au premier login
             if not row["password"].startswith("$2"):
@@ -287,33 +448,32 @@ def login():
                     db2.execute("UPDATE users SET password=? WHERE id=?",
                                 (hash_pw(password), row["id"]))
                     db2.commit()
+            # 2FA activé → rediriger vers la page de vérification
+            if row["totp_enabled"]:
+                session["_2fa_user_id"]  = row["id"]
+                session["_2fa_username"] = row["username"]
+                return redirect(url_for("login_2fa"))
             login_user(User(row["id"], row["username"], row["role"]))
-            with get_db() as db2:
-                db2.execute(
-                    "INSERT INTO connexions_log (username, action, ip, timestamp) VALUES (?,?,?,?)",
-                    (row["username"], "login", request.remote_addr, datetime.now().isoformat())
-                )
-                db2.commit()
+            log_connexion(row["username"], "login", ip)
             return redirect(url_for("dashboard"))
-        # Log de l'échec (username fourni peut ne pas exister)
-        with get_db() as db2:
-            db2.execute(
-                "INSERT INTO connexions_log (username, action, ip, timestamp) VALUES (?,?,?,?)",
-                (username or "—", "login_failed", request.remote_addr, datetime.now().isoformat())
-            )
-            db2.commit()
-        return render_template("login.html", error="Identifiants incorrects")
+
+        # Échec — logger et vérifier si on doit bloquer
+        log_connexion(username or "—", "login_failed", ip)
+        failures = count_recent_failures(ip)
+        remaining = max(0, BRUTEFORCE_MAX_ATTEMPTS - failures)
+        if remaining > 0:
+            err = f"Identifiants incorrects. ({remaining} tentative(s) restante(s) avant blocage)"
+        else:
+            mins = BRUTEFORCE_LOCKOUT_MIN
+            err  = f"Trop de tentatives échouées. Compte temporairement bloqué — réessayez dans {mins} min."
+        return render_template("login.html", error=err)
+
     return render_template("login.html")
 
 @app.route("/logout")
 @login_required
 def logout():
-    with get_db() as db:
-        db.execute(
-            "INSERT INTO connexions_log (username, action, ip, timestamp) VALUES (?,?,?,?)",
-            (current_user.username, "logout", request.remote_addr, datetime.now().isoformat())
-        )
-        db.commit()
+    log_connexion(current_user.username, "logout", request.remote_addr or "")
     logout_user()
     return redirect(url_for("login"))
 
@@ -1191,7 +1351,8 @@ def page_connexions():
     return render_template("connexions.html",
         logs=[dict(l) for l in logs],
         nb_fail=nb_fail, total=total,
-        filtre_action=filtre_action, filtre_username=filtre_username)
+        filtre_action=filtre_action, filtre_username=filtre_username,
+        smtp_configured=bool(SMTP_HOST))
 
 
 @app.route("/api/connexions")
@@ -1213,7 +1374,7 @@ def export_connexions_csv():
         rows = db.execute(
             "SELECT * FROM connexions_log ORDER BY timestamp DESC"
         ).fetchall()
-    cols = ["id", "username", "action", "ip", "timestamp"]
+    cols = ["id", "username", "action", "ip", "pays", "timestamp"]
     buf  = io.StringIO()
     w    = csv.writer(buf, delimiter=";")
     w.writerow(cols)
@@ -1412,21 +1573,52 @@ def api_change_role(user_id):
 @app.route("/api/users/<int:user_id>/password", methods=["PATCH"])
 @login_required
 def api_change_password(user_id):
-    # Un utilisateur peut changer uniquement son propre mot de passe,
-    # un admin peut changer celui de n'importe qui.
-    if current_user.role != "admin" and current_user.id != user_id:
-        return jsonify({"error": "Accès refusé"}), 403
+    data       = request.json or {}
+    new_pw     = data.get("new_password", "").strip()
 
-    data        = request.json or {}
-    new_pw      = data.get("new_password", "").strip()
-    current_pw  = data.get("current_password", "").strip()
-
-    # Si l'utilisateur change son propre MDP, vérifier l'ancien
     if current_user.id == user_id:
+        # Changement de son propre MDP : vérifier l'ancien
+        current_pw = data.get("current_password", "").strip()
         with get_db() as db:
             row = db.execute("SELECT password FROM users WHERE id=?", (user_id,)).fetchone()
         if not row or not verify_pw(current_pw, row["password"]):
             return jsonify({"error": "Mot de passe actuel incorrect"}), 400
+    else:
+        # Reset du MDP d'un autre utilisateur : réservé aux admins
+        if current_user.role != "admin":
+            return jsonify({"error": "Accès refusé"}), 403
+
+        # Vérifier que la cible existe et récupérer son rôle
+        with get_db() as db:
+            target = db.execute(
+                "SELECT role FROM users WHERE id=?", (user_id,)
+            ).fetchone()
+        if not target:
+            return jsonify({"error": "Utilisateur introuvable"}), 404
+
+        # Seul le compte « admin » peut réinitialiser le MDP d'un autre admin
+        if target["role"] == "admin" and current_user.username != "admin":
+            return jsonify({"error": "Seul le compte « admin » peut réinitialiser "
+                                     "le mot de passe d'un autre administrateur"}), 403
+
+        # L'admin doit confirmer son propre mot de passe
+        admin_pw = data.get("admin_password", "").strip()
+        with get_db() as db:
+            me = db.execute(
+                "SELECT password, totp_secret, totp_enabled FROM users WHERE id=?",
+                (current_user.id,)
+            ).fetchone()
+        if not me or not verify_pw(admin_pw, me["password"]):
+            return jsonify({"error": "Votre mot de passe de confirmation est incorrect"}), 403
+
+        # Si l'admin a le 2FA activé, il doit fournir un code valide
+        if me["totp_enabled"]:
+            totp_code = data.get("totp_code", "").strip().replace(" ", "")
+            if not totp_code:
+                return jsonify({"error": "Code 2FA requis pour confirmer cette action",
+                                "require_2fa": True}), 403
+            if not pyotp.TOTP(me["totp_secret"]).verify(totp_code, valid_window=1):
+                return jsonify({"error": "Code 2FA invalide"}), 403
 
     pw_err = validate_password(new_pw)
     if pw_err:
@@ -1440,12 +1632,7 @@ def api_change_password(user_id):
     if not updated:
         return jsonify({"error": "Utilisateur introuvable"}), 404
 
-    with get_db() as db:
-        db.execute(
-            "INSERT INTO connexions_log (username, action, ip, timestamp) VALUES (?,?,?,?)",
-            (current_user.username, "password_change", request.remote_addr, datetime.now().isoformat())
-        )
-        db.commit()
+    log_connexion(current_user.username, "password_change", request.remote_addr or "")
     return jsonify({"ok": True})
 
 
@@ -2054,6 +2241,396 @@ def nas_url(abs_path: str) -> str | None:
         if idx != -1:
             return f"/nas/{p[idx + len(marker):]}"
         return None
+
+
+# ─────────────────────────────────────────────────
+#  2FA — TOTP (Google Authenticator, Aegis, etc.)
+# ─────────────────────────────────────────────────
+
+@app.route("/login/2fa", methods=["GET", "POST"])
+def login_2fa():
+    user_id = session.get("_2fa_user_id")
+    if not user_id:
+        return redirect(url_for("login"))
+
+    ip = request.remote_addr or ""
+
+    if request.method == "POST":
+        secs = get_lockout_remaining(ip)
+        if secs > 0:
+            return render_template("login_2fa.html",
+                error=f"Trop de tentatives. Réessayez dans {(secs+59)//60} min.")
+
+        code = request.form.get("code", "").strip().replace(" ", "")
+        with get_db() as db:
+            row = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+
+        if row and row["totp_secret"]:
+            import pyotp as _pyotp
+            if _pyotp.TOTP(row["totp_secret"]).verify(code, valid_window=1):
+                session.pop("_2fa_user_id",  None)
+                session.pop("_2fa_username", None)
+                login_user(User(row["id"], row["username"], row["role"]))
+                log_connexion(row["username"], "login", ip)
+                return redirect(url_for("dashboard"))
+
+        log_connexion(session.get("_2fa_username", "—"), "login_failed", ip)
+        return render_template("login_2fa.html", error="Code incorrect ou expiré.")
+
+    return render_template("login_2fa.html",
+        username=session.get("_2fa_username", ""))
+
+
+@app.route("/api/2fa/setup")
+@login_required
+def api_2fa_setup():
+    """Génère un secret TOTP et l'URI de provisioning pour le QR code."""
+    import pyotp as _pyotp
+    secret = _pyotp.random_base32()
+    uri    = _pyotp.totp.TOTP(secret).provisioning_uri(
+        name=current_user.username, issuer_name="IRM.FAIR"
+    )
+    session["_totp_pending"] = secret
+    return jsonify({"secret": secret, "uri": uri})
+
+
+@app.route("/api/2fa/enable", methods=["POST"])
+@login_required
+def api_2fa_enable():
+    """Active le 2FA après validation d'un code TOTP."""
+    import pyotp as _pyotp
+    data   = request.json or {}
+    code   = data.get("code", "").strip()
+    secret = session.get("_totp_pending")
+    if not secret:
+        return jsonify({"error": "Aucune configuration en attente — rechargez la page"}), 400
+    if not _pyotp.TOTP(secret).verify(code, valid_window=1):
+        return jsonify({"error": "Code incorrect — vérifiez l'heure de votre appareil"}), 400
+    with get_db() as db:
+        db.execute("UPDATE users SET totp_secret=?, totp_enabled=1 WHERE id=?",
+                   (secret, current_user.id))
+        db.commit()
+    session.pop("_totp_pending", None)
+    log_connexion(current_user.username, "2fa_enabled", request.remote_addr or "")
+    return jsonify({"ok": True})
+
+
+@app.route("/api/2fa/disable", methods=["POST"])
+@login_required
+def api_2fa_disable():
+    """Désactive le 2FA après vérification du mot de passe courant."""
+    data = request.json or {}
+    pw   = data.get("password", "")
+    with get_db() as db:
+        row = db.execute("SELECT password FROM users WHERE id=?", (current_user.id,)).fetchone()
+    if not row or not verify_pw(pw, row["password"]):
+        return jsonify({"error": "Mot de passe incorrect"}), 400
+    with get_db() as db:
+        db.execute("UPDATE users SET totp_secret=NULL, totp_enabled=0 WHERE id=?",
+                   (current_user.id,))
+        db.commit()
+    log_connexion(current_user.username, "2fa_disabled", request.remote_addr or "")
+    return jsonify({"ok": True})
+
+
+@app.route("/api/2fa/status")
+@login_required
+def api_2fa_status():
+    with get_db() as db:
+        row = db.execute(
+            "SELECT totp_enabled FROM users WHERE id=?", (current_user.id,)
+        ).fetchone()
+    return jsonify({"enabled": bool(row and row["totp_enabled"])})
+
+
+# ─────────────────────────────────────────────────
+#  EXPLORATEUR NAS
+# ─────────────────────────────────────────────────
+
+@app.route("/nas-explorer")
+@login_required
+def page_nas_explorer():
+    return render_template("nas_explorer.html")
+
+
+@app.route("/api/nas/browse")
+@login_required
+def api_nas_browse():
+    """Liste le contenu d'un répertoire du NAS (chemin relatif à NAS_ROOT)."""
+    rel    = request.args.get("path", "").strip("/").replace("\\", "/")
+    target = (NAS_ROOT / rel).resolve() if rel else NAS_ROOT.resolve()
+
+    # Protection traversée de répertoire
+    try:
+        target.relative_to(NAS_ROOT.resolve())
+    except ValueError:
+        return jsonify({"error": "Accès refusé"}), 403
+
+    if not target.exists():
+        return jsonify({"error": "Répertoire introuvable"}), 404
+
+    entries = []
+    try:
+        for item in sorted(target.iterdir(),
+                           key=lambda x: (x.is_file(), x.name.lower())):
+            try:
+                st = item.stat()
+                e  = {
+                    "name":     item.name,
+                    "type":     "file" if item.is_file() else "dir",
+                    "path":     item.relative_to(NAS_ROOT).as_posix(),
+                    "size":     st.st_size if item.is_file() else None,
+                    "modified": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M"),
+                }
+                if item.is_dir():
+                    try:
+                        e["n"] = sum(1 for _ in item.iterdir())
+                    except OSError:
+                        e["n"] = 0
+                entries.append(e)
+            except OSError:
+                pass
+    except PermissionError:
+        return jsonify({"error": "Permission refusée"}), 403
+
+    parent = str(Path(rel).parent.as_posix()) if rel else None
+    if parent in (".", ""):
+        parent = None
+
+    return jsonify({"path": rel, "entries": entries, "parent": parent})
+
+
+# ─────────────────────────────────────────────────
+#  ALIAS UTILISATEUR (arborescence personnalisée)
+# ─────────────────────────────────────────────────
+
+@app.route("/api/aliases")
+@login_required
+def api_get_aliases():
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT * FROM user_aliases WHERE user_id=? ORDER BY real_path",
+            (current_user.id,)
+        ).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route("/api/aliases", methods=["POST"])
+@login_required
+def api_set_alias():
+    data       = request.json or {}
+    real_path  = data.get("real_path",  "").strip()
+    alias_name = data.get("alias_name", "").strip()
+    if not real_path or not alias_name:
+        return jsonify({"error": "real_path et alias_name requis"}), 400
+    now = datetime.now().isoformat()
+    with get_db() as db:
+        db.execute(
+            "INSERT INTO user_aliases (user_id, real_path, alias_name, created_at) "
+            "VALUES (?,?,?,?) ON CONFLICT(user_id,real_path) DO UPDATE SET alias_name=excluded.alias_name",
+            (current_user.id, real_path, alias_name, now)
+        )
+        db.commit()
+    return jsonify({"ok": True, "real_path": real_path, "alias_name": alias_name})
+
+
+@app.route("/api/aliases/<int:alias_id>", methods=["DELETE"])
+@login_required
+def api_delete_alias(alias_id):
+    with get_db() as db:
+        db.execute("DELETE FROM user_aliases WHERE id=? AND user_id=?",
+                   (alias_id, current_user.id))
+        db.commit()
+    return jsonify({"ok": True})
+
+
+# ─────────────────────────────────────────────────
+#  MOT DE PASSE OUBLIÉ
+# ─────────────────────────────────────────────────
+
+@app.route("/forgot-password", methods=["GET", "POST"])
+def forgot_password():
+    if current_user.is_authenticated:
+        return redirect(url_for("dashboard"))
+
+    if request.method == "GET":
+        return render_template("forgot_password.html")
+
+    ip       = request.remote_addr or ""
+    username = request.form.get("username", "").strip()
+    if not username:
+        return render_template("forgot_password.html", error="Identifiant requis.")
+
+    # Anti-brute-force sur le formulaire de reset aussi
+    secs = get_lockout_remaining(ip)
+    if secs > 0:
+        return render_template("forgot_password.html",
+            error=f"Trop de tentatives. Réessayez dans {(secs+59)//60} min.")
+
+    with get_db() as db:
+        user = db.execute(
+            "SELECT id, username FROM users WHERE username=?", (username,)
+        ).fetchone()
+
+    # Toujours afficher le même message (éviter l'énumération d'utilisateurs)
+    success_msg = ("Si ce compte existe, un lien de réinitialisation a été envoyé "
+                   "à l'administrateur ou par email.")
+
+    if not user:
+        # Logger la tentative échouée
+        log_connexion(username, "reset_failed", ip)
+        return render_template("forgot_password.html", success=success_msg)
+
+    # Invalider les anciens tokens
+    with get_db() as db:
+        db.execute("UPDATE password_resets SET used=1 WHERE user_id=? AND used=0", (user["id"],))
+        db.commit()
+
+    token      = secrets.token_urlsafe(32)
+    now        = datetime.now()
+    expires_at = (now + timedelta(hours=1)).isoformat()
+    with get_db() as db:
+        db.execute(
+            "INSERT INTO password_resets (user_id, username, token, created_at, expires_at) "
+            "VALUES (?,?,?,?,?)",
+            (user["id"], user["username"], token, now.isoformat(), expires_at)
+        )
+        db.commit()
+
+    log_connexion(username, "reset_requested", ip)
+    reset_url = f"{APP_URL}/reset-password/{token}"
+
+    # Tenter d'envoyer par email
+    email_sent = False
+    with get_db() as db:
+        u = db.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
+    # Chercher un email si la colonne existe (future extension)
+    email_addr = dict(u).get("email", "") or ""
+    if SMTP_HOST and email_addr:
+        email_sent = send_reset_email(email_addr, user["username"], token)
+
+    return render_template("forgot_password.html",
+        success=success_msg,
+        reset_url=reset_url if not email_sent else None,
+        email_sent=email_sent,
+        smtp_configured=bool(SMTP_HOST))
+
+
+@app.route("/reset-password/<token>", methods=["GET", "POST"])
+def reset_password(token):
+    if current_user.is_authenticated:
+        return redirect(url_for("dashboard"))
+
+    now = datetime.now().isoformat()
+    with get_db() as db:
+        row = db.execute(
+            "SELECT * FROM password_resets WHERE token=? AND used=0 AND expires_at>?",
+            (token, now)
+        ).fetchone()
+
+    if not row:
+        return render_template("reset_password.html",
+            error="Lien invalide ou expiré. Faites une nouvelle demande.")
+
+    if request.method == "GET":
+        return render_template("reset_password.html", token=token, username=row["username"])
+
+    ip     = request.remote_addr or ""
+    new_pw = request.form.get("password", "").strip()
+    conf   = request.form.get("confirm",  "").strip()
+
+    if new_pw != conf:
+        return render_template("reset_password.html", token=token, username=row["username"],
+            error="Les mots de passe ne correspondent pas.")
+
+    pw_err = validate_password(new_pw)
+    if pw_err:
+        return render_template("reset_password.html", token=token, username=row["username"],
+            error=pw_err)
+
+    with get_db() as db:
+        db.execute("UPDATE users SET password=? WHERE id=?", (hash_pw(new_pw), row["user_id"]))
+        db.execute("UPDATE password_resets SET used=1 WHERE token=?", (token,))
+        db.commit()
+
+    log_connexion(row["username"], "password_reset", ip)
+    return render_template("reset_password.html", done=True)
+
+
+# ─────────────────────────────────────────────────
+#  CALENDRIER IRM (#6)
+# ─────────────────────────────────────────────────
+
+@app.route("/calendrier")
+@login_required
+def page_calendrier():
+    now    = datetime.now()
+    year   = int(request.args.get("year",  now.year))
+    month  = int(request.args.get("month", now.month))
+    projet = request.args.get("projet", "")
+
+    # Borner year/month
+    year  = max(2020, min(2050, year))
+    month = max(1,    min(12,   month))
+
+    # Navigation prev/next
+    prev_dt = datetime(year, month, 1) - timedelta(days=1)
+    next_dt = datetime(year, month, 28) + timedelta(days=4)
+    next_dt = next_dt.replace(day=1)
+
+    month_str = f"{year}-{month:02d}"
+    q, params = "SELECT * FROM acquisitions WHERE date_acq LIKE ?", [f"{month_str}%"]
+    if projet:
+        q += " AND projet=?"; params.append(projet)
+    q += " ORDER BY date_acq"
+
+    with get_db() as db:
+        acqs_raw = db.execute(q, params).fetchall()
+        projets  = db.execute("SELECT DISTINCT nom FROM projets ORDER BY nom").fetchall()
+        # Totaux par jour pour le mois
+        all_acqs = db.execute(
+            "SELECT date_acq, projet, animal_id, sequence, statut FROM acquisitions "
+            "WHERE date_acq LIKE ? ORDER BY date_acq",
+            (f"{month_str}%",)
+        ).fetchall()
+
+    # Grouper par jour
+    from collections import defaultdict
+    acqs_by_day: dict[int, list] = defaultdict(list)
+    for a in all_acqs:
+        d = a["date_acq"]
+        if d and len(d) >= 10:
+            try:
+                day = int(d[8:10])
+                acqs_by_day[day].append(dict(a))
+            except ValueError:
+                pass
+
+    # Grille calendrier (liste de semaines, chaque semaine = 7 jours, 0 = hors mois)
+    cal_weeks = _cal.monthcalendar(year, month)
+
+    # Couleurs par projet (rotation)
+    proj_colors = ["teal", "blue", "amber", "red"]
+    proj_list   = [p["nom"] for p in projets]
+    color_map   = {p: proj_colors[i % len(proj_colors)] for i, p in enumerate(proj_list)}
+
+    month_names_fr = [
+        "", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+        "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"
+    ]
+
+    return render_template("calendrier.html",
+        year=year, month=month,
+        month_name=month_names_fr[month],
+        cal_weeks=cal_weeks,
+        acqs_by_day=dict(acqs_by_day),
+        color_map=color_map,
+        projets=proj_list,
+        projet=projet,
+        prev_year=prev_dt.year, prev_month=prev_dt.month,
+        next_year=next_dt.year, next_month=next_dt.month,
+        today_day=now.day if (now.year == year and now.month == month) else -1,
+    )
 
 
 # Appelé au démarrage quel que soit le mode (gunicorn ou python3 app.py)
