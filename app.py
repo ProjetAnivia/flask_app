@@ -1362,6 +1362,23 @@ def api_update_statut(acq_id):
 #  VOLUMÉTRIE — calcul K-means 3 classes
 # ─────────────────────────────────────────────────
 
+def resolve_nifti_path(stored_path: str) -> str:
+    """Convertit un chemin NIfTI stocké en DB vers le chemin réel du container."""
+    p = Path(stored_path)
+    if p.exists():
+        return str(p)
+    # Le chemin est un chemin hôte absolu (ex: /Users/nolan/.../structured/proj/...)
+    # → on cherche 'structured/' et on reconstruit via NAS_ROOT
+    s = stored_path.replace("\\", "/")
+    marker = "structured/"
+    idx = s.find(marker)
+    if idx != -1:
+        candidate = NAS_ROOT / s[idx + len(marker):]
+        if candidate.exists():
+            return str(candidate)
+    raise FileNotFoundError(f"NIfTI introuvable : {stored_path}")
+
+
 def compute_volumetry_bg(vol_id: int, fichier_dest: str):
     """Thread background : segmentation K-means 3 classes sur le NIfTI."""
     try:
@@ -1369,8 +1386,9 @@ def compute_volumetry_bg(vol_id: int, fichier_dest: str):
         import numpy as np
         from sklearn.cluster import KMeans
 
-        now  = datetime.now().isoformat()
-        img  = nib.load(fichier_dest)
+        now        = datetime.now().isoformat()
+        real_path  = resolve_nifti_path(fichier_dest)
+        img        = nib.load(real_path)
         data = np.asarray(img.dataobj, dtype=np.float32)
 
         zooms     = img.header.get_zooms()[:3]
@@ -1415,8 +1433,8 @@ def compute_volumetry_bg(vol_id: int, fichier_dest: str):
             "tissus":         tissus,
         }
 
-        # CSV sauvegardé à côté du NIfTI
-        csv_path = Path(fichier_dest).parent / "volumetrie.csv"
+        # CSV sauvegardé à côté du NIfTI (chemin réel dans le container)
+        csv_path = Path(real_path).parent / "volumetrie.csv"
         with open(csv_path, "w", newline="") as f:
             w = csv.writer(f)
             w.writerow(["Tissu", "Voxels", "Volume (mm³)", "% cerveau"])
@@ -1533,8 +1551,10 @@ def nas_url(abs_path: str) -> str | None:
         return None
 
 
+# Appelé au démarrage quel que soit le mode (gunicorn ou python3 app.py)
+init_db()
+
 if __name__ == "__main__":
-    init_db()
     try:
         _ip = socket.gethostbyname(socket.gethostname())
     except Exception:
