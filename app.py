@@ -940,10 +940,13 @@ def api_update_email(user_id):
         )
         db.commit()
     if email and token:
+        if not SMTP_HOST:
+            return jsonify({"ok": True, "verified": False,
+                            "warning": "Email sauvegardé. SMTP non configuré — vérifiez les variables d'environnement."})
         sent = send_verification_email(email, current_user.username, token)
         if not sent:
             return jsonify({"ok": True, "verified": False,
-                            "warning": "Email sauvegardé mais non envoyé (SMTP non configuré)."})
+                            "warning": "Email sauvegardé mais l'envoi a échoué. Vérifiez les logs SMTP."})
     return jsonify({"ok": True, "verified": False,
                     "msg": "Un email de vérification a été envoyé." if email else "Email supprimé."})
 
