@@ -313,6 +313,7 @@ def init_db():
             "ALTER TABLE users ADD COLUMN email TEXT",
             "ALTER TABLE users ADD COLUMN email_verified INTEGER DEFAULT 0",
             "ALTER TABLE users ADD COLUMN email_verify_token TEXT",
+            "ALTER TABLE projets ADD COLUMN acq_prevues_override INTEGER",
         ]:
             try:
                 db.execute(col_sql)
@@ -1057,40 +1058,20 @@ def logout():
 @app.route("/")
 @login_required
 def dashboard():
-    # Filtres F4
-    f_projet    = request.args.get("projet", "")
-    f_statut    = request.args.get("statut", "")
-    f_date_from = request.args.get("date_from", "")
-    f_date_to   = request.args.get("date_to", "")
-    f_user      = request.args.get("user", "")
+    f_projet     = request.args.get("projet", "")
+    f_date_debut = request.args.get("date_debut", "")
+    f_date_fin   = request.args.get("date_fin", "")
 
     with get_db() as db:
         nb_animaux  = db.execute("SELECT COUNT(*) FROM animaux").fetchone()[0]
         nb_acq      = db.execute("SELECT COUNT(*) FROM acquisitions").fetchone()[0]
         nb_doublons = db.execute("SELECT COUNT(*) FROM pipeline_logs WHERE statut='DUPLICATE_SKIPPED'").fetchone()[0]
-        projets_raw    = db.execute("SELECT * FROM projets ORDER BY nom").fetchall()
+        projets_raw    = db.execute(
+            "SELECT * FROM projets WHERE COALESCE(statut,'actif')='actif' ORDER BY nom"
+        ).fetchall()
         acq_par_projet = db.execute("SELECT projet, COUNT(*) as n FROM acquisitions GROUP BY projet").fetchall()
         statuts_raw    = db.execute(
             "SELECT projet, statut, COUNT(*) as n FROM animaux GROUP BY projet, statut"
-        ).fetchall()
-
-        # Acquisitions filtrées pour le tableau du bas
-        q, params = "SELECT * FROM acquisitions WHERE 1=1", []
-        if f_projet:
-            q += " AND projet=?"; params.append(f_projet)
-        if f_statut:
-            q += " AND statut=?"; params.append(f_statut)
-        if f_date_from:
-            q += " AND date_acq >= ?"; params.append(f_date_from)
-        if f_date_to:
-            q += " AND date_acq <= ?"; params.append(f_date_to)
-        if f_user:
-            q += " AND \"importé_par\"=?"; params.append(f_user)
-        q += " ORDER BY date_acq DESC LIMIT 20"
-        dernieres_acq = db.execute(q, params).fetchall()
-
-        utilisateurs = db.execute(
-            "SELECT DISTINCT \"importé_par\" FROM acquisitions WHERE \"importé_par\" IS NOT NULL ORDER BY 1"
         ).fetchall()
 
     acq_map    = {r["projet"]: r["n"] for r in acq_par_projet}
@@ -1098,33 +1079,45 @@ def dashboard():
     for s in statuts_raw:
         statut_map.setdefault(s["projet"], {})[s["statut"]] = s["n"]
 
+    today = datetime.now().strftime("%Y-%m-%d")
     projets = []
     for p in projets_raw:
         if f_projet and p["nom"] != f_projet:
             continue
-        seq   = p["seq_par_animal"] if p["seq_par_animal"] else 3
-        prevues = p["nb_animaux_prevus"] * seq
+        debut = p["date_debut"] or ""
+        fin   = p["date_fin_prevue"] or ""
+        if f_date_debut and debut and debut < f_date_debut:
+            continue
+        if f_date_fin and fin and fin > f_date_fin:
+            continue
+        seq     = p["seq_par_animal"] or 3
+        override = p["acq_prevues_override"]
+        prevues = override if override else p["nb_animaux_prevus"] * seq
         faites  = acq_map.get(p["nom"], 0)
         pct     = round(faites / prevues * 100) if prevues else 0
         sm      = statut_map.get(p["nom"], {})
+        retard  = bool(fin and fin < today and pct < 100)
         projets.append({
             "nom": p["nom"], "resp": p["resp"],
+            "nb_prevus": p["nb_animaux_prevus"],
+            "seq_par_animal": seq,
             "prevues": prevues, "faites": faites, "pct": pct,
             "couleur": "teal" if pct >= 75 else ("amber" if pct >= 40 else "red"),
             "nb_ok":      sm.get("ok", 0),
             "nb_attente": sm.get("en_attente", 0),
             "nb_cours":   sm.get("en_cours", 0),
             "nb_refaire": sm.get("a_refaire", 0),
+            "date_debut": debut,
+            "date_fin_prevue": fin,
+            "retard": retard,
+            "acq_prevues_override": override,
         })
 
     return render_template("dashboard.html",
         nb_animaux=nb_animaux, nb_acq=nb_acq, nb_doublons=nb_doublons,
         nas_to=11.2, nas_max=16, projets=projets,
-        dernieres_acq=[dict(r) for r in dernieres_acq],
-        utilisateurs=[u["importé_par"] for u in utilisateurs],
         projets_all=[p["nom"] for p in projets_raw],
-        f_projet=f_projet, f_statut=f_statut,
-        f_date_from=f_date_from, f_date_to=f_date_to, f_user=f_user,
+        f_projet=f_projet, f_date_debut=f_date_debut, f_date_fin=f_date_fin,
         updated_at=datetime.now().strftime("%Y-%m-%d à %Hh%M"))
 
 @app.route("/animaux")
@@ -1146,36 +1139,8 @@ def page_animaux():
 @app.route("/projets")
 @login_required
 def page_projets():
-    with get_db() as db:
-        projets_raw    = db.execute(
-            "SELECT * FROM projets WHERE COALESCE(statut,'actif')='actif' ORDER BY nom"
-        ).fetchall()
-        acq_par_projet = db.execute("SELECT projet, COUNT(*) as n FROM acquisitions GROUP BY projet").fetchall()
-        statuts        = db.execute("SELECT projet, statut, COUNT(*) as n FROM animaux GROUP BY projet, statut").fetchall()
-    acq_map   = {r["projet"]: r["n"] for r in acq_par_projet}
-    statut_map = {}
-    for s in statuts:
-        statut_map.setdefault(s["projet"], {})[s["statut"]] = s["n"]
-    projets = []
-    for p in projets_raw:
-        seq     = p["seq_par_animal"] or 3
-        prevues = p["nb_animaux_prevus"] * seq
-        faites  = acq_map.get(p["nom"], 0)
-        pct     = round(faites / prevues * 100) if prevues else 0
-        sm      = statut_map.get(p["nom"], {})
-        fin   = p["date_fin_prevue"] or ""
-        retard = bool(fin and fin < datetime.now().strftime("%Y-%m-%d") and pct < 100)
-        projets.append({"nom": p["nom"], "resp": p["resp"],
-                        "nb_prevus": p["nb_animaux_prevus"],
-                        "seq_par_animal": seq,
-                        "prevues": prevues, "faites": faites, "pct": pct,
-                        "couleur": "teal" if pct >= 75 else ("amber" if pct >= 40 else "red"),
-                        "nb_ok": sm.get("ok", 0), "nb_attente": sm.get("en_attente", 0),
-                        "nb_cours": sm.get("en_cours", 0), "nb_refaire": sm.get("a_refaire", 0),
-                        "date_debut": p["date_debut"] or "",
-                        "date_fin_prevue": fin, "retard": retard,
-                        "protocole_ethique": p["protocole_ethique"] or ""})
-    return render_template("projets.html", projets=projets)
+    return redirect("/")
+
 
 @app.route("/archive")
 @login_required
@@ -1212,20 +1177,50 @@ def page_archive():
 @login_required
 @role_required("admin")
 def api_projets_dates(nom):
-    data  = request.json or {}
-    debut = data.get("date_debut", "").strip()
-    fin   = data.get("date_fin_prevue", "").strip()
-    # Validation format YYYY-MM-DD
-    for d in (debut, fin):
-        if d and not re.match(r"^\d{4}-\d{2}-\d{2}$", d):
-            return jsonify({"error": "Format date invalide (AAAA-MM-JJ)"}), 400
+    data = request.json or {}
+    updates, params = [], []
+    for field in ("date_debut", "date_fin_prevue"):
+        if field in data:
+            val = (data[field] or "").strip()
+            if val and not re.match(r"^\d{4}-\d{2}-\d{2}$", val):
+                return jsonify({"error": "Format date invalide (AAAA-MM-JJ)"}), 400
+            updates.append(f"{field}=?")
+            params.append(val or None)
+    if not updates:
+        return jsonify({"error": "Aucune date fournie"}), 400
+    params.append(nom)
     with get_db() as db:
-        db.execute(
-            "UPDATE projets SET date_debut=?, date_fin_prevue=? WHERE nom=?",
-            (debut or None, fin or None, nom)
-        )
+        db.execute(f"UPDATE projets SET {','.join(updates)} WHERE nom=?", params)
         db.commit()
-    return jsonify({"ok": True, "nom": nom, "date_debut": debut, "date_fin_prevue": fin})
+        p = db.execute("SELECT date_debut, date_fin_prevue FROM projets WHERE nom=?", (nom,)).fetchone()
+    return jsonify({"ok": True, "nom": nom,
+                    "date_debut": p["date_debut"] or "", "date_fin_prevue": p["date_fin_prevue"] or ""})
+
+
+@app.route("/api/projets/<nom>/acq-prevues", methods=["PATCH"])
+@login_required
+@role_required("admin", "operateur")
+def api_projets_acq_prevues(nom):
+    data = request.json or {}
+    val  = data.get("acq_prevues_override")
+    if val is not None:
+        try:
+            val = int(val)
+            if val < 0:
+                raise ValueError
+        except (ValueError, TypeError):
+            return jsonify({"error": "Nombre invalide"}), 400
+    with get_db() as db:
+        p = db.execute("SELECT * FROM projets WHERE nom=?", (nom,)).fetchone()
+        if not p:
+            return jsonify({"error": "Projet introuvable"}), 404
+        db.execute("UPDATE projets SET acq_prevues_override=? WHERE nom=?", (val, nom))
+        db.commit()
+        seq = p["seq_par_animal"] or 3
+        prevues = val if val else p["nb_animaux_prevus"] * seq
+        faites = db.execute("SELECT COUNT(*) FROM acquisitions WHERE projet=?", (nom,)).fetchone()[0]
+        pct = round(faites / prevues * 100) if prevues else 0
+    return jsonify({"ok": True, "nom": nom, "prevues": prevues, "faites": faites, "pct": pct})
 
 
 @app.route("/api/projets/<nom>/ethique", methods=["PATCH"])
@@ -3302,6 +3297,11 @@ def page_calendrier():
         "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"
     ]
 
+    with get_db() as db2:
+        dernieres_acq = db2.execute(
+            "SELECT * FROM acquisitions ORDER BY date_acq DESC LIMIT 20"
+        ).fetchall()
+
     return render_template("calendrier.html",
         year=year, month=month,
         month_name=month_names_fr[month],
@@ -3313,6 +3313,7 @@ def page_calendrier():
         prev_year=prev_dt.year, prev_month=prev_dt.month,
         next_year=next_dt.year, next_month=next_dt.month,
         today_day=now.day if (now.year == year and now.month == month) else -1,
+        dernieres_acq=[dict(r) for r in dernieres_acq],
     )
 
 

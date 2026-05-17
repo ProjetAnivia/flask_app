@@ -1,13 +1,13 @@
 {% extends "base.html" %}
-{% block title %}Dashboard{% endblock %}
+{% block title %}Dashboard : projets{% endblock %}
 {% block content %}
 
 <div class="page-header">
   <div style="display:flex;align-items:center;gap:16px;">
-    <div class="page-title">Vue d'ensemble</div>
-    <a href="/api/export/acquisitions.csv{% if f_projet %}?projet={{ f_projet }}{% endif %}" class="btn-ghost" style="font-size:11px;padding:5px 14px;">↓ CSV</a>
+    <div class="page-title">Dashboard : projets</div>
+    <a href="/api/export/acquisitions.csv" class="btn-ghost" style="font-size:11px;padding:5px 14px;">↓ CSV</a>
   </div>
-  <div class="page-sub">Mise à jour : {{ updated_at }}</div>
+  <div class="page-sub">Mise à jour : {{ updated_at }} · <a href="/archive" style="color:var(--hint);text-decoration:none;">voir l'archive →</a></div>
 </div>
 
 <!-- Métriques -->
@@ -34,9 +34,37 @@
   </div>
 </div>
 
-<!-- Filtres F4 -->
+<!-- Formulaire création -->
 <div class="card">
-  <div class="card-title">Filtres</div>
+  <div class="card-title">Créer un projet</div>
+  <div id="proj-error"   style="display:none;" class="msg-box msg-error"></div>
+  <div id="proj-success" style="display:none;" class="msg-box msg-success"></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr 130px 120px 120px;gap:12px;align-items:flex-end;">
+    <div class="form-row">
+      <label class="form-label">Nom du projet</label>
+      <input class="form-input" type="text" id="proj-nom" placeholder="ex : cardiologie">
+    </div>
+    <div class="form-row">
+      <label class="form-label">Responsable</label>
+      <input class="form-input" type="text" id="proj-resp" placeholder="ex : Nicolas">
+    </div>
+    <div class="form-row">
+      <label class="form-label">Nb animaux prévus</label>
+      <input class="form-input" type="number" id="proj-nb" placeholder="20" min="0">
+    </div>
+    <div class="form-row">
+      <label class="form-label">Séq. / animal</label>
+      <input class="form-input" type="number" id="proj-seq" placeholder="3" min="1" max="10" value="3">
+    </div>
+    <button class="btn-primary" onclick="createProjet()" style="height:38px;">Créer →</button>
+  </div>
+  <div class="mono" style="margin-top:10px;color:var(--hint);font-size:10px;">
+    Le nom sera converti en minuscules sans espaces · Séq./animal = nombre de passages IRM prévus (défaut 3)
+  </div>
+</div>
+
+<!-- Filtres -->
+<div class="card" style="padding:14px 20px;">
   <form method="GET" action="/" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
     <div class="form-row">
       <label class="form-label">Projet</label>
@@ -48,132 +76,388 @@
       </select>
     </div>
     <div class="form-row">
-      <label class="form-label">Statut acquisition</label>
-      <select class="form-select" name="statut" style="width:160px;">
-        <option value="">Tous</option>
-        <option value="ok"         {% if f_statut == "ok" %}selected{% endif %}>OK</option>
-        <option value="en_cours"   {% if f_statut == "en_cours" %}selected{% endif %}>En cours</option>
-        <option value="en_attente" {% if f_statut == "en_attente" %}selected{% endif %}>En attente</option>
-        <option value="a_refaire"  {% if f_statut == "a_refaire" %}selected{% endif %}>À refaire</option>
-      </select>
+      <label class="form-label">Début après le</label>
+      <input class="form-input" type="date" name="date_debut" value="{{ f_date_debut }}" style="width:150px;">
     </div>
     <div class="form-row">
-      <label class="form-label">Importé par</label>
-      <select class="form-select" name="user" style="width:150px;">
-        <option value="">Tous</option>
-        {% for u in utilisateurs %}
-          <option value="{{ u }}" {% if f_user == u %}selected{% endif %}>{{ u }}</option>
-        {% endfor %}
-      </select>
+      <label class="form-label">Fin avant le</label>
+      <input class="form-input" type="date" name="date_fin" value="{{ f_date_fin }}" style="width:150px;">
     </div>
     <div class="form-row">
-      <label class="form-label">Date du</label>
-      <input class="form-input" type="date" name="date_from" value="{{ f_date_from }}" style="width:140px;">
-    </div>
-    <div class="form-row">
-      <label class="form-label">au</label>
-      <input class="form-input" type="date" name="date_to" value="{{ f_date_to }}" style="width:140px;">
+      <label class="form-label">Recherche</label>
+      <input class="form-input" type="text" id="search-proj"
+             placeholder="Nom ou responsable…"
+             oninput="applyClientFilters()"
+             style="width:200px;">
     </div>
     <button class="btn-primary" type="submit" style="height:38px;">Filtrer</button>
-    {% if f_projet or f_statut or f_user or f_date_from or f_date_to %}
+    {% if f_projet or f_date_debut or f_date_fin %}
       <a href="/" class="btn-ghost" style="height:38px;line-height:20px;">✕ Réinitialiser</a>
     {% endif %}
   </form>
 </div>
 
-<!-- Avancement par projet -->
+<!-- Tableau des projets en cours -->
 <div class="card">
-  <div class="card-title">Avancement par projet</div>
-  {% if projets %}
-    <div style="display:flex;flex-direction:column;gap:18px;">
-    {% for p in projets %}
-      <div>
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-          <a href="/projet/{{ p.nom }}" style="font-size:13px;color:var(--text);text-decoration:none;">
-            {{ p.nom | replace("_", " ") | title }}
-            <span class="mono" style="color:var(--hint);margin-left:6px;">{{ p.resp }}</span>
-          </a>
-          <span class="mono">{{ p.faites }} / {{ p.prevues }} acq — {{ p.pct }}%</span>
-        </div>
-        <div class="prog-wrap">
-          <div class="prog-bar {{ p.couleur if p.couleur != 'teal' else '' }}" style="width:{{ p.pct }}%"></div>
-        </div>
-        <!-- Statuts animaux -->
-        <div style="display:flex;gap:8px;margin-top:8px;">
-          {% if p.nb_ok %}
-            <span class="pill pill-ok" title="Terminés">{{ p.nb_ok }} ok</span>
-          {% endif %}
-          {% if p.nb_cours %}
-            <span class="pill pill-prog" title="En cours">{{ p.nb_cours }} en cours</span>
-          {% endif %}
-          {% if p.nb_attente %}
-            <span class="pill pill-wait" title="En attente">{{ p.nb_attente }} attente</span>
-          {% endif %}
-          {% if p.nb_refaire %}
-            <span class="pill pill-redo" title="À refaire">{{ p.nb_refaire }} à refaire</span>
-          {% endif %}
-        </div>
-      </div>
-    {% endfor %}
-    </div>
-  {% else %}
-    <div class="mono" style="color:var(--hint);">Aucun projet correspondant aux filtres.</div>
-  {% endif %}
-</div>
-
-<!-- Dernières acquisitions (filtrées) -->
-<div class="card">
-  <div class="card-title">
-    Acquisitions
-    {% if f_projet or f_statut or f_user or f_date_from or f_date_to %}
-      <span style="color:var(--amber);margin-left:8px;">filtrées</span>
-    {% else %}
-      — 20 dernières
-    {% endif %}
-  </div>
-  {% if dernieres_acq %}
-  <table class="data-table">
+  <div class="card-title">Projets en cours <span class="mono" style="color:var(--hint);font-weight:400;">— {{ projets | length }} projet(s)</span></div>
+  <table class="data-table" id="projets-table">
     <thead>
       <tr>
-        <th>Animal</th>
         <th>Projet</th>
-        <th>Séquence</th>
-        <th>Date</th>
-        <th>Importé par</th>
-        <th>Statut</th>
+        <th>Responsable</th>
+        <th>Animaux</th>
+        <th>Acquisitions</th>
+        <th>Avancement</th>
+        <th>Statuts animaux</th>
+        <th>Début</th>
+        <th>Fin prévue</th>
+        {% if current_user.role == 'admin' %}<th></th>{% endif %}
       </tr>
     </thead>
-    <tbody>
-    {% for a in dernieres_acq %}
-      <tr>
+    <tbody id="projets-tbody">
+    {% for p in projets %}
+      <tr id="proj-row-{{ p.nom }}"
+          data-search="{{ p.nom }} {{ p.resp | lower }}"
+          data-resp="{{ p.resp | lower }}"
+          data-retard="{{ '1' if p.retard else '0' }}">
         <td>
-          <a href="/animal/{{ a.projet }}/{{ a.animal_id }}" style="color:var(--teal);text-decoration:none;">
-            {{ a.animal_id }}
-          </a>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <a href="/projet/{{ p.nom }}" style="color:var(--teal);text-decoration:none;font-weight:500;">
+              {{ p.nom | replace("_"," ") | title }}
+            </a>
+            {% if p.retard %}<span class="pill pill-redo" data-retard-badge="1" style="font-size:9px;padding:1px 6px;">retard</span>{% endif %}
+          </div>
+        </td>
+        <td class="mono">{{ p.resp or "—" }}</td>
+        <td class="mono">{{ p.nb_prevus }}</td>
+        <td class="acq-cell" data-nom="{{ p.nom }}" data-prevues="{{ p.prevues }}" data-faites="{{ p.faites }}">
+          <span class="acq-display mono" style="cursor:pointer;border-bottom:1px dashed var(--border2);"
+                onclick="editAcqPrevues(this)" title="Cliquer pour modifier le nombre prévu">
+            {{ p.faites }} / {{ p.prevues }}
+          </span>
+          <span class="acq-edit" style="display:none;">
+            <span class="mono">{{ p.faites }} / </span>
+            <input type="number" class="form-input acq-input" min="1"
+                   value="{{ p.prevues }}"
+                   style="display:inline;width:60px;padding:3px 6px;font-size:11px;"
+                   onkeydown="if(event.key==='Enter')saveAcqPrevues(this);if(event.key==='Escape')cancelAcqPrevues(this)">
+            <button class="btn-ghost" style="font-size:10px;padding:2px 6px;margin-left:4px;" onclick="saveAcqPrevues(this.previousElementSibling)">OK</button>
+          </span>
+        </td>
+        <td style="min-width:120px;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div class="prog-wrap" style="flex:1;">
+              <div class="prog-bar {{ p.couleur if p.couleur != 'teal' else '' }}" style="width:{{ p.pct }}%"></div>
+            </div>
+            <span class="mono pct-label" style="font-size:10px;min-width:32px;text-align:right;">{{ p.pct }}%</span>
+          </div>
         </td>
         <td>
-          <a href="/projet/{{ a.projet }}" style="color:var(--text);text-decoration:none;">
-            {{ a.projet | replace("_", " ") | title }}
-          </a>
+          <div style="display:flex;gap:4px;flex-wrap:wrap;">
+            {% if p.nb_ok > 0 %}<span class="pill pill-ok">{{ p.nb_ok }} ok</span>{% endif %}
+            {% if p.nb_cours > 0 %}<span class="pill pill-prog">{{ p.nb_cours }} cours</span>{% endif %}
+            {% if p.nb_attente > 0 %}<span class="pill pill-wait">{{ p.nb_attente }} att.</span>{% endif %}
+            {% if p.nb_refaire > 0 %}<span class="pill pill-redo">{{ p.nb_refaire }} refaire</span>{% endif %}
+            {% if p.nb_ok == 0 and p.nb_cours == 0 and p.nb_attente == 0 and p.nb_refaire == 0 %}
+              <span class="mono" style="color:var(--hint);">—</span>
+            {% endif %}
+          </div>
         </td>
-        <td class="mono">{{ a.sequence or "—" }}</td>
-        <td class="mono">{{ a.date_acq or "—" }}</td>
-        <td class="mono" style="color:var(--hint);">{{ a["importé_par"] or "—" }}</td>
-        <td>
-          {% if a.statut == "ok" %}<span class="pill pill-ok">OK</span>
-          {% elif a.statut == "a_refaire" %}<span class="pill pill-redo">à refaire</span>
-          {% elif a.statut == "en_cours" %}<span class="pill pill-prog">en cours</span>
-          {% else %}<span class="pill pill-wait">en attente</span>{% endif %}
+        <td class="date-debut-cell" data-nom="{{ p.nom }}">
+          <span class="date-display mono" style="font-size:11px;cursor:pointer;border-bottom:1px dashed var(--border2);"
+                onclick="editDateDebut(this)"
+                title="Cliquer pour modifier">{{ p.date_debut or "—" }}</span>
+          <input type="date" class="form-input date-input"
+                 style="display:none;width:140px;padding:4px 8px;font-size:11px;"
+                 value="{{ p.date_debut }}"
+                 onblur="saveDateDebut(this)"
+                 onkeydown="if(event.key==='Enter')this.blur();if(event.key==='Escape')cancelDateDebut(this)">
+        </td>
+        <td class="date-fin-cell" data-nom="{{ p.nom }}" data-pct="{{ p.pct }}">
+          <span class="date-display mono" style="font-size:11px;cursor:pointer;border-bottom:1px dashed var(--border2);"
+                onclick="editDate(this)"
+                title="Cliquer pour modifier">{{ p.date_fin_prevue or "—" }}</span>
+          <input type="date" class="form-input date-input"
+                 style="display:none;width:140px;padding:4px 8px;font-size:11px;"
+                 value="{{ p.date_fin_prevue }}"
+                 onblur="saveDate(this)"
+                 onkeydown="if(event.key==='Enter')this.blur();if(event.key==='Escape')cancelDate(this)">
+        </td>
+        {% if current_user.role == 'admin' %}
+        <td style="white-space:nowrap;">
+          <button class="btn-archive-proj" onclick="archiverProjet('{{ p.nom }}')">⊡ Archiver</button>
+          {% if p.faites == 0 %}
+          <button class="btn-delete-proj" style="margin-left:6px;" onclick="deleteProjet('{{ p.nom }}')">✕ Supprimer</button>
+          {% endif %}
+        </td>
+        {% endif %}
+      </tr>
+    {% else %}
+      <tr id="empty-row">
+        <td colspan="{% if current_user.role == 'admin' %}9{% else %}8{% endif %}"
+            style="text-align:center;color:var(--hint);padding:24px;">
+          Aucun projet. Créez-en un ci-dessus.
         </td>
       </tr>
     {% endfor %}
     </tbody>
   </table>
-  {% else %}
-    <div class="mono" style="color:var(--hint);padding:16px 0;">
-      Aucune acquisition correspondant aux filtres.
-    </div>
-  {% endif %}
+  <div id="no-results" style="display:none;text-align:center;padding:24px;color:var(--hint);font-family:var(--font-mono);font-size:12px;">
+    Aucun projet ne correspond à la recherche.
+  </div>
 </div>
+
+<style>
+  .msg-box { font-family:var(--font-mono);font-size:11px;border-radius:3px;padding:8px 12px;margin-bottom:4px;line-height:1.8; }
+  .msg-error   { color:var(--red);  background:var(--red-bg);  border:1px solid rgba(220,38,38,0.2); }
+  .msg-success { color:var(--teal); background:var(--teal-bg); border:1px solid rgba(13,148,112,0.2); }
+  .btn-delete-proj, .btn-archive-proj {
+    font-family:var(--font-mono);font-size:11px;background:transparent;
+    border:1px solid var(--border);border-radius:3px;padding:3px 10px;cursor:pointer;
+    transition:color 0.15s,border-color 0.15s;
+  }
+  .btn-delete-proj { color:var(--hint); }
+  .btn-delete-proj:hover { color:var(--red);border-color:rgba(220,38,38,0.3); }
+  .btn-archive-proj { color:var(--muted); }
+  .btn-archive-proj:hover { color:var(--teal);border-color:var(--teal); }
+</style>
+
+<script>
+/* ── Filtre texte côté client ── */
+function applyClientFilters() {
+  const q = (document.getElementById('search-proj').value || '').toLowerCase().trim();
+  const rows = document.querySelectorAll('#projets-tbody tr[data-search]');
+  const noRes = document.getElementById('no-results');
+  let visible = 0;
+  rows.forEach(row => {
+    const show = !q || row.dataset.search.includes(q);
+    row.style.display = show ? '' : 'none';
+    if (show) visible++;
+  });
+  noRes.style.display = visible === 0 ? 'block' : 'none';
+}
+
+/* ── Date fin prévue ── */
+function editDate(span) {
+  const inp = span.nextElementSibling;
+  span.style.display = 'none';
+  inp.style.display = '';
+  inp.focus();
+}
+function cancelDate(inp) {
+  inp.style.display = 'none';
+  inp.previousElementSibling.style.display = '';
+}
+async function saveDate(inp) {
+  const td  = inp.closest('.date-fin-cell');
+  const nom = td.dataset.nom;
+  const pct = parseInt(td.dataset.pct) || 0;
+  const val = inp.value;
+  const span = inp.previousElementSibling;
+  try {
+    const res = await fetch(`/api/projets/${nom}/dates`, {
+      method: 'PATCH', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ date_fin_prevue: val })
+    });
+    if (res.ok) {
+      span.textContent = val || '—';
+      const today  = new Date().toISOString().slice(0, 10);
+      const retard = val && val < today && pct < 100;
+      const row    = td.closest('tr');
+      row.dataset.retard = retard ? '1' : '0';
+      const badge  = row.querySelector('[data-retard-badge]');
+      const nameCell = row.querySelector('td:first-child div');
+      if (retard && !badge && nameCell) {
+        const s = document.createElement('span');
+        s.className = 'pill pill-redo';
+        s.setAttribute('data-retard-badge','1');
+        s.style.cssText = 'font-size:9px;padding:1px 6px;';
+        s.textContent = 'retard';
+        nameCell.appendChild(s);
+      } else if (!retard && badge) {
+        badge.remove();
+      }
+    }
+  } catch(e) {}
+  inp.style.display = 'none';
+  span.style.display = '';
+}
+
+/* ── Date début (avec alerte de confirmation) ── */
+function editDateDebut(span) {
+  const inp = span.nextElementSibling;
+  span.style.display = 'none';
+  inp.style.display = '';
+  inp.focus();
+}
+function cancelDateDebut(inp) {
+  inp.style.display = 'none';
+  inp.previousElementSibling.style.display = '';
+}
+async function saveDateDebut(inp) {
+  const td   = inp.closest('.date-debut-cell');
+  const nom  = td.dataset.nom;
+  const val  = inp.value;
+  const span = inp.previousElementSibling;
+  const oldVal = span.textContent.trim();
+
+  if (val && oldVal !== '—' && val !== oldVal) {
+    if (!confirm(`Modifier la date de début du projet de ${oldVal} à ${val} ?\nCette modification est irréversible.`)) {
+      cancelDateDebut(inp);
+      return;
+    }
+  }
+
+  try {
+    const res = await fetch(`/api/projets/${nom}/dates`, {
+      method: 'PATCH', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ date_debut: val })
+    });
+    if (res.ok) {
+      span.textContent = val || '—';
+    }
+  } catch(e) {}
+  inp.style.display = 'none';
+  span.style.display = '';
+}
+
+/* ── Modification acquisitions prévues ── */
+function editAcqPrevues(span) {
+  const cell = span.closest('.acq-cell');
+  span.style.display = 'none';
+  cell.querySelector('.acq-edit').style.display = 'inline';
+  cell.querySelector('.acq-input').focus();
+}
+function cancelAcqPrevues(inp) {
+  const cell = inp.closest('.acq-cell');
+  cell.querySelector('.acq-edit').style.display = 'none';
+  cell.querySelector('.acq-display').style.display = '';
+}
+async function saveAcqPrevues(inp) {
+  const cell = inp.closest('.acq-cell');
+  const nom  = cell.dataset.nom;
+  const val  = parseInt(inp.value);
+  if (!val || val < 1) { cancelAcqPrevues(inp); return; }
+  try {
+    const res = await fetch(`/api/projets/${nom}/acq-prevues`, {
+      method: 'PATCH', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ acq_prevues_override: val })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      cell.dataset.prevues = data.prevues;
+      cell.dataset.faites  = data.faites;
+      cell.querySelector('.acq-display').textContent = `${data.faites} / ${data.prevues}`;
+      const row = cell.closest('tr');
+      const bar = row.querySelector('.prog-bar');
+      const lbl = row.querySelector('.pct-label');
+      if (bar) bar.style.width = data.pct + '%';
+      if (lbl) lbl.textContent = data.pct + '%';
+      const color = data.pct >= 75 ? '' : (data.pct >= 40 ? 'amber' : 'red');
+      bar.className = 'prog-bar ' + color;
+    }
+  } catch(e) {}
+  cell.querySelector('.acq-edit').style.display = 'none';
+  cell.querySelector('.acq-display').style.display = '';
+}
+
+/* ── Créer projet ── */
+async function createProjet() {
+  const nom    = document.getElementById('proj-nom').value.trim();
+  const resp   = document.getElementById('proj-resp').value.trim();
+  const nb     = parseInt(document.getElementById('proj-nb').value) || 0;
+  const seq    = parseInt(document.getElementById('proj-seq').value) || 3;
+  const errDiv = document.getElementById('proj-error');
+  const okDiv  = document.getElementById('proj-success');
+  errDiv.style.display = 'none'; okDiv.style.display = 'none';
+  if (!nom) { errDiv.textContent = 'Nom du projet requis.'; errDiv.style.display = 'block'; return; }
+  const res  = await fetch('/api/projets', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({nom, resp, nb_animaux: nb, seq_par_animal: seq})
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    errDiv.textContent = data.error || 'Erreur inconnue.'; errDiv.style.display = 'block';
+  } else {
+    const seqReal = data.seq_par_animal || seq;
+    okDiv.textContent = `Projet « ${data.nom} » créé (${seqReal} séq./animal).`;
+    okDiv.style.display = 'block';
+    ['proj-nom','proj-resp','proj-nb'].forEach(id => document.getElementById(id).value = '');
+    document.getElementById('proj-seq').value = '3';
+    document.getElementById('empty-row')?.remove();
+    const label   = data.nom.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    const prevues = nb * seqReal;
+    const tbody   = document.getElementById('projets-tbody');
+    const tr      = document.createElement('tr');
+    tr.id = `proj-row-${data.nom}`;
+    tr.dataset.search = `${data.nom} ${(resp || '').toLowerCase()}`;
+    tr.dataset.resp   = (resp || '').toLowerCase();
+    tr.dataset.retard = '0';
+    tr.innerHTML = `
+      <td><div style="display:flex;align-items:center;gap:6px;"><a href="/projet/${data.nom}" style="color:var(--teal);text-decoration:none;font-weight:500;">${label}</a></div></td>
+      <td class="mono">${resp || '—'}</td>
+      <td class="mono">${nb}</td>
+      <td class="acq-cell" data-nom="${data.nom}" data-prevues="${prevues}" data-faites="0">
+        <span class="acq-display mono" style="cursor:pointer;border-bottom:1px dashed var(--border2);" onclick="editAcqPrevues(this)">0 / ${prevues}</span>
+        <span class="acq-edit" style="display:none;">
+          <span class="mono">0 / </span>
+          <input type="number" class="form-input acq-input" min="1" value="${prevues}"
+                 style="display:inline;width:60px;padding:3px 6px;font-size:11px;"
+                 onkeydown="if(event.key==='Enter')saveAcqPrevues(this);if(event.key==='Escape')cancelAcqPrevues(this)">
+          <button class="btn-ghost" style="font-size:10px;padding:2px 6px;margin-left:4px;" onclick="saveAcqPrevues(this.previousElementSibling)">OK</button>
+        </span>
+      </td>
+      <td style="min-width:120px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <div class="prog-wrap" style="flex:1;"><div class="prog-bar red" style="width:0%"></div></div>
+          <span class="mono pct-label" style="font-size:10px;min-width:32px;text-align:right;">0%</span>
+        </div>
+      </td>
+      <td><span class="mono" style="color:var(--hint);">—</span></td>
+      <td class="date-debut-cell" data-nom="${data.nom}">
+        <span class="date-display mono" style="font-size:11px;cursor:pointer;border-bottom:1px dashed var(--border2);" onclick="editDateDebut(this)">—</span>
+        <input type="date" class="form-input date-input" style="display:none;width:140px;padding:4px 8px;font-size:11px;"
+               onblur="saveDateDebut(this)" onkeydown="if(event.key==='Enter')this.blur();if(event.key==='Escape')cancelDateDebut(this)">
+      </td>
+      <td class="date-fin-cell" data-nom="${data.nom}" data-pct="0">
+        <span class="date-display mono" style="font-size:11px;cursor:pointer;border-bottom:1px dashed var(--border2);" onclick="editDate(this)">—</span>
+        <input type="date" class="form-input date-input" style="display:none;width:140px;padding:4px 8px;font-size:11px;"
+               onblur="saveDate(this)" onkeydown="if(event.key==='Enter')this.blur();if(event.key==='Escape')cancelDate(this)">
+      </td>
+      {% if current_user.role == 'admin' %}
+      <td><button class="btn-delete-proj" onclick="deleteProjet('${data.nom}')">✕ Supprimer</button></td>
+      {% endif %}`;
+    tbody.appendChild(tr);
+  }
+}
+
+/* ── Archiver / Supprimer ── */
+async function archiverProjet(nom) {
+  const label = nom.replace(/_/g, ' ');
+  if (!confirm(`Archiver le projet « ${label} » ?\nIl ne sera plus visible dans le Dashboard mais reste accessible depuis l'Archive.`)) return;
+  const res  = await fetch(`/api/projets/${nom}/statut`, {
+    method: 'PATCH', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ statut: 'terminé' })
+  });
+  const data = await res.json();
+  if (!res.ok) { alert(data.error || 'Erreur.'); return; }
+  document.getElementById(`proj-row-${nom}`)?.remove();
+  if (!document.querySelector('#projets-tbody tr[data-search]')) {
+    const cols = {{ 9 if current_user.role == 'admin' else 8 }};
+    document.getElementById('projets-tbody').innerHTML =
+      `<tr id="empty-row"><td colspan="${cols}" style="text-align:center;color:var(--hint);padding:24px;">
+        Aucun projet en cours. <a href="/archive" style="color:var(--teal);">Voir l'archive →</a>
+      </td></tr>`;
+  }
+}
+
+async function deleteProjet(nom) {
+  if (!confirm(`Supprimer le projet « ${nom.replace(/_/g,' ')} » ?\n(Uniquement possible si aucune acquisition n'y est liée)`)) return;
+  const res  = await fetch(`/api/projets/${nom}`, {method: 'DELETE'});
+  const data = await res.json();
+  if (!res.ok) { alert(data.error || 'Erreur.'); return; }
+  document.getElementById(`proj-row-${nom}`)?.remove();
+}
+</script>
 
 {% endblock %}

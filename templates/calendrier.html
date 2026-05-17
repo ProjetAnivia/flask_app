@@ -135,6 +135,52 @@
   </table>
 </div>
 
+<!-- 20 dernières acquisitions (toutes) -->
+<div class="card">
+  <div class="card-title">20 dernières acquisitions</div>
+  {% if dernieres_acq %}
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Animal</th>
+        <th>Projet</th>
+        <th>Séquence</th>
+        <th>Date</th>
+        <th>Importé par</th>
+        <th>Statut</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for a in dernieres_acq %}
+      <tr>
+        <td>
+          <a href="/animal/{{ a.projet }}/{{ a.animal_id }}" style="color:var(--teal);text-decoration:none;">
+            {{ a.animal_id }}
+          </a>
+        </td>
+        <td>
+          <a href="/projet/{{ a.projet }}" style="color:var(--text);text-decoration:none;">
+            {{ a.projet | replace("_", " ") | title }}
+          </a>
+        </td>
+        <td class="mono">{{ a.sequence or "—" }}</td>
+        <td class="mono">{{ a.date_acq or "—" }}</td>
+        <td class="mono" style="color:var(--hint);">{{ a["importé_par"] or "—" }}</td>
+        <td>
+          {% if a.statut == "ok" %}<span class="pill pill-ok">OK</span>
+          {% elif a.statut == "a_refaire" %}<span class="pill pill-redo">à refaire</span>
+          {% elif a.statut == "en_cours" %}<span class="pill pill-prog">en cours</span>
+          {% else %}<span class="pill pill-wait">en attente</span>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <div class="mono" style="color:var(--hint);padding:16px 0;">Aucune acquisition enregistrée.</div>
+  {% endif %}
+</div>
+
 <style>
   .day-cell:hover { background: var(--bg3) !important; }
 </style>
