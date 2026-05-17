@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block title %}Archive{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <div class="page-title">Archive</div>
+  <div class="page-sub">{{ projets | length }} projet(s) terminé(s) · <a href="/projets" style="color:var(--hint);text-decoration:none;">← Projets en cours</a></div>
+</div>
+
+<!-- Recherche -->
+<div class="card" style="padding:14px 20px;">
+  <input class="form-input" type="text" id="search-arch"
+         placeholder="Rechercher par nom ou responsable…"
+         oninput="filterArchive(this.value)"
+         style="max-width:400px;">
+</div>
+
+<!-- Liste des projets archivés -->
+<div class="card">
+  <table class="data-table" id="archive-table">
+    <thead>
+      <tr>
+        <th>Projet</th>
+        <th>Responsable</th>
+        <th>Animaux prévus</th>
+        <th>Séq./animal</th>
+        <th>Acquisitions</th>
+        <th>Avancement final</th>
+        <th>Statuts animaux</th>
+        {% if current_user.role == 'admin' %}<th>Actions</th>{% endif %}
+      </tr>
+    </thead>
+    <tbody id="archive-tbody">
+    {% for p in projets %}
+      <tr id="arch-row-{{ p.nom }}" data-search="{{ p.nom }} {{ p.resp | lower }}">
+        <td>
+          <a href="/projet/{{ p.nom }}" style="color:var(--muted);text-decoration:none;font-weight:500;">
+            {{ p.nom | replace("_"," ") | title }}
+          </a>
+          <span class="pill" style="background:var(--bg3);color:var(--hint);border-color:var(--border2);
+                font-size:9px;margin-left:6px;">terminé</span>
+        </td>
+        <td class="mono">{{ p.resp or "—" }}</td>
+        <td class="mono">{{ p.nb_prevus }}</td>
+        <td class="mono">{{ p.seq_par_animal }}</td>
+        <td><span class="mono">{{ p.faites }} / {{ p.prevues }}</span></td>
+        <td style="min-width:120px;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div class="prog-wrap" style="flex:1;">
+              <div class="prog-bar" style="width:{{ p.pct }}%;background:var(--muted);"></div>
+            </div>
+            <span class="mono" style="font-size:10px;min-width:32px;text-align:right;">{{ p.pct }}%</span>
+          </div>
+        </td>
+        <td>
+          <div style="display:flex;gap:4px;flex-wrap:wrap;">
+            {% if p.nb_ok > 0 %}<span class="pill pill-ok">{{ p.nb_ok }} ok</span>{% endif %}
+            {% if p.nb_cours > 0 %}<span class="pill pill-prog">{{ p.nb_cours }} cours</span>{% endif %}
+            {% if p.nb_attente > 0 %}<span class="pill pill-wait">{{ p.nb_attente }} att.</span>{% endif %}
+            {% if p.nb_refaire > 0 %}<span class="pill pill-redo">{{ p.nb_refaire }} refaire</span>{% endif %}
+            {% if p.nb_ok == 0 and p.nb_cours == 0 and p.nb_attente == 0 and p.nb_refaire == 0 %}
+              <span class="mono" style="color:var(--hint);">—</span>
+            {% endif %}
+          </div>
+        </td>
+        {% if current_user.role == 'admin' %}
+        <td>
+          <button class="btn-reactive" onclick="reactiverProjet('{{ p.nom }}')">↺ Réactiver</button>
+        </td>
+        {% endif %}
+      </tr>
+    {% else %}
+      <tr id="empty-row">
+        <td colspan="8" style="text-align:center;color:var(--hint);padding:32px;font-family:var(--font-mono);font-size:12px;">
+          Aucun projet archivé. Archivez un projet depuis <a href="/projets" style="color:var(--teal);">Projets en cours</a>.
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <div id="no-results" style="display:none;text-align:center;padding:24px;color:var(--hint);font-family:var(--font-mono);font-size:12px;">
+    Aucun projet ne correspond à la recherche.
+  </div>
+</div>
+
+<style>
+  .btn-reactive {
+    font-family:var(--font-mono);font-size:11px;background:transparent;color:var(--hint);
+    border:1px solid var(--border);border-radius:3px;padding:3px 10px;cursor:pointer;
+    transition:color 0.15s,border-color 0.15s;
+  }
+  .btn-reactive:hover { color:var(--teal);border-color:var(--teal); }
+</style>
+
+<script>
+function filterArchive(q) {
+  q = q.toLowerCase().trim();
+  const rows  = document.querySelectorAll('#archive-tbody tr[data-search]');
+  const noRes = document.getElementById('no-results');
+  let visible = 0;
+  rows.forEach(row => {
+    const match = !q || row.dataset.search.includes(q);
+    row.style.display = match ? '' : 'none';
+    if (match) visible++;
+  });
+  noRes.style.display = (visible === 0 && q) ? 'block' : 'none';
+}
+
+async function reactiverProjet(nom) {
+  const label = nom.replace(/_/g, ' ');
+  if (!confirm(`Réactiver le projet « ${label} » ?\nIl réapparaîtra dans "Projets en cours".`)) return;
+  const res  = await fetch(`/api/projets/${nom}/statut`, {
+    method: 'PATCH', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ statut: 'actif' })
+  });
+  const data = await res.json();
+  if (!res.ok) { alert(data.error || 'Erreur.'); return; }
+  document.getElementById(`arch-row-${nom}`)?.remove();
+  if (!document.querySelector('#archive-tbody tr[data-search]')) {
+    document.getElementById('archive-tbody').innerHTML =
+      `<tr id="empty-row"><td colspan="8" style="text-align:center;color:var(--hint);padding:32px;font-family:var(--font-mono);font-size:12px;">
+        Aucun projet archivé.
+      </td></tr>`;
+  }
+}
+</script>
+
+{% endblock %}

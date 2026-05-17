@@ -125,13 +125,31 @@
          color:#9ca3af;font-family:monospace;font-size:12px;text-align:center;padding:20px;"></div>
   </div>
 
-  <div style="display:flex;justify-content:space-between;margin-top:8px;">
-    <span class="mono" style="font-size:10px;color:var(--hint);" id="viewer-meta">
-      Molette pour zoomer · glisser pour faire pivoter · clic droit pour les coupes
-    </span>
-    <span class="mono" style="font-size:10px;color:var(--hint);" id="viewer-current">
-      {{ nifti_acqs[0].sequence }}
-    </span>
+  <!-- Sliders de contrôle -->
+  <div style="padding:12px 16px;background:var(--bg3);border-top:1px solid var(--border2);
+              border-radius:0 0 4px 4px;display:flex;flex-direction:column;gap:8px;">
+    <div style="display:grid;grid-template-columns:80px 1fr 44px;gap:10px;align-items:center;">
+      <span class="mono" style="font-size:9px;color:var(--hint);text-align:right;">Coupe (Z)</span>
+      <input type="range" id="s-slice" min="0" max="100" value="50" style="width:100%;accent-color:var(--teal);"
+             oninput="ctrlSlice(this.value)">
+      <span class="mono" id="v-slice" style="font-size:9px;color:var(--muted);text-align:right;">50 %</span>
+    </div>
+    <div style="display:grid;grid-template-columns:80px 1fr 44px;gap:10px;align-items:center;">
+      <span class="mono" style="font-size:9px;color:var(--hint);text-align:right;">Luminosité</span>
+      <input type="range" id="s-bright" min="-100" max="100" value="0" style="width:100%;accent-color:var(--teal);"
+             oninput="ctrlBright(this.value)">
+      <span class="mono" id="v-bright" style="font-size:9px;color:var(--muted);text-align:right;">0</span>
+    </div>
+    <div style="display:grid;grid-template-columns:80px 1fr 44px;gap:10px;align-items:center;">
+      <span class="mono" style="font-size:9px;color:var(--hint);text-align:right;">Contraste</span>
+      <input type="range" id="s-contrast" min="10" max="300" value="100" style="width:100%;accent-color:var(--teal);"
+             oninput="ctrlContrast(this.value)">
+      <span class="mono" id="v-contrast" style="font-size:9px;color:var(--muted);text-align:right;">100 %</span>
+    </div>
+    <div style="display:flex;justify-content:space-between;padding-top:2px;">
+      <span class="mono" style="font-size:9px;color:var(--hint);" id="viewer-meta"></span>
+      <span class="mono" style="font-size:10px;color:var(--hint);" id="viewer-current">{{ nifti_acqs[0].sequence }}</span>
+    </div>
   </div>
 </div>
 
@@ -141,10 +159,58 @@ let nv        = null;
 let cmapIndex = 0;
 let viewIndex = 0;
 const cmaps   = ['gray', 'hot', 'cool', 'viridis', 'inferno'];
-const views   = [0, 1, 2, 3];  // 0=axial, 1=coronal, 2=sagittal, 3=3D render
+const views   = [0, 1, 2, 3];
 
-// Le build UMD peut exposer la classe sous window.Niivue ou window.niivue.Niivue
+let _calMin0 = 0, _calMax0 = 1000;  // plage de calibration initiale du volume
+
 const NiivueClass = window.Niivue || (window.niivue && window.niivue.Niivue);
+
+function _storeCalRange() {
+  if (!nv || !nv.volumes || !nv.volumes[0]) return;
+  const vol = nv.volumes[0];
+  _calMin0  = vol.cal_min ?? 0;
+  _calMax0  = vol.cal_max ?? 1000;
+  // Remettre les sliders à leur position neutre
+  document.getElementById('s-slice').value    = '50';
+  document.getElementById('s-bright').value   = '0';
+  document.getElementById('s-contrast').value = '100';
+  document.getElementById('v-slice').textContent    = '50 %';
+  document.getElementById('v-bright').textContent   = '0';
+  document.getElementById('v-contrast').textContent = '100 %';
+}
+
+function _applyCalRange() {
+  if (!nv || !nv.volumes || !nv.volumes[0]) return;
+  const vol      = nv.volumes[0];
+  const range    = _calMax0 - _calMin0 || 1000;
+  const bright   = parseFloat(document.getElementById('s-bright').value) / 100;
+  const contrast = parseFloat(document.getElementById('s-contrast').value) / 100;
+  const center   = (_calMin0 + _calMax0) / 2 + bright * range * 0.5;
+  const half     = (range * contrast) / 2;
+  vol.cal_min    = center - half;
+  vol.cal_max    = center + half;
+  if (typeof nv.updateGLVolume === 'function') nv.updateGLVolume();
+  else if (typeof nv.drawScene === 'function') nv.drawScene();
+}
+
+function ctrlSlice(val) {
+  document.getElementById('v-slice').textContent = val + ' %';
+  if (!nv) return;
+  if (nv.scene && nv.scene.crosshairPos) {
+    nv.scene.crosshairPos[2] = val / 100;
+    if (typeof nv.drawScene === 'function') nv.drawScene();
+  }
+}
+
+function ctrlBright(val) {
+  document.getElementById('v-bright').textContent = val;
+  _applyCalRange();
+}
+
+function ctrlContrast(val) {
+  document.getElementById('v-contrast').textContent = val + ' %';
+  _applyCalRange();
+}
 
 async function initNiivue() {
   const canvas  = document.getElementById('niivue-gl');
@@ -163,14 +229,13 @@ async function initNiivue() {
     const firstUrl = {{ nifti_acqs[0].nifti_url | tojson }};
     await nv.loadVolumes([{ url: firstUrl, colormap: 'gray' }]);
     loading.style.display = 'none';
+    _storeCalRange();
 
-    // Afficher les dimensions
     if (nv.volumes && nv.volumes[0]) {
       const h = nv.volumes[0].hdr;
       if (h && h.dims) {
         const d = h.dims;
-        document.getElementById('viewer-dims').textContent =
-          `${d[1]} × ${d[2]} × ${d[3]} voxels`;
+        document.getElementById('viewer-dims').textContent = `${d[1]} × ${d[2]} × ${d[3]} voxels`;
       }
     }
   } catch(e) {
@@ -187,6 +252,7 @@ async function loadVolume(url, name, btn) {
   document.getElementById('viewer-current').textContent = name;
   try {
     await nv.loadVolumes([{ url, colormap: cmaps[cmapIndex] }]);
+    _storeCalRange();
     if (nv.volumes && nv.volumes[0]) {
       const h = nv.volumes[0].hdr;
       if (h && h.dims) {

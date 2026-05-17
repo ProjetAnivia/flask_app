@@ -301,7 +301,8 @@
     .pill-wait  { background: var(--amber-bg);        color: var(--amber); border-color: rgba(180,83,9,0.2); }
     .pill-redo  { background: var(--red-bg);          color: var(--red);   border-color: rgba(220,38,38,0.2); }
     .pill-prog  { background: var(--blue-bg);         color: var(--blue);  border-color: rgba(29,78,216,0.2); }
-    .pill-admin { background: rgba(13,148,112,0.1);   color: var(--teal);  border-color: rgba(13,148,112,0.25); }
+    .pill-admin       { background: rgba(220,38,38,0.08);   color: var(--red);  border-color: rgba(220,38,38,0.25); }
+    .pill-admin-green { background: rgba(13,148,112,0.08); color: var(--teal); border-color: rgba(13,148,112,0.25); }
     .pill-op    { background: var(--blue-bg);         color: var(--blue);  border-color: rgba(29,78,216,0.2); }
     .pill-obs   { background: var(--bg3);             color: var(--muted); border-color: var(--border2); }
 
@@ -470,7 +471,11 @@
     {% if current_user.is_authenticated %}
       <div class="topbar-user-wrap" id="userMenuWrap">
         <button class="topbar-user-btn" onclick="toggleUserMenu(event)">
-          <span class="topbar-tag">{{ current_user.role | upper }}</span>
+          <span class="topbar-tag"
+            {% if current_user.username == 'admin' %}style="background:rgba(220,38,38,0.08);color:var(--red);border-color:rgba(220,38,38,0.25);"
+            {% elif current_user.role == 'admin' %}style="background:rgba(13,148,112,0.08);color:var(--teal);border-color:rgba(13,148,112,0.25);"{% endif %}>
+            {% if current_user.username == 'admin' %}SUDO{% elif current_user.role == 'admin' %}ADMIN{% else %}{{ current_user.role | upper }}{% endif %}
+          </span>
           <span>{{ current_user.username }}</span>
           <span class="topbar-caret">▾</span>
         </button>
@@ -496,13 +501,16 @@
       <span class="nav-icon">~</span><span class="nav-label"> Animaux</span>
     </a>
     <a href="/projets" class="nav-item {% if request.path == '/projets' %}active{% endif %}">
-      <span class="nav-icon">*</span><span class="nav-label"> Projets</span>
+      <span class="nav-icon">*</span><span class="nav-label"> Projets en cours</span>
+    </a>
+    <a href="/archive" class="nav-item {% if request.path == '/archive' %}active{% endif %}">
+      <span class="nav-icon">⊡</span><span class="nav-label"> Archive</span>
     </a>
     <a href="/planification" class="nav-item {% if request.path == '/planification' %}active{% endif %}">
       <span class="nav-icon">→</span><span class="nav-label"> Planification</span>
     </a>
     <a href="/calendrier" class="nav-item {% if request.path == '/calendrier' %}active{% endif %}">
-      <span class="nav-icon">◫</span><span class="nav-label"> Calendrier</span>
+      <span class="nav-icon">◫</span><span class="nav-label"> Historique acquisitions</span>
     </a>
     <a href="/nas-explorer" class="nav-item {% if request.path == '/nas-explorer' %}active{% endif %}">
       <span class="nav-icon">⊞</span><span class="nav-label"> Explorateur NAS</span>
@@ -522,7 +530,7 @@
       <span class="nav-icon">@</span><span class="nav-label"> Utilisateurs</span>
     </a>
     <a href="/connexions" class="nav-item {% if request.path == '/connexions' %}active{% endif %}">
-      <span class="nav-icon">§</span><span class="nav-label"> Connexions</span>
+      <span class="nav-icon">§</span><span class="nav-label"> Logs de connexion</span>
     </a>
     {% endif %}
   </nav>

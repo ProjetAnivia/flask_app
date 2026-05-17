@@ -10,10 +10,26 @@
 <!-- En-tête droits -->
 <div class="card" style="background:var(--bg3);border-color:var(--border);">
   <div class="card-title">Droits par rôle</div>
-  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;font-size:13px;">
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:16px;font-size:13px;">
+    <div style="border:1px solid rgba(220,38,38,0.18);border-radius:5px;padding:12px;background:rgba(220,38,38,0.03);">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+        <span class="pill pill-admin">sudo</span>
+        <span style="font-weight:500;">Super-administrateur</span>
+      </div>
+      <ul style="margin:0;padding-left:16px;color:var(--muted);font-size:12px;line-height:1.9;">
+        <li>Tous les droits admin</li>
+        <li>Créer des comptes admin</li>
+        <li>Modifier le rôle d'un admin</li>
+        <li>Supprimer un compte admin</li>
+        <li>Réinitialiser le MDP d'un admin</li>
+      </ul>
+      <div style="margin-top:8px;font-size:10px;color:var(--red);font-family:var(--font-mono);">
+        Compte unique · identifiant réservé : <code>admin</code>
+      </div>
+    </div>
     <div>
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-        <span class="pill pill-admin">admin</span>
+        <span class="pill pill-admin-green">admin</span>
         <span style="font-weight:500;">Administrateur</span>
       </div>
       <ul style="margin:0;padding-left:16px;color:var(--muted);font-size:12px;line-height:1.9;">
@@ -21,13 +37,9 @@
         <li>Créer / supprimer des projets et animaux</li>
         <li>Gérer les comptes utilisateurs</li>
         <li>Modifier les statuts et rôles</li>
-        <li>Réinitialiser les mots de passe</li>
+        <li>Réinitialiser les MDP (non-admin)</li>
         <li>Exporter toutes les données (CSV)</li>
       </ul>
-      <div style="margin-top:8px;font-size:11px;color:var(--red);font-family:var(--font-mono);">
-        Seul le compte « admin » peut supprimer, modifier le rôle ou réinitialiser le mot de passe d'un autre administrateur.<br>
-        Toute réinitialisation du MDP d'un autre compte exige une confirmation par mot de passe (+ code 2FA si activé).
-      </div>
     </div>
     <div>
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
@@ -114,7 +126,8 @@
           {% endif %}
         </td>
         <td id="pill-{{ u.id }}">
-          {% if u.role == "admin" %}<span class="pill pill-admin">admin</span>
+          {% if u.username == "admin" %}<span class="pill pill-admin">sudo</span>
+          {% elif u.role == "admin" %}<span class="pill pill-admin-green">admin</span>
           {% elif u.role == "operateur" %}<span class="pill pill-op">opérateur</span>
           {% else %}<span class="pill pill-obs">observateur</span>{% endif %}
         </td>
@@ -294,7 +307,7 @@ async function changeRole(userId, select) {
   }
   select.dataset.prev = newRole;
   // Mettre à jour le pill du rôle
-  const pillMap  = {admin:'pill-admin', operateur:'pill-op', chercheur:'pill-obs'};
+  const pillMap  = {admin:'pill-admin-green', operateur:'pill-op', chercheur:'pill-obs'};
   const labelMap = {admin:'admin', operateur:'opérateur', chercheur:'observateur'};
   const pillCell = document.getElementById(`pill-${userId}`);
   if (pillCell) {

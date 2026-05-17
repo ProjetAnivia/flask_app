@@ -71,11 +71,15 @@
                 border-color: rgba(29,78,216,0.2); }
   .nas-empty  { padding: 48px; text-align: center; font-family: var(--font-mono);
                 font-size: 12px; color: var(--hint); }
-  .alias-btn  { font-family: var(--font-mono); font-size: 9px; padding: 2px 7px;
-                border-radius: 2px; background: none; border: 1px solid var(--border2);
-                color: var(--hint); cursor: pointer; white-space: nowrap;
+  .alias-btn  { font-family: var(--font-mono); font-size: 11px; padding: 4px 12px;
+                border-radius: 3px; background: none; border: 1px solid var(--border2);
+                color: var(--muted); cursor: pointer; white-space: nowrap;
                 transition: color 0.1s, border-color 0.1s; }
   .alias-btn:hover { color: var(--teal); border-color: var(--teal); }
+  .nas-header { display:grid; grid-template-columns:28px 1fr auto auto; gap:10px;
+                padding:5px 16px; background:var(--bg3); border-bottom:1px solid var(--border2); }
+  .nas-header span { font-family:var(--font-mono); font-size:9px; letter-spacing:.1em;
+                     text-transform:uppercase; color:var(--hint); }
   @media (max-width: 600px) {
     .nas-row { grid-template-columns: 24px 1fr auto; }
     .nas-row .nas-meta { display: none; }
@@ -86,11 +90,9 @@
 let currentPath = '';
 let userAliases = {};  // real_path → {id, alias_name}
 
-async function loadAliases() {
-  const res = await fetch('/api/aliases');
-  const arr = await res.json();
-  userAliases = {};
-  arr.forEach(a => { userAliases[a.real_path] = a; });
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
 function fmtSize(b) {
@@ -115,29 +117,54 @@ function badgeFor(name) {
   return '';
 }
 
+// ── Alias — unique source de vérité ──────────────────────────────────────────
+async function loadAliases() {
+  // Cache-bust pour toujours obtenir la version à jour
+  const res = await fetch('/api/aliases?_=' + Date.now());
+  const arr = await res.json();
+  userAliases = {};
+  arr.forEach(a => { userAliases[a.real_path] = a; });
+
+  const cont = document.getElementById('aliases-list');
+  if (!cont) return;
+  if (!arr.length) {
+    cont.innerHTML = '<div style="font-family:var(--font-mono);font-size:12px;color:var(--hint);">'
+      + 'Aucun alias défini. Cliquez sur <strong>✎ Alias</strong> dans l\'arborescence pour en créer un.</div>';
+    return;
+  }
+  cont.innerHTML = arr.map(a => `
+    <div class="alias-row" id="alias-${a.id}">
+      <span class="mono" style="flex:1;color:var(--hint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(a.real_path)}</span>
+      <span style="color:var(--border2);flex-shrink:0;">→</span>
+      <span style="flex:1;font-weight:500;color:var(--teal);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(a.alias_name)}</span>
+      <button class="btn-ghost" style="font-size:10px;padding:3px 10px;flex-shrink:0;color:var(--red);border-color:rgba(220,38,38,0.3);"
+              onclick="deleteAlias(${a.id})">Supprimer</button>
+    </div>`).join('');
+}
+
+// ── Navigation ────────────────────────────────────────────────────────────────
 async function browse(path) {
   currentPath = path || '';
-  document.getElementById('nas-loading').style.display = 'block';
   document.getElementById('nas-content').innerHTML =
-    '<div id="nas-loading" style="padding:48px;text-align:center;font-family:var(--font-mono);font-size:12px;color:var(--hint);">Chargement…</div>';
+    '<div style="padding:48px;text-align:center;font-family:var(--font-mono);font-size:12px;color:var(--hint);">Chargement…</div>';
   closePreview();
 
   const url = '/api/nas/browse' + (path ? `?path=${encodeURIComponent(path)}` : '');
   const res  = await fetch(url);
   if (!res.ok) {
     document.getElementById('nas-content').innerHTML =
-      `<div class="nas-empty">Erreur : ${(await res.json()).error}</div>`;
+      `<div class="nas-empty">Erreur : ${escHtml((await res.json()).error || 'inconnue')}</div>`;
     return;
   }
   const data = await res.json();
 
-  // Breadcrumb
+  // Breadcrumb — JSON.stringify pour sécuriser les chemins avec apostrophes
   const parts = data.path ? data.path.split('/') : [];
   let bc = '';
   parts.forEach((p, i) => {
-    const pathTo = parts.slice(0, i+1).join('/');
-    bc += `<span onclick="browse('${pathTo}')"
-                 style="cursor:pointer;color:var(--teal);" title="${pathTo}">${p}</span>`;
+    const pathTo = parts.slice(0, i + 1).join('/');
+    bc += `<span onclick="browse(${JSON.stringify(pathTo)})"
+                 style="cursor:pointer;color:var(--teal);" title="${escHtml(pathTo)}">${escHtml(p)}</span>`;
     if (i < parts.length - 1)
       bc += `<span style="color:var(--border2);margin:0 3px;">/</span>`;
   });
@@ -149,7 +176,7 @@ async function browse(path) {
   document.getElementById('nas-stat').textContent =
     `${dirs.length} dossier(s) · ${files.length} fichier(s)`;
 
-  if (!entries.length && !parent) {
+  if (!entries.length && parent == null) {
     document.getElementById('nas-content').innerHTML =
       '<div class="nas-empty">NAS vide ou aucun fichier accessible.</div>';
     return;
@@ -159,29 +186,37 @@ async function browse(path) {
 
   // Bouton retour
   if (parent !== null && parent !== undefined) {
-    html += `<div class="nas-row" onclick="browse('${parent}')">
+    html += `<div class="nas-row" onclick="browse(${JSON.stringify(parent)})">
       <span class="nas-icon">↑</span>
       <span class="nas-name" style="color:var(--hint);">..</span>
       <span></span><span></span>
     </div>`;
   }
 
+  // En-tête colonnes (seulement s'il y a des dossiers)
+  if (dirs.length) {
+    html += `<div class="nas-header">
+      <span></span>
+      <span>Nom</span>
+      <span>Éléments</span>
+      <span>Alias ✎</span>
+    </div>`;
+  }
+
   // Dossiers
   dirs.forEach(e => {
-    const alias = userAliases[e.path];
+    const alias       = userAliases[e.path];
     const displayName = alias ? alias.alias_name : e.name;
     const aliasLabel  = alias
-      ? `<span style="font-family:var(--font-mono);font-size:9px;color:var(--teal);margin-left:6px;">✎ ${alias.alias_name}</span>`
+      ? `<span style="font-family:var(--font-mono);font-size:9px;color:var(--teal);margin-left:8px;">✎ ${escHtml(alias.alias_name)}</span>`
       : '';
-    html += `<div class="nas-row" onclick="browse('${e.path}')">
+    html += `<div class="nas-row" onclick="browse(${JSON.stringify(e.path)})">
       <span class="nas-icon" style="color:var(--amber);">📁</span>
-      <span class="nas-name dir">
-        ${escHtml(e.name)}${aliasLabel}
-      </span>
+      <span class="nas-name dir">${escHtml(e.name)}${aliasLabel}</span>
       <span class="nas-meta">${e.n ?? ''} élément(s)</span>
-      <button class="alias-btn" title="Renommer (alias personnel)"
-              onclick="event.stopPropagation();promptAlias('${escAttr(e.path)}','${escAttr(displayName)}')">
-        ✎
+      <button class="alias-btn" title="Définir un alias personnel"
+              onclick="event.stopPropagation();promptAlias(${JSON.stringify(e.path)},${JSON.stringify(displayName)})">
+        ✎ Alias
       </button>
     </div>`;
   });
@@ -204,11 +239,12 @@ async function browse(path) {
 
 function browseRoot() { browse(''); }
 
+// ── Aperçu fichier ────────────────────────────────────────────────────────────
 function showFile(e) {
   const panel = document.getElementById('file-preview');
   document.getElementById('preview-title').textContent = e.name;
   document.getElementById('preview-meta').innerHTML = `
-    <span>Chemin : <code style="font-family:var(--font-mono);font-size:10px;">${e.path}</code></span>
+    <span>Chemin : <code style="font-family:var(--font-mono);font-size:10px;">${escHtml(e.path)}</code></span>
     <span>Taille : <strong>${fmtSize(e.size)}</strong></span>
     <span>Modifié : ${e.modified || '—'}</span>
   `;
@@ -220,58 +256,29 @@ function closePreview() {
   document.getElementById('file-preview').style.display = 'none';
 }
 
+// ── Alias — actions ───────────────────────────────────────────────────────────
 async function promptAlias(realPath, currentName) {
-  const newName = window.prompt(`Alias personnel pour :\n${realPath}\n\n(laisser vide pour supprimer)`, currentName);
-  if (newName === null) return;  // annulé
+  const newName = window.prompt(
+    `Alias personnel pour :\n${realPath}\n\n(laisser vide pour supprimer)`, currentName
+  );
+  if (newName === null) return;
   if (newName.trim() === '') {
-    // Supprimer l'alias existant
     const alias = userAliases[realPath];
-    if (alias) {
-      await fetch(`/api/aliases/${alias.id}`, { method: 'DELETE' });
-    }
+    if (alias) await fetch(`/api/aliases/${alias.id}`, { method: 'DELETE' });
   } else {
     await fetch('/api/aliases', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ real_path: realPath, alias_name: newName.trim() })
     });
   }
-  await loadAliases();
-  browse(currentPath);
-}
-
-function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
-function escAttr(s) {
-  return String(s).replace(/'/g,"\\'");
-}
-
-// ── Alias list panel ─────────────────────────────────────────────────────────
-async function loadAliases() {
-  const res = await fetch('/api/aliases');
-  const arr = await res.json();
-  userAliases = {};
-  arr.forEach(a => { userAliases[a.real_path] = a; });
-
-  const cont = document.getElementById('aliases-list');
-  if (!arr.length) {
-    cont.innerHTML = '<div style="font-family:var(--font-mono);font-size:12px;color:var(--hint);">Aucun alias défini. Cliquez sur ✎ dans l\'arborescence pour en créer un.</div>';
-    return;
-  }
-  cont.innerHTML = arr.map(a => `
-    <div class="alias-row" id="alias-${a.id}">
-      <span class="mono" style="flex:1;color:var(--hint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(a.real_path)}</span>
-      <span style="color:var(--border2);flex-shrink:0;">→</span>
-      <span style="flex:1;font-weight:500;color:var(--teal);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(a.alias_name)}</span>
-      <button class="btn-ghost" style="font-size:10px;padding:3px 10px;flex-shrink:0;color:var(--red);border-color:rgba(220,38,38,0.3);"
-              onclick="deleteAlias(${a.id})">Supprimer</button>
-    </div>`).join('');
+  await loadAliases();       // met à jour userAliases ET la liste en bas
+  await browse(currentPath); // re-render l'arborescence avec les alias à jour
 }
 
 async function deleteAlias(id) {
   await fetch(`/api/aliases/${id}`, { method: 'DELETE' });
   await loadAliases();
-  browse(currentPath);
+  await browse(currentPath);
 }
 
 async function addAlias() {
@@ -287,16 +294,14 @@ async function addAlias() {
     body: JSON.stringify({ real_path: path, alias_name: name })
   });
   const data = await res.json();
-  if (!res.ok) {
-    err.textContent = data.error; err.style.display = 'block'; return;
-  }
+  if (!res.ok) { err.textContent = data.error; err.style.display = 'block'; return; }
   document.getElementById('new-alias-path').value = '';
   document.getElementById('new-alias-name').value = '';
   await loadAliases();
-  browse(currentPath);
+  await browse(currentPath);
 }
 
-// Init
+// ── Init ──────────────────────────────────────────────────────────────────────
 (async () => {
   await loadAliases();
   await browse('');

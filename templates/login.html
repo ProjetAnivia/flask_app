@@ -6,6 +6,9 @@
   <title>IRM.FAIR — Connexion</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  {% if recaptcha_site_key %}
+  <script src="https://www.google.com/recaptcha/api.js" async defer></script>
+  {% endif %}
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -144,6 +147,18 @@
       transition: color 0.12s;
     }
     .forgot-link:hover { color: var(--teal); }
+    .captcha-q {
+      font-family: 'IBM Plex Mono', monospace;
+      color: var(--teal);
+      font-weight: 500;
+      letter-spacing: 0.05em;
+    }
+    #captcha-row {
+      background: var(--teal-bg);
+      border: 1px solid rgba(13,148,112,0.18);
+      border-radius: 4px;
+      padding: 10px 12px;
+    }
 
     /* Mobile : prend toute la largeur */
     @media (max-width: 400px) {
@@ -169,14 +184,14 @@
           <div class="form-row">
             <label class="form-label" for="login-user">Identifiant</label>
             <input class="form-input" type="text" id="login-user" name="username"
-                   placeholder="nicolas" autofocus autocomplete="username">
+                   placeholder="user" autofocus autocomplete="username">
           </div>
 
           <div class="form-row">
             <label class="form-label" for="pw-input">Mot de passe</label>
             <div class="pw-field">
               <input class="form-input" type="password" id="pw-input" name="password"
-                     placeholder="••••••••" autocomplete="current-password">
+                     placeholder="••••••••••••" autocomplete="current-password">
               <button type="button" class="pw-eye" id="pw-toggle"
                       onclick="togglePw()" title="Afficher / masquer" aria-label="Afficher le mot de passe">
                 <!-- Icône œil SVG — état masqué -->
@@ -198,6 +213,20 @@
               </button>
             </div>
           </div>
+
+          {% if recaptcha_site_key %}
+          <div style="display:flex;justify-content:center;">
+            <div class="g-recaptcha" data-sitekey="{{ recaptcha_site_key }}"></div>
+          </div>
+          {% elif captcha_question %}
+          <div class="form-row" id="captcha-row">
+            <label class="form-label" for="captcha-input">
+              Vérification — combien font&nbsp;<span class="captcha-q">{{ captcha_question }}</span>&nbsp;?
+            </label>
+            <input class="form-input" type="number" id="captcha-input" name="captcha_answer"
+                   placeholder="Réponse…" autocomplete="off" required inputmode="numeric">
+          </div>
+          {% endif %}
 
           <button class="btn-login" type="submit">Connexion →</button>
           <a href="/forgot-password" class="forgot-link">Mot de passe oublié ?</a>

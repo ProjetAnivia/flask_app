@@ -14,7 +14,7 @@ from flask import Flask, render_template, jsonify, request, redirect, url_for, s
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from functools import wraps
 from pathlib import Path
-import json, sqlite3, hashlib, os, re, csv, io, socket, threading, bcrypt as _bcrypt, secrets, calendar as _cal
+import json, sqlite3, hashlib, os, re, csv, io, socket, threading, bcrypt as _bcrypt, secrets, calendar as _cal, random
 import smtplib, urllib.request as _urllib_req
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -52,14 +52,85 @@ SMTP_PASS = os.environ.get("SMTP_PASS", "")
 SMTP_FROM = os.environ.get("SMTP_FROM", "noreply@irm-fair.local")
 APP_URL   = os.environ.get("APP_URL",   "http://localhost:5001")
 
+# ── reCAPTCHA v2 (optionnel — désactivé si clés absentes) ───────────────────
+RECAPTCHA_SITE_KEY   = os.environ.get("RECAPTCHA_SITE_KEY",   "6Ldro-4sAAAAAJlYYyYfRNzto7k_Tk0d5tRy_E9w")
+RECAPTCHA_SECRET_KEY = os.environ.get("RECAPTCHA_SECRET_KEY", "6Ldro-4sAAAAAFKpzPH4NsAc3rgdXbki0JU4nnRf")
+RECAPTCHA_ENABLED    = bool(RECAPTCHA_SITE_KEY and RECAPTCHA_SECRET_KEY)
+
+def verify_recaptcha(token: str) -> bool:
+    """Vérifie un token reCAPTCHA v2 auprès de l'API Google."""
+    if not token:
+        return False
+    try:
+        data = f"secret={RECAPTCHA_SECRET_KEY}&response={token}".encode()
+        req  = _urllib_req.Request(
+            "https://www.google.com/recaptcha/api/siteverify",
+            data=data,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        with _urllib_req.urlopen(req, timeout=5) as r:
+            result = json.loads(r.read())
+        return bool(result.get("success"))
+    except Exception as exc:
+        print(f"[reCAPTCHA] vérification échouée : {exc}", flush=True)
+        return False
+
 # ── Protection anti-brute-force ──────────────────────────────────────────────
 BRUTEFORCE_MAX_ATTEMPTS = 5   # tentatives max
 BRUTEFORCE_WINDOW_MIN   = 10  # fenêtre de détection (minutes)
 BRUTEFORCE_LOCKOUT_MIN  = 15  # durée de blocage (minutes)
 
+# ── CAPTCHA ──────────────────────────────────────────────────────────────────
+CAPTCHA_VALIDITY_MIN = 30          # minutes avant de re-demander un captcha
+_captcha_cleared : dict[str, datetime] = {}   # ip → dernier captcha validé
+_captcha_lock    = threading.Lock()
+
+def captcha_is_cleared(ip: str) -> bool:
+    """Retourne True si l'IP a déjà résolu un captcha récemment."""
+    if not ip:
+        return False
+    with _captcha_lock:
+        ts = _captcha_cleared.get(ip)
+    if ts is None:
+        return False
+    return datetime.utcnow() - ts < timedelta(minutes=CAPTCHA_VALIDITY_MIN)
+
+def captcha_clear_ip(ip: str):
+    """Enregistre que l'IP vient de valider un captcha."""
+    if not ip:
+        return
+    with _captcha_lock:
+        _captcha_cleared[ip] = datetime.utcnow()
+        # Nettoyage des entrées expirées (évite la croissance infinie)
+        cutoff = datetime.utcnow() - timedelta(minutes=CAPTCHA_VALIDITY_MIN * 2)
+        expired = [k for k, v in _captcha_cleared.items() if v < cutoff]
+        for k in expired:
+            del _captcha_cleared[k]
+
+def captcha_generate() -> tuple[str, int]:
+    """Génère une question arithmétique simple. Retourne (question, réponse)."""
+    ops = [('+', lambda a, b: a + b), ('-', lambda a, b: a - b), ('×', lambda a, b: a * b)]
+    sym, fn = random.choice(ops)
+    if sym == '×':
+        a, b = random.randint(2, 9), random.randint(2, 9)
+    elif sym == '-':
+        a = random.randint(5, 20)
+        b = random.randint(1, a)
+    else:
+        a, b = random.randint(1, 20), random.randint(1, 20)
+    return f"{a} {sym} {b}", fn(a, b)
+
 # ── Cache géolocalisation IP ─────────────────────────────────────────────────
 _geo_cache : dict[str, str] = {}
 _geo_lock  = threading.Lock()
+
+# IPs privées/réservées — pas de résolution géo
+_PRIVATE_IP_RE = re.compile(
+    r'^(127\.|10\.|192\.168\.|169\.254\.'
+    r'|172\.(1[6-9]|2[0-9]|3[01])\.'
+    r'|::1$|fe80:|fc[0-9a-f]{2}:|fd[0-9a-f]{2}:)',
+    re.IGNORECASE
+)
 
 login_manager = LoginManager(app)
 login_manager.login_view = "login"
@@ -210,6 +281,7 @@ def init_db():
         # Migration douce — ajoute les colonnes si absentes (SQLite ne supporte pas IF NOT EXISTS sur ALTER)
         for col_sql in [
             "ALTER TABLE projets ADD COLUMN seq_par_animal INTEGER DEFAULT 3",
+            "ALTER TABLE projets ADD COLUMN statut TEXT DEFAULT 'actif'",
             "ALTER TABLE connexions_log ADD COLUMN pays TEXT DEFAULT '—'",
             "ALTER TABLE users ADD COLUMN totp_secret TEXT",
             "ALTER TABLE users ADD COLUMN totp_enabled INTEGER DEFAULT 0",
@@ -273,21 +345,44 @@ def verify_pw(pw: str, stored: str) -> bool:
     # Schéma SHA-256 hérité
     return hashlib.sha256(pw.encode()).hexdigest() == stored
 
+def get_real_ip() -> str:
+    """Récupère la vraie IP client derrière un éventuel reverse-proxy."""
+    for header in ("X-Forwarded-For", "X-Real-IP"):
+        value = request.headers.get(header, "").strip()
+        if value:
+            return value.split(",")[0].strip()
+    return request.remote_addr or ""
+
+
 def get_country(ip: str) -> str:
-    """Résout le pays depuis l'IP via ip-api.com (cache mémoire, timeout 3 s)."""
-    if not ip or ip in ("127.0.0.1", "::1", "localhost", ""):
+    """Résout le pays depuis l'IP (cache mémoire, deux services en fallback)."""
+    if not ip or _PRIVATE_IP_RE.match(ip):
         return "Local"
     with _geo_lock:
         if ip in _geo_cache:
             return _geo_cache[ip]
-    try:
-        url = f"http://ip-api.com/json/{ip}?fields=status,country"
-        req = _urllib_req.Request(url, headers={"User-Agent": "IRM-FAIR/1.0"})
-        with _urllib_req.urlopen(req, timeout=3) as r:
-            data = json.loads(r.read())
-        country = data.get("country", "—") if data.get("status") == "success" else "—"
-    except Exception:
-        country = "—"
+    country = "—"
+    apis = [
+        (
+            f"http://ip-api.com/json/{ip}?fields=status,country",
+            lambda d: d.get("country") if d.get("status") == "success" else None,
+        ),
+        (
+            f"https://ipinfo.io/{ip}/json",
+            lambda d: d.get("country") or None,
+        ),
+    ]
+    for url, extract in apis:
+        try:
+            req = _urllib_req.Request(url, headers={"User-Agent": "IRM-FAIR/1.0"})
+            with _urllib_req.urlopen(req, timeout=4) as r:
+                data = json.loads(r.read())
+            result = extract(data)
+            if result:
+                country = result
+                break
+        except Exception as exc:
+            print(f"[GEO] {url} → {exc}", flush=True)
     with _geo_lock:
         _geo_cache[ip] = country
     return country
@@ -427,14 +522,43 @@ def role_required(*roles):
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
-    ip = request.remote_addr or ""
+    ip = get_real_ip()
+
+    def _render(error=None):
+        """Rend login.html avec le bon type de captcha selon la config."""
+        if captcha_is_cleared(ip):
+            return render_template("login.html", error=error)
+        if RECAPTCHA_ENABLED:
+            return render_template("login.html", error=error,
+                                   recaptcha_site_key=RECAPTCHA_SITE_KEY)
+        # Fallback : captcha arithmétique
+        q, ans = captcha_generate()
+        session["_captcha_answer"] = ans
+        return render_template("login.html", error=error, captcha_question=q)
+
     if request.method == "POST":
         # ── Protection anti-brute-force ──────────────────────────────────────
         secs = get_lockout_remaining(ip)
         if secs > 0:
             mins = (secs + 59) // 60
-            return render_template("login.html",
-                error=f"Trop de tentatives échouées. Compte temporairement bloqué — réessayez dans {mins} min.")
+            return _render(error=f"Trop de tentatives échouées. Compte temporairement bloqué — réessayez dans {mins} min.")
+
+        # ── Vérification CAPTCHA (si IP pas encore validée) ──────────────────
+        if not captcha_is_cleared(ip):
+            if RECAPTCHA_ENABLED:
+                token = request.form.get("g-recaptcha-response", "")
+                if not verify_recaptcha(token):
+                    return _render(error="Vérification reCAPTCHA échouée. Veuillez recommencer.")
+            else:
+                user_ans = request.form.get("captcha_answer", "").strip()
+                expected = session.pop("_captcha_answer", None)
+                try:
+                    correct = (int(user_ans) == expected)
+                except (ValueError, TypeError):
+                    correct = False
+                if not correct:
+                    return _render(error="Réponse au captcha incorrecte.")
+            captcha_clear_ip(ip)
 
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
@@ -466,14 +590,14 @@ def login():
         else:
             mins = BRUTEFORCE_LOCKOUT_MIN
             err  = f"Trop de tentatives échouées. Compte temporairement bloqué — réessayez dans {mins} min."
-        return render_template("login.html", error=err)
+        return _render(error=err)
 
-    return render_template("login.html")
+    return _render()
 
 @app.route("/logout")
 @login_required
 def logout():
-    log_connexion(current_user.username, "logout", request.remote_addr or "")
+    log_connexion(current_user.username, "logout", get_real_ip())
     logout_user()
     return redirect(url_for("login"))
 
@@ -575,7 +699,9 @@ def page_animaux():
 @login_required
 def page_projets():
     with get_db() as db:
-        projets_raw    = db.execute("SELECT * FROM projets ORDER BY nom").fetchall()
+        projets_raw    = db.execute(
+            "SELECT * FROM projets WHERE COALESCE(statut,'actif')='actif' ORDER BY nom"
+        ).fetchall()
         acq_par_projet = db.execute("SELECT projet, COUNT(*) as n FROM acquisitions GROUP BY projet").fetchall()
         statuts        = db.execute("SELECT projet, statut, COUNT(*) as n FROM animaux GROUP BY projet, statut").fetchall()
     acq_map   = {r["projet"]: r["n"] for r in acq_par_projet}
@@ -597,6 +723,55 @@ def page_projets():
                         "nb_ok": sm.get("ok", 0), "nb_attente": sm.get("en_attente", 0),
                         "nb_cours": sm.get("en_cours", 0), "nb_refaire": sm.get("a_refaire", 0)})
     return render_template("projets.html", projets=projets)
+
+@app.route("/archive")
+@login_required
+def page_archive():
+    with get_db() as db:
+        projets_raw    = db.execute(
+            "SELECT * FROM projets WHERE statut='terminé' ORDER BY nom"
+        ).fetchall()
+        acq_par_projet = db.execute("SELECT projet, COUNT(*) as n FROM acquisitions GROUP BY projet").fetchall()
+        statuts        = db.execute("SELECT projet, statut, COUNT(*) as n FROM animaux GROUP BY projet, statut").fetchall()
+    acq_map    = {r["projet"]: r["n"] for r in acq_par_projet}
+    statut_map = {}
+    for s in statuts:
+        statut_map.setdefault(s["projet"], {})[s["statut"]] = s["n"]
+    projets = []
+    for p in projets_raw:
+        seq     = p["seq_par_animal"] or 3
+        prevues = p["nb_animaux_prevus"] * seq
+        faites  = acq_map.get(p["nom"], 0)
+        pct     = round(faites / prevues * 100) if prevues else 0
+        sm      = statut_map.get(p["nom"], {})
+        projets.append({"nom": p["nom"], "resp": p["resp"],
+                        "nb_prevus": p["nb_animaux_prevus"],
+                        "seq_par_animal": seq,
+                        "prevues": prevues, "faites": faites, "pct": pct,
+                        "nb_ok":      sm.get("ok", 0),
+                        "nb_attente": sm.get("en_attente", 0),
+                        "nb_cours":   sm.get("en_cours", 0),
+                        "nb_refaire": sm.get("a_refaire", 0)})
+    return render_template("archive.html", projets=projets)
+
+
+@app.route("/api/projets/<nom>/statut", methods=["PATCH"])
+@login_required
+@role_required("admin")
+def api_projets_statut(nom):
+    data   = request.json or {}
+    statut = data.get("statut", "").strip()
+    if statut not in ("actif", "terminé"):
+        return jsonify({"error": "Statut invalide (actif ou terminé)"}), 400
+    with get_db() as db:
+        updated = db.execute(
+            "UPDATE projets SET statut=? WHERE nom=?", (statut, nom)
+        ).rowcount
+        db.commit()
+    if not updated:
+        return jsonify({"error": "Projet introuvable"}), 404
+    return jsonify({"ok": True, "nom": nom, "statut": statut})
+
 
 @app.route("/import")
 @login_required
@@ -1632,7 +1807,7 @@ def api_change_password(user_id):
     if not updated:
         return jsonify({"error": "Utilisateur introuvable"}), 404
 
-    log_connexion(current_user.username, "password_change", request.remote_addr or "")
+    log_connexion(current_user.username, "password_change", get_real_ip())
     return jsonify({"ok": True})
 
 
@@ -2253,7 +2428,7 @@ def login_2fa():
     if not user_id:
         return redirect(url_for("login"))
 
-    ip = request.remote_addr or ""
+    ip = get_real_ip()
 
     if request.method == "POST":
         secs = get_lockout_remaining(ip)
@@ -2311,7 +2486,7 @@ def api_2fa_enable():
                    (secret, current_user.id))
         db.commit()
     session.pop("_totp_pending", None)
-    log_connexion(current_user.username, "2fa_enabled", request.remote_addr or "")
+    log_connexion(current_user.username, "2fa_enabled", get_real_ip())
     return jsonify({"ok": True})
 
 
@@ -2329,7 +2504,7 @@ def api_2fa_disable():
         db.execute("UPDATE users SET totp_secret=NULL, totp_enabled=0 WHERE id=?",
                    (current_user.id,))
         db.commit()
-    log_connexion(current_user.username, "2fa_disabled", request.remote_addr or "")
+    log_connexion(current_user.username, "2fa_disabled", get_real_ip())
     return jsonify({"ok": True})
 
 
@@ -2456,7 +2631,7 @@ def forgot_password():
     if request.method == "GET":
         return render_template("forgot_password.html")
 
-    ip       = request.remote_addr or ""
+    ip       = get_real_ip()
     username = request.form.get("username", "").strip()
     if not username:
         return render_template("forgot_password.html", error="Identifiant requis.")
@@ -2535,7 +2710,7 @@ def reset_password(token):
     if request.method == "GET":
         return render_template("reset_password.html", token=token, username=row["username"])
 
-    ip     = request.remote_addr or ""
+    ip     = get_real_ip()
     new_pw = request.form.get("password", "").strip()
     conf   = request.form.get("confirm",  "").strip()
 

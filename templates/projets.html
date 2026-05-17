@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}Projets{% endblock %}
+{% block title %}Projets en cours{% endblock %}
 {% block content %}
 
 <div class="page-header">
-  <div class="page-title">Projets</div>
-  <div class="page-sub">{{ projets | length }} projet(s) actif(s)</div>
+  <div class="page-title">Projets en cours</div>
+  <div class="page-sub">{{ projets | length }} projet(s) actif(s) · <a href="/archive" style="color:var(--hint);text-decoration:none;">voir l'archive →</a></div>
 </div>
 
 <!-- Formulaire création -->
@@ -93,9 +93,10 @@
           </div>
         </td>
         {% if current_user.role == 'admin' %}
-        <td>
+        <td style="white-space:nowrap;">
+          <button class="btn-archive-proj" onclick="archiverProjet('{{ p.nom }}')">⊡ Archiver</button>
           {% if p.faites == 0 %}
-          <button class="btn-delete-proj" onclick="deleteProjet('{{ p.nom }}')">✕ Supprimer</button>
+          <button class="btn-delete-proj" style="margin-left:6px;" onclick="deleteProjet('{{ p.nom }}')">✕ Supprimer</button>
           {% endif %}
         </td>
         {% endif %}
@@ -118,12 +119,15 @@
   .msg-box { font-family:var(--font-mono);font-size:11px;border-radius:3px;padding:8px 12px;margin-bottom:4px;line-height:1.8; }
   .msg-error   { color:var(--red);  background:var(--red-bg);  border:1px solid rgba(220,38,38,0.2); }
   .msg-success { color:var(--teal); background:var(--teal-bg); border:1px solid rgba(13,148,112,0.2); }
-  .btn-delete-proj {
-    font-family:var(--font-mono);font-size:11px;background:transparent;color:var(--hint);
+  .btn-delete-proj, .btn-archive-proj {
+    font-family:var(--font-mono);font-size:11px;background:transparent;
     border:1px solid var(--border);border-radius:3px;padding:3px 10px;cursor:pointer;
     transition:color 0.15s,border-color 0.15s;
   }
+  .btn-delete-proj { color:var(--hint); }
   .btn-delete-proj:hover { color:var(--red);border-color:rgba(220,38,38,0.3); }
+  .btn-archive-proj { color:var(--muted); }
+  .btn-archive-proj:hover { color:var(--teal);border-color:var(--teal); }
 </style>
 
 <script>
@@ -192,6 +196,25 @@ async function createProjet() {
       <td><button class="btn-delete-proj" onclick="deleteProjet('${data.nom}')">✕ Supprimer</button></td>
       {% endif %}`;
     tbody.appendChild(tr);
+  }
+}
+
+async function archiverProjet(nom) {
+  const label = nom.replace(/_/g, ' ');
+  if (!confirm(`Archiver le projet « ${label} » ?\nIl ne sera plus visible dans "Projets en cours" mais reste accessible depuis l'Archive.`)) return;
+  const res  = await fetch(`/api/projets/${nom}/statut`, {
+    method: 'PATCH', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ statut: 'terminé' })
+  });
+  const data = await res.json();
+  if (!res.ok) { alert(data.error || 'Erreur.'); return; }
+  document.getElementById(`proj-row-${nom}`)?.remove();
+  // Afficher un lien vers l'archive si la table est vide
+  if (!document.querySelector('#projets-tbody tr[data-search]')) {
+    document.getElementById('projets-tbody').innerHTML =
+      `<tr id="empty-row"><td colspan="8" style="text-align:center;color:var(--hint);padding:24px;">
+        Aucun projet en cours. <a href="/archive" style="color:var(--teal);">Voir l'archive →</a>
+      </td></tr>`;
   }
 }
 

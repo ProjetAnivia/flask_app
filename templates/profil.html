@@ -17,7 +17,8 @@
     </div>
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;">
       <span class="mono" style="color:var(--hint);">Rôle</span>
-      {% if current_user.role == "admin" %}<span class="pill pill-admin">admin</span>
+      {% if current_user.username == "admin" %}<span class="pill pill-admin">sudo</span>
+      {% elif current_user.role == "admin" %}<span class="pill pill-admin-green">admin</span>
       {% elif current_user.role == "operateur" %}<span class="pill pill-op">opérateur</span>
       {% else %}<span class="pill pill-obs">observateur</span>{% endif %}
     </div>
