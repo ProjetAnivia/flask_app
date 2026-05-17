@@ -583,6 +583,10 @@ def _send_email(to_addr: str, subject: str, body: str) -> tuple[bool, str]:
                 if resp.status in (200, 201):
                     return True, ""
                 return False, f"Resend HTTP {resp.status}"
+        except _urllib_req.HTTPError as e:
+            err_body = e.read().decode(errors="replace")
+            app.logger.error("Resend API failed: %s %s", e, err_body)
+            return False, f"Resend {e.code}: {err_body}"
         except Exception as e:
             app.logger.error("Resend API failed: %s", e)
             return False, str(e)
