@@ -584,10 +584,10 @@ def send_reset_email(to_addr: str, username: str, token: str) -> bool:
         return False
 
 
-def send_verification_email(to_addr: str, username: str, token: str) -> bool:
-    """Envoie un email de vérification d'adresse. Retourne True si envoyé."""
+def send_verification_email(to_addr: str, username: str, token: str) -> tuple[bool, str]:
+    """Envoie un email de vérification d'adresse. Retourne (True, '') ou (False, erreur)."""
     if not SMTP_HOST or not to_addr:
-        return False
+        return False, "SMTP non configuré"
     link = f"{APP_URL}/verify-email/{token}"
     body = (
         f"Bonjour {username},\n\n"
@@ -605,10 +605,10 @@ def send_verification_email(to_addr: str, username: str, token: str) -> bool:
             if SMTP_USER:
                 s.login(SMTP_USER, SMTP_PASS)
             s.sendmail(SMTP_USER or SMTP_FROM, to_addr, msg.as_string())
-        return True
+        return True, ""
     except Exception as e:
         app.logger.error("send_verification_email failed: %s", e)
-        return False
+        return False, str(e)
 
 
 def validate_password(pw: str) -> str | None:
@@ -943,10 +943,10 @@ def api_update_email(user_id):
         if not SMTP_HOST:
             return jsonify({"ok": True, "verified": False,
                             "warning": "Email sauvegardé. SMTP non configuré — vérifiez les variables d'environnement."})
-        sent = send_verification_email(email, current_user.username, token)
+        sent, smtp_err = send_verification_email(email, current_user.username, token)
         if not sent:
             return jsonify({"ok": True, "verified": False,
-                            "warning": "Email sauvegardé mais l'envoi a échoué. Vérifiez les logs SMTP."})
+                            "warning": f"Email sauvegardé mais l'envoi a échoué : {smtp_err}"})
     return jsonify({"ok": True, "verified": False,
                     "msg": "Un email de vérification a été envoyé." if email else "Email supprimé."})
 
