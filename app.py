@@ -15,7 +15,7 @@ from flask_login import LoginManager, UserMixin, login_user, login_required, log
 from functools import wraps
 from pathlib import Path
 import json, sqlite3, hashlib, os, re, csv, io, socket, threading, bcrypt as _bcrypt, secrets, calendar as _cal, random, time
-import smtplib, urllib.request as _urllib_req
+import smtplib, urllib.request as _urllib_req, urllib.parse as _urllib_parse
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
@@ -52,13 +52,16 @@ app.config.update(
     SESSION_COOKIE_SECURE    = os.environ.get("HTTPS_ENABLED", "").lower() == "true",
 )
 
-# ── SMTP (optionnel — pour les réinitialisations de mot de passe par email) ──
+# ── Email (Resend API ou SMTP fallback) ──────────────────────────────────────
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 SMTP_HOST = os.environ.get("SMTP_HOST", "")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
 SMTP_USER = os.environ.get("SMTP_USER", "")
 SMTP_PASS = os.environ.get("SMTP_PASS", "")
 SMTP_FROM = os.environ.get("SMTP_FROM", "noreply@irm-fair.local")
+EMAIL_FROM = os.environ.get("EMAIL_FROM", "IRM.FAIR <onboarding@resend.dev>")
 APP_URL   = os.environ.get("APP_URL",   "http://localhost:5001")
+EMAIL_CONFIGURED = bool(RESEND_API_KEY or SMTP_HOST)
 
 # ── reCAPTCHA v2 (optionnel — désactivé si clés absentes) ───────────────────
 RECAPTCHA_SITE_KEY   = os.environ.get("RECAPTCHA_SITE_KEY",   "")
@@ -554,10 +557,57 @@ def get_lockout_remaining(ip: str) -> int:
     return max(0, int(secs))
 
 
-def send_reset_email(to_addr: str, username: str, token: str) -> bool:
-    """Envoie un email de réinitialisation si SMTP est configuré. Retourne True si envoyé."""
-    if not SMTP_HOST or not to_addr:
-        return False
+def _send_email(to_addr: str, subject: str, body: str) -> tuple[bool, str]:
+    """Envoie un email via Resend API (prioritaire) ou SMTP fallback."""
+    if not to_addr:
+        return False, "Pas d'adresse destinataire"
+
+    if RESEND_API_KEY:
+        try:
+            payload = json.dumps({
+                "from": EMAIL_FROM,
+                "to": [to_addr],
+                "subject": subject,
+                "text": body,
+            }).encode()
+            req = _urllib_req.Request(
+                "https://api.resend.com/emails",
+                data=payload,
+                headers={
+                    "Authorization": f"Bearer {RESEND_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+            with _urllib_req.urlopen(req, timeout=10) as resp:
+                if resp.status in (200, 201):
+                    return True, ""
+                return False, f"Resend HTTP {resp.status}"
+        except Exception as e:
+            app.logger.error("Resend API failed: %s", e)
+            return False, str(e)
+
+    if SMTP_HOST:
+        try:
+            msg = MIMEMultipart()
+            msg["From"]    = SMTP_FROM
+            msg["To"]      = to_addr
+            msg["Subject"] = subject
+            msg.attach(MIMEText(body, "plain", "utf-8"))
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as s:
+                s.ehlo(); s.starttls()
+                if SMTP_USER:
+                    s.login(SMTP_USER, SMTP_PASS)
+                s.sendmail(SMTP_USER or SMTP_FROM, to_addr, msg.as_string())
+            return True, ""
+        except Exception as e:
+            app.logger.error("SMTP failed: %s", e)
+            return False, str(e)
+
+    return False, "Email non configuré (ni RESEND_API_KEY ni SMTP_HOST)"
+
+
+def send_reset_email(to_addr: str, username: str, token: str) -> tuple[bool, str]:
     reset_url = f"{APP_URL}/reset-password/{token}"
     body = (
         f"Bonjour {username},\n\n"
@@ -566,49 +616,17 @@ def send_reset_email(to_addr: str, username: str, token: str) -> bool:
         f"Si vous n'êtes pas à l'origine de cette demande, ignorez cet email.\n\n"
         f"— IRM.FAIR"
     )
-    try:
-        msg = MIMEMultipart()
-        msg["From"]    = SMTP_FROM
-        msg["To"]      = to_addr
-        msg["Subject"] = "IRM.FAIR — Réinitialisation de mot de passe"
-        msg.attach(MIMEText(body, "plain", "utf-8"))
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as s:
-            s.ehlo()
-            s.starttls()
-            if SMTP_USER:
-                s.login(SMTP_USER, SMTP_PASS)
-            s.sendmail(SMTP_USER or SMTP_FROM, to_addr, msg.as_string())
-        return True
-    except Exception as e:
-        app.logger.error("send_reset_email failed: %s", e)
-        return False
+    return _send_email(to_addr, "IRM.FAIR — Réinitialisation de mot de passe", body)
 
 
 def send_verification_email(to_addr: str, username: str, token: str) -> tuple[bool, str]:
-    """Envoie un email de vérification d'adresse. Retourne (True, '') ou (False, erreur)."""
-    if not SMTP_HOST or not to_addr:
-        return False, "SMTP non configuré"
     link = f"{APP_URL}/verify-email/{token}"
     body = (
         f"Bonjour {username},\n\n"
         f"Cliquez sur le lien suivant pour vérifier votre adresse email :\n{link}\n\n"
         f"Ce lien expire dans 24 heures.\n\n— IRM.FAIR"
     )
-    try:
-        msg = MIMEMultipart()
-        msg["From"]    = SMTP_FROM
-        msg["To"]      = to_addr
-        msg["Subject"] = "IRM.FAIR — Vérification de votre adresse email"
-        msg.attach(MIMEText(body, "plain", "utf-8"))
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as s:
-            s.ehlo(); s.starttls()
-            if SMTP_USER:
-                s.login(SMTP_USER, SMTP_PASS)
-            s.sendmail(SMTP_USER or SMTP_FROM, to_addr, msg.as_string())
-        return True, ""
-    except Exception as e:
-        app.logger.error("send_verification_email failed: %s", e)
-        return False, str(e)
+    return _send_email(to_addr, "IRM.FAIR — Vérification de votre adresse email", body)
 
 
 def validate_password(pw: str) -> str | None:
@@ -940,9 +958,9 @@ def api_update_email(user_id):
         )
         db.commit()
     if email and token:
-        if not SMTP_HOST:
+        if not EMAIL_CONFIGURED:
             return jsonify({"ok": True, "verified": False,
-                            "warning": "Email sauvegardé. SMTP non configuré — vérifiez les variables d'environnement."})
+                            "warning": "Email sauvegardé. Email non configuré — ajoutez RESEND_API_KEY."})
         sent, smtp_err = send_verification_email(email, current_user.username, token)
         if not sent:
             return jsonify({"ok": True, "verified": False,
@@ -1967,7 +1985,7 @@ def page_connexions():
         logs=[dict(l) for l in logs],
         nb_fail=nb_fail, total=total,
         filtre_action=filtre_action, filtre_username=filtre_username,
-        smtp_configured=bool(SMTP_HOST))
+        smtp_configured=EMAIL_CONFIGURED)
 
 
 @app.route("/api/connexions")
@@ -2264,7 +2282,7 @@ def page_profil():
         inactivity_timeout = timeout,
         user_email         = row['email'] or "",
         email_verified     = bool(row['email_verified']),
-        smtp_configured    = bool(SMTP_HOST)
+        smtp_configured    = EMAIL_CONFIGURED
     )
 
 
@@ -3138,7 +3156,7 @@ def forgot_password():
     email_addr = (u["email"] or "") if u else ""
     email_verified = bool(u["email_verified"]) if u else False
 
-    if SMTP_HOST and email_addr and email_verified:
+    if EMAIL_CONFIGURED and email_addr and email_verified:
         send_reset_email(email_addr, user["username"], token)
 
     return render_template("forgot_password.html", success=success_msg)
