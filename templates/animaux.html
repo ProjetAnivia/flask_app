@@ -40,16 +40,23 @@
   </form>
 </div>
 
+<div class="card" style="padding:14px 20px;">
+  <input class="form-input" type="text" id="search-animaux"
+         placeholder="Rechercher par ID, espèce, projet, statut…"
+         oninput="filterAnimaux(this.value)"
+         style="max-width:420px;">
+</div>
+
 <div class="card">
-  <div class="card-title">Registre — {{ animaux | length }} résultat(s)</div>
+  <div class="card-title" id="registre-title">Registre — {{ animaux | length }} résultat(s)</div>
   {% if animaux %}
   <table class="data-table">
     <thead>
       <tr><th>ID</th><th>Dossier NAS</th><th>Espèce</th><th>Projet</th><th>1ère acquisition</th><th>Nb acq.</th><th>Statut</th></tr>
     </thead>
-    <tbody>
+    <tbody id="animaux-tbody">
     {% for a in animaux %}
-      <tr>
+      <tr data-search="{{ a.animal_id | lower }} {{ a.espece | lower }} {{ a.projet | lower }} {{ a.statut | lower }}">
         <td>
           <a href="/animal/{{ a.projet }}/{{ a.animal_id }}"
              style="color:var(--teal);text-decoration:none;font-weight:500;">
@@ -77,5 +84,23 @@
     <div class="mono" style="color:var(--hint);">Aucun animal ne correspond aux filtres.</div>
   {% endif %}
 </div>
+
+<script>
+function filterAnimaux(q) {
+  q = q.toLowerCase().trim();
+  const rows  = document.querySelectorAll('#animaux-tbody tr[data-search]');
+  const title = document.getElementById('registre-title');
+  const total = {{ animaux | length }};
+  let visible = 0;
+  rows.forEach(row => {
+    const match = !q || row.dataset.search.includes(q);
+    row.style.display = match ? '' : 'none';
+    if (match) visible++;
+  });
+  if (title) title.textContent = q
+    ? `Registre — ${visible} résultat(s) sur ${total}`
+    : `Registre — ${total} résultat(s)`;
+}
+</script>
 
 {% endblock %}

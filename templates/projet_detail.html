@@ -58,6 +58,35 @@
   </div>
 </div>
 
+<!-- Protocole éthique -->
+<div class="card">
+  <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;">
+    <span>Protocole éthique</span>
+    {% if current_user.role == 'admin' or current_user.role == 'operateur' %}
+    <button class="btn-ghost" style="font-size:11px;padding:4px 12px;"
+            onclick="toggleEthiqueEdit()">Modifier</button>
+    {% endif %}
+  </div>
+  <div id="ethique-display" style="font-family:var(--font-mono);font-size:13px;color:var(--muted);">
+    {% if projet.protocole_ethique %}
+      {{ projet.protocole_ethique }}
+    {% else %}
+      <span style="color:var(--hint);">Non renseigné — numéro APAFIS ou référence éthique</span>
+    {% endif %}
+  </div>
+  <div id="ethique-edit" style="display:none;margin-top:10px;">
+    <div style="display:flex;gap:10px;align-items:center;">
+      <input class="form-input" type="text" id="ethique-input"
+             value="{{ projet.protocole_ethique or '' }}"
+             placeholder="ex : APAFIS #12345 — Université X — 2024"
+             style="flex:1;max-width:480px;">
+      <button class="btn-primary" onclick="saveEthique()">Enregistrer</button>
+      <button class="btn-ghost" onclick="toggleEthiqueEdit()">Annuler</button>
+    </div>
+    <div id="ethique-msg" style="margin-top:6px;font-family:var(--font-mono);font-size:11px;"></div>
+  </div>
+</div>
+
 <!-- Filtres -->
 <div class="card">
   <div class="card-title">Filtrer les animaux</div>
@@ -159,5 +188,34 @@
   </table>
 </div>
 {% endif %}
+
+<script>
+function toggleEthiqueEdit() {
+  const disp = document.getElementById('ethique-display');
+  const edit = document.getElementById('ethique-edit');
+  const visible = edit.style.display !== 'none';
+  disp.style.display = visible ? '' : 'none';
+  edit.style.display = visible ? 'none' : '';
+  if (!visible) document.getElementById('ethique-input').focus();
+}
+
+async function saveEthique() {
+  const val = document.getElementById('ethique-input').value.trim();
+  const msg = document.getElementById('ethique-msg');
+  msg.textContent = '';
+  try {
+    const res  = await fetch('/api/projets/{{ projet.nom }}/ethique', {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json',
+                'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]').content},
+      body: JSON.stringify({ protocole_ethique: val })
+    });
+    const data = await res.json();
+    if (!res.ok) { msg.style.color = 'var(--red)'; msg.textContent = data.error || 'Erreur.'; return; }
+    document.getElementById('ethique-display').textContent = val || 'Non renseigné';
+    toggleEthiqueEdit();
+  } catch(e) { msg.style.color = 'var(--red)'; msg.textContent = 'Erreur réseau.'; }
+}
+</script>
 
 {% endblock %}

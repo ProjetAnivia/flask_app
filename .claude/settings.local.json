@@ -8,7 +8,8 @@
       "Bash(gh --version)",
       "Bash(python3 -c \"import pyotp; print\\('pyotp ok'\\)\")",
       "Bash(python3 -c \"import qrcode; print\\('qrcode ok'\\)\")",
-      "Bash(pip3 install *)"
+      "Bash(pip3 install *)",
+      "Bash(chmod +x /Users/nolan/Documents/flask_app/setup.sh /Users/nolan/Documents/flask_app/backup.sh)"
     ]
   }
 }

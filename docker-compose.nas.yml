@@ -1,0 +1,62 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  docker-compose.nas.yml — IRM FAIR
+#  Version NAS SYNOLOGY — à utiliser pour le déploiement en production
+#
+#  Usage :
+#    docker compose -f docker-compose.nas.yml up -d --build
+#
+#  Avant de lancer, créer les dossiers sur le NAS (une seule fois) :
+#    mkdir -p /volume1/IRM_preclinique/{structured,raw,db,logs}
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  irm-app:
+    build: .
+    image: irm-fair:latest
+    container_name: irm_fair_app
+    restart: unless-stopped
+
+    ports:
+      - "5001:5000"   # accès via http://IP-DU-NAS:5001
+
+    environment:
+      # ── Obligatoire — générer avec :
+      #    python3 -c "import secrets; print(secrets.token_hex(32))"
+      - SECRET_KEY=CHANGE_THIS_SECRET_KEY_IN_PRODUCTION
+
+      # ── Chemins dans le container (ne pas modifier)
+      - NAS_ROOT=/nas/structured
+      - DB_DIR=/data
+
+      # ── HTTPS : passer à "true" si le reverse proxy Synology termine TLS
+      - HTTPS_ENABLED=false
+
+      # ── reCAPTCHA v2 (optionnel — laisser vide pour désactiver)
+      - RECAPTCHA_SITE_KEY=
+      - RECAPTCHA_SECRET_KEY=
+
+      # ── SMTP pour réinitialisation de mot de passe (optionnel)
+      #    Exemple avec Gmail : SMTP_HOST=smtp.gmail.com SMTP_PORT=587
+      - SMTP_HOST=
+      - SMTP_PORT=587
+      - SMTP_USER=
+      - SMTP_PASS=
+      - SMTP_FROM=noreply@irm-fair.local
+
+      # ── URL publique de l'app (pour les liens dans les emails)
+      - APP_URL=http://IP-DU-NAS:5001
+
+    volumes:
+      # Données IRM structurées (NIfTI, DICOM)
+      - /volume1/IRM_preclinique:/nas
+
+      # Base SQLite persistée (ne JAMAIS supprimer ce dossier)
+      - /volume1/IRM_preclinique/db:/data
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/login"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s

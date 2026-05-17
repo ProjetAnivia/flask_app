@@ -44,6 +44,14 @@ def build_animal_folder(animal_id: str, date_acq: str) -> str:
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev_secret_change_in_prod")
 
+# ── Sécurité des cookies ──────────────────────────────────────────────────────
+app.config.update(
+    SESSION_COOKIE_HTTPONLY  = True,
+    SESSION_COOKIE_SAMESITE  = "Lax",
+    # Passer HTTPS_ENABLED=true en production (reverse proxy Synology avec TLS)
+    SESSION_COOKIE_SECURE    = os.environ.get("HTTPS_ENABLED", "").lower() == "true",
+)
+
 # ── SMTP (optionnel — pour les réinitialisations de mot de passe par email) ──
 SMTP_HOST = os.environ.get("SMTP_HOST", "")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
@@ -282,9 +290,13 @@ def init_db():
         for col_sql in [
             "ALTER TABLE projets ADD COLUMN seq_par_animal INTEGER DEFAULT 3",
             "ALTER TABLE projets ADD COLUMN statut TEXT DEFAULT 'actif'",
+            "ALTER TABLE projets ADD COLUMN date_debut TEXT",
+            "ALTER TABLE projets ADD COLUMN date_fin_prevue TEXT",
             "ALTER TABLE connexions_log ADD COLUMN pays TEXT DEFAULT '—'",
             "ALTER TABLE users ADD COLUMN totp_secret TEXT",
             "ALTER TABLE users ADD COLUMN totp_enabled INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN inactivity_timeout INTEGER DEFAULT 30",
+            "ALTER TABLE projets ADD COLUMN protocole_ethique TEXT",
         ]:
             try:
                 db.execute(col_sql)
@@ -324,6 +336,92 @@ def init_db():
             ]
             for a in animaux_demo:
                 db.execute("INSERT OR IGNORE INTO animaux (animal_id,espece,projet,date_premiere_acq,nb_acquisitions,statut) VALUES (?,?,?,?,?,?)", a)
+
+        # ── Données demo mai 2026 ─────────────────────────────────────────────
+        # Injectées au démarrage si absentes — permet de visualiser l'historique
+        if db.execute(
+            "SELECT COUNT(*) FROM acquisitions WHERE date_acq LIKE '2026-05%'"
+        ).fetchone()[0] == 0:
+            # S'assurer que les projets démo existent
+            for p_nom, p_resp, p_nb in [
+                ("tumorigenese", "Clémence", 20),
+                ("inflammation",  "Florent",  15),
+                ("neuro_dev",     "Nicolas",  12),
+            ]:
+                db.execute(
+                    "INSERT OR IGNORE INTO projets (nom,resp,nb_animaux_prevus) VALUES (?,?,?)",
+                    (p_nom, p_resp, p_nb)
+                )
+            # S'assurer que les animaux démo existent
+            for a_id, esp, proj, d, nb, st in [
+                ("B3",  "Rat",    "tumorigenese", "20250301", 3, "ok"),
+                ("B5",  "Rat",    "tumorigenese", "20250301", 2, "en_attente"),
+                ("R09", "Rat",    "inflammation", "20250305", 1, "en_cours"),
+                ("R12", "Rat",    "inflammation", "20250308", 1, "a_refaire"),
+                ("S07", "Souris", "neuro_dev",    "20250310", 1, "en_attente"),
+            ]:
+                db.execute(
+                    "INSERT OR IGNORE INTO animaux "
+                    "(animal_id,espece,projet,date_premiere_acq,nb_acquisitions,statut) "
+                    "VALUES (?,?,?,?,?,?)",
+                    (a_id, esp, proj, d, nb, st)
+                )
+
+            now_str = datetime.now().isoformat()
+            may_acq = [
+                # (animal_id, projet, sequence, date_acq, statut, user)
+                ("B3",  "tumorigenese", "T1_RARE",   "2026-05-05", "ok",        "nicolas"),
+                ("B3",  "tumorigenese", "T2_MSME",   "2026-05-05", "ok",        "nicolas"),
+                ("B3",  "tumorigenese", "DTI_30dir",  "2026-05-05", "ok",        "nicolas"),
+                ("B5",  "tumorigenese", "T1_RARE",   "2026-05-06", "ok",        "clemence"),
+                ("B5",  "tumorigenese", "T2_MSME",   "2026-05-06", "a_refaire", "clemence"),
+                ("R09", "inflammation", "T2_MSME",   "2026-05-07", "ok",        "florent"),
+                ("R09", "inflammation", "BOLD_REST",  "2026-05-07", "ok",        "florent"),
+                ("R12", "inflammation", "T2_MSME",   "2026-05-08", "ok",        "florent"),
+                ("R12", "inflammation", "T1_RARE",   "2026-05-08", "a_refaire", "florent"),
+                ("B3",  "tumorigenese", "T1_RARE",   "2026-05-12", "ok",        "nicolas"),
+                ("B3",  "tumorigenese", "T2_MSME",   "2026-05-12", "ok",        "nicolas"),
+                ("R09", "inflammation", "T2_MSME",   "2026-05-14", "ok",        "florent"),
+                ("R12", "inflammation", "T2_MSME",   "2026-05-15", "ok",        "florent"),
+                ("R12", "inflammation", "T1_RARE",   "2026-05-15", "ok",        "florent"),
+                ("S07", "neuro_dev",    "T2_MSME",   "2026-05-19", "ok",        "nicolas"),
+                ("S07", "neuro_dev",    "DTI_30dir",  "2026-05-19", "ok",        "nicolas"),
+                ("S07", "neuro_dev",    "T1_RARE",   "2026-05-20", "ok",        "nicolas"),
+                ("B5",  "tumorigenese", "T1_RARE",   "2026-05-21", "ok",        "clemence"),
+                ("B5",  "tumorigenese", "T2_MSME",   "2026-05-21", "ok",        "clemence"),
+                ("B3",  "tumorigenese", "T1_RARE",   "2026-05-26", "ok",        "clemence"),
+                ("B3",  "tumorigenese", "T2_MSME",   "2026-05-26", "ok",        "clemence"),
+                ("B3",  "tumorigenese", "DTI_30dir",  "2026-05-26", "ok",        "clemence"),
+                ("R09", "inflammation", "T2_MSME",   "2026-05-27", "ok",        "florent"),
+                ("R09", "inflammation", "BOLD_REST",  "2026-05-27", "ok",        "florent"),
+                ("S07", "neuro_dev",    "T2_MSME",   "2026-05-28", "ok",        "nicolas"),
+            ]
+            for a_id, proj, seq, date_acq, statut, user in may_acq:
+                date_clean = re.sub(r"[^0-9]", "", date_acq)[:8]
+                animal_folder = f"{date_clean}_{sanitize_animal_id(a_id)}"
+                seq_folder    = sanitize_animal_id(seq)
+                fiche         = f"{proj}/{animal_folder}/{seq_folder}/{a_id}_{seq}.nii.gz"
+                db.execute(
+                    "INSERT INTO acquisitions "
+                    "(animal_id,projet,sequence,date_acq,fichier_dest,statut,importé_par,importé_le) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
+                    (a_id, proj, seq, date_acq, fiche, statut, user, now_str)
+                )
+                # Créer la structure de dossiers sur le NAS simulé
+                nas_folder = NAS_ROOT / proj / animal_folder / seq_folder
+                nas_folder.mkdir(parents=True, exist_ok=True)
+                nii = nas_folder / f"{a_id}_{seq}.nii.gz"
+                if not nii.exists():
+                    nii.touch()
+
+            # Mettre à jour nb_acquisitions des animaux concernés
+            for a_id in {r[0] for r in may_acq}:
+                db.execute(
+                    "UPDATE animaux SET nb_acquisitions=("
+                    "  SELECT COUNT(*) FROM acquisitions WHERE animal_id=?"
+                    ") WHERE animal_id=?",
+                    (a_id, a_id)
+                )
 
         db.commit()
 
@@ -578,6 +676,8 @@ def login():
                 session["_2fa_username"] = row["username"]
                 return redirect(url_for("login_2fa"))
             login_user(User(row["id"], row["username"], row["role"]))
+            session['_last_activity']      = datetime.utcnow().isoformat()
+            session['_inactivity_timeout'] = int(row['inactivity_timeout']) if row['inactivity_timeout'] is not None else 30
             log_connexion(row["username"], "login", ip)
             return redirect(url_for("dashboard"))
 
@@ -593,6 +693,158 @@ def login():
         return _render(error=err)
 
     return _render()
+
+# ─────────────────────────────────────────────────
+#  SÉCURITÉ — headers & CSRF
+# ─────────────────────────────────────────────────
+
+@app.after_request
+def set_security_headers(resp):
+    resp.headers.setdefault("X-Frame-Options",          "SAMEORIGIN")
+    resp.headers.setdefault("X-Content-Type-Options",   "nosniff")
+    resp.headers.setdefault("X-XSS-Protection",         "1; mode=block")
+    resp.headers.setdefault("Referrer-Policy",          "strict-origin-when-cross-origin")
+    resp.headers.setdefault("Content-Security-Policy",
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://www.google.com https://www.gstatic.com; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "frame-src https://www.google.com; "
+        "img-src 'self' data: https:; "
+        "connect-src 'self';"
+    )
+    return resp
+
+@app.context_processor
+def inject_csrf():
+    if "csrf_token" not in session:
+        session["csrf_token"] = secrets.token_hex(32)
+    return {"csrf_token": session["csrf_token"]}
+
+# Chemins exemptés de la vérification CSRF (flux non-authentifiés)
+_CSRF_EXEMPT_PREFIXES = ("/reset-password/",)
+_CSRF_EXEMPT_EXACT    = {"/forgot-password"}
+
+@app.before_request
+def csrf_protect():
+    if "csrf_token" not in session:
+        session["csrf_token"] = secrets.token_hex(32)
+
+    if request.method not in ("POST", "PUT", "PATCH", "DELETE"):
+        return
+
+    path = request.path
+    if path in _CSRF_EXEMPT_EXACT:
+        return
+    if any(path.startswith(p) for p in _CSRF_EXEMPT_PREFIXES):
+        return
+
+    token_sent = (
+        request.headers.get("X-CSRF-Token")
+        or request.form.get("csrf_token")
+        or (request.is_json and (request.json or {}).get("csrf_token"))
+    )
+    if token_sent != session.get("csrf_token"):
+        if path.startswith("/api/"):
+            return jsonify({"error": "Token CSRF invalide — rechargez la page"}), 403
+        return render_template("403.html"), 403
+
+
+@app.before_request
+def check_inactivity():
+    _exempt = {'login', 'logout', 'unlock', 'static', 'login_2fa',
+               'forgot_password', 'reset_password_token'}
+    if not request.endpoint or request.endpoint in _exempt:
+        return
+    if not current_user.is_authenticated:
+        return
+
+    # Session verrouillée → JSON pour les appels API, redirect sinon
+    if session.get('_locked'):
+        if request.path.startswith('/api/'):
+            return jsonify({"error": "session_locked"}), 401
+        return redirect(url_for('unlock'))
+
+    # Timeout mis en cache dans la session (évite une requête DB par hit)
+    timeout_min = session.get('_inactivity_timeout')
+    if timeout_min is None:
+        with get_db() as db:
+            row = db.execute(
+                "SELECT inactivity_timeout FROM users WHERE id=?",
+                (current_user.id,)
+            ).fetchone()
+        timeout_min = int(row['inactivity_timeout']) if row and row['inactivity_timeout'] is not None else 30
+        session['_inactivity_timeout'] = timeout_min
+
+    if timeout_min == 0:  # désactivé
+        session['_last_activity'] = datetime.utcnow().isoformat()
+        return
+
+    last = session.get('_last_activity')
+    if last:
+        try:
+            elapsed = (datetime.utcnow() - datetime.fromisoformat(last)).total_seconds()
+            if elapsed > timeout_min * 60:
+                session['_locked']      = True
+                session['_lock_return'] = request.path
+                return redirect(url_for('unlock'))
+        except (ValueError, TypeError):
+            pass
+
+    session['_last_activity'] = datetime.utcnow().isoformat()
+
+
+@app.route("/unlock", methods=["GET", "POST"])
+@login_required
+def unlock():
+    # Verrouillage manuel depuis le menu (bouton "Verrouiller")
+    if request.args.get('force') == '1' and not session.get('_locked'):
+        session['_locked']      = True
+        session['_lock_return'] = '/'
+
+    if not session.get('_locked'):
+        return redirect(url_for('dashboard'))
+
+    error = None
+    if request.method == "POST":
+        # Bouton déconnexion
+        if request.form.get('action') == 'logout':
+            uname = current_user.username
+            logout_user()
+            session.clear()
+            log_connexion(uname, "logout", get_real_ip())
+            return redirect(url_for('login'))
+
+        password = request.form.get("password", "")
+        with get_db() as db:
+            row = db.execute("SELECT * FROM users WHERE id=?",
+                             (current_user.id,)).fetchone()
+        if row and verify_pw(password, row["password"]):
+            session.pop('_locked', None)
+            session['_last_activity'] = datetime.utcnow().isoformat()
+            return redirect(session.pop('_lock_return', '/'))
+        error = "Mot de passe incorrect."
+
+    return render_template("lock.html", error=error, username=current_user.username)
+
+
+@app.route("/api/users/<int:user_id>/inactivity_timeout", methods=["PATCH"])
+@login_required
+def api_inactivity_timeout(user_id):
+    if current_user.id != user_id:
+        return jsonify({"error": "Non autorisé"}), 403
+    data    = request.json or {}
+    timeout = data.get("timeout")
+    if timeout not in (0, 1, 2, 5, 10, 15, 30, 60, 120):
+        return jsonify({"error": "Valeur invalide"}), 400
+    with get_db() as db:
+        db.execute("UPDATE users SET inactivity_timeout=? WHERE id=?",
+                   (timeout, user_id))
+        db.commit()
+    session['_inactivity_timeout'] = timeout
+    session['_last_activity']      = datetime.utcnow().isoformat()
+    return jsonify({"ok": True, "timeout": timeout})
+
 
 @app.route("/logout")
 @login_required
@@ -715,13 +967,18 @@ def page_projets():
         faites  = acq_map.get(p["nom"], 0)
         pct     = round(faites / prevues * 100) if prevues else 0
         sm      = statut_map.get(p["nom"], {})
+        fin   = p["date_fin_prevue"] or ""
+        retard = bool(fin and fin < datetime.now().strftime("%Y-%m-%d") and pct < 100)
         projets.append({"nom": p["nom"], "resp": p["resp"],
                         "nb_prevus": p["nb_animaux_prevus"],
                         "seq_par_animal": seq,
                         "prevues": prevues, "faites": faites, "pct": pct,
                         "couleur": "teal" if pct >= 75 else ("amber" if pct >= 40 else "red"),
                         "nb_ok": sm.get("ok", 0), "nb_attente": sm.get("en_attente", 0),
-                        "nb_cours": sm.get("en_cours", 0), "nb_refaire": sm.get("a_refaire", 0)})
+                        "nb_cours": sm.get("en_cours", 0), "nb_refaire": sm.get("a_refaire", 0),
+                        "date_debut": p["date_debut"] or "",
+                        "date_fin_prevue": fin, "retard": retard,
+                        "protocole_ethique": p["protocole_ethique"] or ""})
     return render_template("projets.html", projets=projets)
 
 @app.route("/archive")
@@ -753,6 +1010,42 @@ def page_archive():
                         "nb_cours":   sm.get("en_cours", 0),
                         "nb_refaire": sm.get("a_refaire", 0)})
     return render_template("archive.html", projets=projets)
+
+
+@app.route("/api/projets/<nom>/dates", methods=["PATCH"])
+@login_required
+@role_required("admin")
+def api_projets_dates(nom):
+    data  = request.json or {}
+    debut = data.get("date_debut", "").strip()
+    fin   = data.get("date_fin_prevue", "").strip()
+    # Validation format YYYY-MM-DD
+    for d in (debut, fin):
+        if d and not re.match(r"^\d{4}-\d{2}-\d{2}$", d):
+            return jsonify({"error": "Format date invalide (AAAA-MM-JJ)"}), 400
+    with get_db() as db:
+        db.execute(
+            "UPDATE projets SET date_debut=?, date_fin_prevue=? WHERE nom=?",
+            (debut or None, fin or None, nom)
+        )
+        db.commit()
+    return jsonify({"ok": True, "nom": nom, "date_debut": debut, "date_fin_prevue": fin})
+
+
+@app.route("/api/projets/<nom>/ethique", methods=["PATCH"])
+@login_required
+@role_required("admin", "operateur")
+def api_projets_ethique(nom):
+    data  = request.json or {}
+    proto = data.get("protocole_ethique", "").strip()
+    with get_db() as db:
+        updated = db.execute(
+            "UPDATE projets SET protocole_ethique=? WHERE nom=?", (proto or None, nom)
+        ).rowcount
+        db.commit()
+    if not updated:
+        return jsonify({"error": "Projet introuvable"}), 404
+    return jsonify({"ok": True, "protocole_ethique": proto})
 
 
 @app.route("/api/projets/<nom>/statut", methods=["PATCH"])
@@ -1814,7 +2107,11 @@ def api_change_password(user_id):
 @app.route("/profil")
 @login_required
 def page_profil():
-    return render_template("profil.html")
+    with get_db() as db:
+        row = db.execute("SELECT inactivity_timeout FROM users WHERE id=?",
+                         (current_user.id,)).fetchone()
+    timeout = int(row['inactivity_timeout']) if row and row['inactivity_timeout'] is not None else 30
+    return render_template("profil.html", inactivity_timeout=timeout)
 
 
 # ─────────────────────────────────────────────────
@@ -2446,6 +2743,8 @@ def login_2fa():
                 session.pop("_2fa_user_id",  None)
                 session.pop("_2fa_username", None)
                 login_user(User(row["id"], row["username"], row["role"]))
+                session['_last_activity']      = datetime.utcnow().isoformat()
+                session['_inactivity_timeout'] = int(row['inactivity_timeout']) if row['inactivity_timeout'] is not None else 30
                 log_connexion(row["username"], "login", ip)
                 return redirect(url_for("dashboard"))
 
@@ -2806,6 +3105,29 @@ def page_calendrier():
         next_year=next_dt.year, next_month=next_dt.month,
         today_day=now.day if (now.year == year and now.month == month) else -1,
     )
+
+
+# ─────────────────────────────────────────────────
+#  GESTIONNAIRES D'ERREURS
+# ─────────────────────────────────────────────────
+
+@app.errorhandler(404)
+def error_404(e):
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "Ressource introuvable"}), 404
+    return render_template("404.html"), 404
+
+@app.errorhandler(403)
+def error_403(e):
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "Accès refusé"}), 403
+    return render_template("403.html"), 403
+
+@app.errorhandler(500)
+def error_500(e):
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "Erreur interne du serveur"}), 500
+    return render_template("500.html"), 500
 
 
 # Appelé au démarrage quel que soit le mode (gunicorn ou python3 app.py)

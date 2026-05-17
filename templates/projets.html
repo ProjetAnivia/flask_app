@@ -36,12 +36,27 @@
   </div>
 </div>
 
-<!-- Recherche -->
+<!-- Recherche + Filtres -->
 <div class="card" style="padding:14px 20px;">
-  <input class="form-input" type="text" id="search-proj"
-         placeholder="Rechercher par nom ou responsable…"
-         oninput="filterProjets(this.value)"
-         style="max-width:400px;">
+  <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+    <input class="form-input" type="text" id="search-proj"
+           placeholder="Rechercher par nom ou responsable…"
+           oninput="applyFilters()"
+           style="flex:1;min-width:200px;max-width:340px;">
+    <select class="form-select" id="filter-resp" onchange="applyFilters()" style="width:190px;">
+      <option value="">Tous les responsables</option>
+      {% set seen = [] %}
+      {% for p in projets %}{% if p.resp and p.resp not in seen %}
+        <option value="{{ p.resp | lower }}">{{ p.resp }}</option>
+        {% if seen.append(p.resp) %}{% endif %}
+      {% endif %}{% endfor %}
+    </select>
+    <select class="form-select" id="filter-retard" onchange="applyFilters()" style="width:170px;">
+      <option value="">Tous les statuts</option>
+      <option value="retard">En retard</option>
+      <option value="ok">Dans les délais</option>
+    </select>
+  </div>
 </div>
 
 <!-- Liste des projets -->
@@ -56,16 +71,24 @@
         <th>Acquisitions</th>
         <th>Avancement</th>
         <th>Statuts animaux</th>
+        <th>Début</th>
+        <th>Fin prévue</th>
         {% if current_user.role == 'admin' %}<th></th>{% endif %}
       </tr>
     </thead>
     <tbody id="projets-tbody">
     {% for p in projets %}
-      <tr id="proj-row-{{ p.nom }}" data-search="{{ p.nom }} {{ p.resp | lower }}">
+      <tr id="proj-row-{{ p.nom }}"
+          data-search="{{ p.nom }} {{ p.resp | lower }}"
+          data-resp="{{ p.resp | lower }}"
+          data-retard="{{ '1' if p.retard else '0' }}">
         <td>
-          <a href="/projet/{{ p.nom }}" style="color:var(--teal);text-decoration:none;font-weight:500;">
-            {{ p.nom | replace("_"," ") | title }}
-          </a>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <a href="/projet/{{ p.nom }}" style="color:var(--teal);text-decoration:none;font-weight:500;">
+              {{ p.nom | replace("_"," ") | title }}
+            </a>
+            {% if p.retard %}<span class="pill pill-redo" style="font-size:9px;padding:1px 6px;">retard</span>{% endif %}
+          </div>
         </td>
         <td class="mono">{{ p.resp or "—" }}</td>
         <td class="mono">{{ p.nb_prevus }}</td>
@@ -92,6 +115,17 @@
             {% endif %}
           </div>
         </td>
+        <td class="mono" style="font-size:11px;color:var(--muted);">{{ p.date_debut or "—" }}</td>
+        <td class="date-fin-cell" data-nom="{{ p.nom }}" data-pct="{{ p.pct }}">
+          <span class="date-display mono" style="font-size:11px;cursor:pointer;border-bottom:1px dashed var(--border2);"
+                onclick="editDate(this)"
+                title="Cliquer pour modifier">{{ p.date_fin_prevue or "—" }}</span>
+          <input type="date" class="form-input date-input"
+                 style="display:none;width:140px;padding:4px 8px;font-size:11px;"
+                 value="{{ p.date_fin_prevue }}"
+                 onblur="saveDate(this)"
+                 onkeydown="if(event.key==='Enter')this.blur();if(event.key==='Escape')cancelDate(this)">
+        </td>
         {% if current_user.role == 'admin' %}
         <td style="white-space:nowrap;">
           <button class="btn-archive-proj" onclick="archiverProjet('{{ p.nom }}')">⊡ Archiver</button>
@@ -103,7 +137,8 @@
       </tr>
     {% else %}
       <tr id="empty-row">
-        <td colspan="8" style="text-align:center;color:var(--hint);padding:24px;">
+        <td colspan="{% if current_user.role == 'admin' %}10{% else %}9{% endif %}"
+            style="text-align:center;color:var(--hint);padding:24px;">
           Aucun projet. Créez-en un ci-dessus.
         </td>
       </tr>
@@ -131,17 +166,70 @@
 </style>
 
 <script>
-function filterProjets(q) {
-  q = q.toLowerCase().trim();
-  const rows    = document.querySelectorAll('#projets-tbody tr[data-search]');
-  const noRes   = document.getElementById('no-results');
-  let visible   = 0;
+function applyFilters() {
+  const q      = (document.getElementById('search-proj').value || '').toLowerCase().trim();
+  const resp   = (document.getElementById('filter-resp').value || '').toLowerCase();
+  const retard = document.getElementById('filter-retard').value;
+  const rows   = document.querySelectorAll('#projets-tbody tr[data-search]');
+  const noRes  = document.getElementById('no-results');
+  let visible  = 0;
   rows.forEach(row => {
-    const match = !q || row.dataset.search.includes(q);
-    row.style.display = match ? '' : 'none';
-    if (match) visible++;
+    const matchQ      = !q      || row.dataset.search.includes(q);
+    const matchResp   = !resp   || (row.dataset.resp || '') === resp;
+    const isRetard    = row.dataset.retard === '1';
+    const matchRetard = !retard || (retard === 'retard' ? isRetard : !isRetard);
+    const show = matchQ && matchResp && matchRetard;
+    row.style.display = show ? '' : 'none';
+    if (show) visible++;
   });
-  noRes.style.display = (visible === 0 && q) ? 'block' : 'none';
+  noRes.style.display = visible === 0 ? 'block' : 'none';
+}
+
+function editDate(span) {
+  const inp = span.nextElementSibling;
+  span.style.display = 'none';
+  inp.style.display = '';
+  inp.focus();
+}
+function cancelDate(inp) {
+  inp.style.display = 'none';
+  inp.previousElementSibling.style.display = '';
+}
+async function saveDate(inp) {
+  const td  = inp.closest('.date-fin-cell');
+  const nom = td.dataset.nom;
+  const pct = parseInt(td.dataset.pct) || 0;
+  const val = inp.value;
+  const span = inp.previousElementSibling;
+
+  try {
+    const res = await fetch(`/api/projets/${nom}/dates`, {
+      method: 'PATCH', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ date_fin_prevue: val })
+    });
+    if (res.ok) {
+      span.textContent = val || '—';
+      const today   = new Date().toISOString().slice(0, 10);
+      const retard  = val && val < today && pct < 100;
+      const row     = td.closest('tr');
+      row.dataset.retard = retard ? '1' : '0';
+      const badge   = row.querySelector('.pill-redo[data-retard-badge]');
+      const nameCell = row.querySelector('td:first-child div');
+      if (retard && !badge && nameCell) {
+        const s = document.createElement('span');
+        s.className = 'pill pill-redo';
+        s.setAttribute('data-retard-badge','1');
+        s.style.cssText = 'font-size:9px;padding:1px 6px;';
+        s.textContent = 'retard';
+        nameCell.appendChild(s);
+      } else if (!retard && badge) {
+        badge.remove();
+      }
+    }
+  } catch(e) { /* keep old value on error */ }
+
+  inp.style.display = 'none';
+  span.style.display = '';
 }
 
 async function createProjet() {
@@ -179,8 +267,10 @@ async function createProjet() {
     const tr      = document.createElement('tr');
     tr.id = `proj-row-${data.nom}`;
     tr.dataset.search = `${data.nom} ${(resp || '').toLowerCase()}`;
+    tr.dataset.resp   = (resp || '').toLowerCase();
+    tr.dataset.retard = '0';
     tr.innerHTML = `
-      <td><a href="/projet/${data.nom}" style="color:var(--teal);text-decoration:none;font-weight:500;">${label}</a></td>
+      <td><div style="display:flex;align-items:center;gap:6px;"><a href="/projet/${data.nom}" style="color:var(--teal);text-decoration:none;font-weight:500;">${label}</a></div></td>
       <td class="mono">${resp || '—'}</td>
       <td class="mono">${nb}</td>
       <td class="mono">${seqReal}</td>
@@ -192,6 +282,15 @@ async function createProjet() {
         </div>
       </td>
       <td><span class="mono" style="color:var(--hint);">—</span></td>
+      <td class="mono" style="font-size:11px;color:var(--muted);">—</td>
+      <td class="date-fin-cell" data-nom="${data.nom}" data-pct="0">
+        <span class="date-display mono" style="font-size:11px;cursor:pointer;border-bottom:1px dashed var(--border2);"
+              onclick="editDate(this)" title="Cliquer pour modifier">—</span>
+        <input type="date" class="form-input date-input"
+               style="display:none;width:140px;padding:4px 8px;font-size:11px;"
+               onblur="saveDate(this)"
+               onkeydown="if(event.key==='Enter')this.blur();if(event.key==='Escape')cancelDate(this)">
+      </td>
       {% if current_user.role == 'admin' %}
       <td><button class="btn-delete-proj" onclick="deleteProjet('${data.nom}')">✕ Supprimer</button></td>
       {% endif %}`;
@@ -211,8 +310,9 @@ async function archiverProjet(nom) {
   document.getElementById(`proj-row-${nom}`)?.remove();
   // Afficher un lien vers l'archive si la table est vide
   if (!document.querySelector('#projets-tbody tr[data-search]')) {
+    const cols = {{ 10 if current_user.role == 'admin' else 9 }};
     document.getElementById('projets-tbody').innerHTML =
-      `<tr id="empty-row"><td colspan="8" style="text-align:center;color:var(--hint);padding:24px;">
+      `<tr id="empty-row"><td colspan="${cols}" style="text-align:center;color:var(--hint);padding:24px;">
         Aucun projet en cours. <a href="/archive" style="color:var(--teal);">Voir l'archive →</a>
       </td></tr>`;
   }

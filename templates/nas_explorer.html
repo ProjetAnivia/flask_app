@@ -42,6 +42,38 @@
        display:flex;flex-wrap:wrap;gap:16px;"></div>
 </div>
 
+<!-- Modal alias -->
+<div id="alias-overlay" onclick="closeAliasModal()"
+     style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);
+            z-index:500;align-items:center;justify-content:center;">
+  <div onclick="event.stopPropagation()"
+       style="background:var(--bg2);border-radius:10px;padding:24px;
+              max-width:420px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.18);">
+    <div style="font-family:var(--font-mono);font-size:9px;letter-spacing:.12em;
+                text-transform:uppercase;color:var(--hint);margin-bottom:6px;">Alias personnel</div>
+    <div id="alias-path-display"
+         style="font-size:11px;color:var(--muted);font-family:var(--font-mono);
+                margin-bottom:16px;word-break:break-all;padding:8px 10px;
+                background:var(--bg3);border-radius:4px;"></div>
+    <div class="form-row" style="margin-bottom:12px;">
+      <label class="form-label">Nom d'affichage personnalisé</label>
+      <input class="form-input" type="text" id="alias-input"
+             placeholder="Mon dossier…"
+             onkeydown="if(event.key==='Enter')saveAlias()">
+    </div>
+    <div id="alias-modal-err" style="display:none;font-family:var(--font-mono);font-size:11px;
+         color:var(--red);background:var(--red-bg);border:1px solid rgba(220,38,38,0.2);
+         border-radius:4px;padding:8px 10px;margin-bottom:10px;"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">
+      <button type="button" id="alias-delete-btn" class="btn-ghost"
+              style="color:var(--red);border-color:rgba(220,38,38,0.3);margin-right:auto;"
+              onclick="deleteCurrentAlias()">Supprimer l'alias</button>
+      <button type="button" class="btn-ghost" onclick="closeAliasModal()">Annuler</button>
+      <button type="button" class="btn-primary" onclick="saveAlias()">Enregistrer →</button>
+    </div>
+  </div>
+</div>
+
 <style>
   .nas-row {
     display: grid;
@@ -72,7 +104,7 @@
   .nas-empty  { padding: 48px; text-align: center; font-family: var(--font-mono);
                 font-size: 12px; color: var(--hint); }
   .alias-btn  { font-family: var(--font-mono); font-size: 11px; padding: 4px 12px;
-                border-radius: 3px; background: none; border: 1px solid var(--border2);
+                border-radius: 4px; background: none; border: 1px solid var(--border2);
                 color: var(--muted); cursor: pointer; white-space: nowrap;
                 transition: color 0.1s, border-color 0.1s; }
   .alias-btn:hover { color: var(--teal); border-color: var(--teal); }
@@ -88,26 +120,24 @@
 
 <script>
 let currentPath = '';
-let userAliases = {};  // real_path → {id, alias_name}
+let userAliases = {};
+let _aliasModalPath = '';
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
 function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
-
 function fmtSize(b) {
-  if (b == null)      return '';
+  if (b == null || b === '') return '';
+  b = Number(b);
   if (b < 1024)       return b + ' o';
   if (b < 1024*1024)  return (b/1024).toFixed(0) + ' Ko';
   return (b/1024/1024).toFixed(1) + ' Mo';
 }
-
 function getExt(name) {
   if (name.endsWith('.nii.gz')) return '.nii.gz';
   const i = name.lastIndexOf('.');
   return i > 0 ? name.slice(i).toLowerCase() : '';
 }
-
 function badgeFor(name) {
   const ext = getExt(name);
   if (['.nii','.nii.gz'].includes(ext)) return `<span class="nas-badge nas-nifti">NIfTI</span>`;
@@ -117,9 +147,8 @@ function badgeFor(name) {
   return '';
 }
 
-// ── Alias — unique source de vérité ──────────────────────────────────────────
+// ── Aliases ───────────────────────────────────────────────────────────────────
 async function loadAliases() {
-  // Cache-bust pour toujours obtenir la version à jour
   const res = await fetch('/api/aliases?_=' + Date.now());
   const arr = await res.json();
   userAliases = {};
@@ -129,7 +158,7 @@ async function loadAliases() {
   if (!cont) return;
   if (!arr.length) {
     cont.innerHTML = '<div style="font-family:var(--font-mono);font-size:12px;color:var(--hint);">'
-      + 'Aucun alias défini. Cliquez sur <strong>✎ Alias</strong> dans l\'arborescence pour en créer un.</div>';
+      + 'Aucun alias. Cliquez sur <strong>✎ Alias</strong> dans l\'arborescence pour en créer un.</div>';
     return;
   }
   cont.innerHTML = arr.map(a => `
@@ -138,32 +167,39 @@ async function loadAliases() {
       <span style="color:var(--border2);flex-shrink:0;">→</span>
       <span style="flex:1;font-weight:500;color:var(--teal);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(a.alias_name)}</span>
       <button class="btn-ghost" style="font-size:10px;padding:3px 10px;flex-shrink:0;color:var(--red);border-color:rgba(220,38,38,0.3);"
-              onclick="deleteAlias(${a.id})">Supprimer</button>
+              data-id="${a.id}" onclick="deleteAliasById(this.dataset.id)">Supprimer</button>
     </div>`).join('');
 }
 
 // ── Navigation ────────────────────────────────────────────────────────────────
 async function browse(path) {
   currentPath = path || '';
-  document.getElementById('nas-content').innerHTML =
-    '<div style="padding:48px;text-align:center;font-family:var(--font-mono);font-size:12px;color:var(--hint);">Chargement…</div>';
+  const content = document.getElementById('nas-content');
+  content.innerHTML = '<div style="padding:48px;text-align:center;font-family:var(--font-mono);font-size:12px;color:var(--hint);">Chargement…</div>';
   closePreview();
 
-  const url = '/api/nas/browse' + (path ? `?path=${encodeURIComponent(path)}` : '');
-  const res  = await fetch(url);
-  if (!res.ok) {
-    document.getElementById('nas-content').innerHTML =
-      `<div class="nas-empty">Erreur : ${escHtml((await res.json()).error || 'inconnue')}</div>`;
+  let data;
+  try {
+    const url = '/api/nas/browse' + (currentPath ? '?path=' + encodeURIComponent(currentPath) : '');
+    const res  = await fetch(url);
+    if (!res.ok) {
+      const ct  = res.headers.get('content-type') || '';
+      const msg = ct.includes('json') ? ((await res.json()).error || 'HTTP ' + res.status) : 'HTTP ' + res.status;
+      content.innerHTML = `<div class="nas-empty">Erreur : ${escHtml(msg)}</div>`;
+      return;
+    }
+    data = await res.json();
+  } catch (err) {
+    content.innerHTML = `<div class="nas-empty">Impossible de charger ce dossier.<br><span style="font-size:10px;opacity:.6;">${escHtml(String(err))}</span></div>`;
     return;
   }
-  const data = await res.json();
 
-  // Breadcrumb — JSON.stringify pour sécuriser les chemins avec apostrophes
+  // Breadcrumb
   const parts = data.path ? data.path.split('/') : [];
   let bc = '';
   parts.forEach((p, i) => {
     const pathTo = parts.slice(0, i + 1).join('/');
-    bc += `<span onclick="browse(${JSON.stringify(pathTo)})"
+    bc += `<span data-path="${escHtml(pathTo)}" onclick="browse(this.dataset.path)"
                  style="cursor:pointer;color:var(--teal);" title="${escHtml(pathTo)}">${escHtml(p)}</span>`;
     if (i < parts.length - 1)
       bc += `<span style="color:var(--border2);margin:0 3px;">/</span>`;
@@ -177,8 +213,7 @@ async function browse(path) {
     `${dirs.length} dossier(s) · ${files.length} fichier(s)`;
 
   if (!entries.length && parent == null) {
-    document.getElementById('nas-content').innerHTML =
-      '<div class="nas-empty">NAS vide ou aucun fichier accessible.</div>';
+    content.innerHTML = '<div class="nas-empty">NAS vide ou aucun fichier accessible.</div>';
     return;
   }
 
@@ -186,44 +221,44 @@ async function browse(path) {
 
   // Bouton retour
   if (parent !== null && parent !== undefined) {
-    html += `<div class="nas-row" onclick="browse(${JSON.stringify(parent)})">
+    html += `<div class="nas-row" data-path="${escHtml(parent)}" onclick="browse(this.dataset.path)">
       <span class="nas-icon">↑</span>
       <span class="nas-name" style="color:var(--hint);">..</span>
       <span></span><span></span>
     </div>`;
   }
 
-  // En-tête colonnes (seulement s'il y a des dossiers)
+  // En-tête colonnes
   if (dirs.length) {
     html += `<div class="nas-header">
-      <span></span>
-      <span>Nom</span>
-      <span>Éléments</span>
-      <span>Alias ✎</span>
+      <span></span><span>Nom</span><span>Éléments</span><span>Alias ✎</span>
     </div>`;
   }
 
-  // Dossiers
+  // Dossiers — data-path pour éviter les conflits de guillemets dans onclick
   dirs.forEach(e => {
     const alias       = userAliases[e.path];
     const displayName = alias ? alias.alias_name : e.name;
     const aliasLabel  = alias
       ? `<span style="font-family:var(--font-mono);font-size:9px;color:var(--teal);margin-left:8px;">✎ ${escHtml(alias.alias_name)}</span>`
       : '';
-    html += `<div class="nas-row" onclick="browse(${JSON.stringify(e.path)})">
+    html += `<div class="nas-row" data-path="${escHtml(e.path)}" onclick="browse(this.dataset.path)">
       <span class="nas-icon" style="color:var(--amber);">📁</span>
       <span class="nas-name dir">${escHtml(e.name)}${aliasLabel}</span>
       <span class="nas-meta">${e.n ?? ''} élément(s)</span>
-      <button class="alias-btn" title="Définir un alias personnel"
-              onclick="event.stopPropagation();promptAlias(${JSON.stringify(e.path)},${JSON.stringify(displayName)})">
-        ✎ Alias
-      </button>
+      <button type="button" class="alias-btn"
+              data-path="${escHtml(e.path)}" data-name="${escHtml(displayName)}"
+              onclick="event.stopPropagation();openAliasModal(this.dataset.path,this.dataset.name)"
+              title="Définir un alias personnel">✎ Alias</button>
     </div>`;
   });
 
   // Fichiers
   files.forEach(e => {
-    html += `<div class="nas-row" onclick="showFile(${JSON.stringify(e)})">
+    html += `<div class="nas-row"
+      data-name="${escHtml(e.name)}" data-path="${escHtml(e.path)}"
+      data-size="${e.size ?? ''}" data-modified="${escHtml(e.modified || '')}"
+      onclick="showFile(this)">
       <span class="nas-icon" style="opacity:.4;">▪</span>
       <span class="nas-name file">${escHtml(e.name)}</span>
       <span class="nas-meta">${e.modified || ''}</span>
@@ -234,63 +269,78 @@ async function browse(path) {
     </div>`;
   });
 
-  document.getElementById('nas-content').innerHTML = html;
+  content.innerHTML = html;
 }
 
 function browseRoot() { browse(''); }
 
 // ── Aperçu fichier ────────────────────────────────────────────────────────────
-function showFile(e) {
+function showFile(el) {
   const panel = document.getElementById('file-preview');
-  document.getElementById('preview-title').textContent = e.name;
+  document.getElementById('preview-title').textContent = el.dataset.name;
   document.getElementById('preview-meta').innerHTML = `
-    <span>Chemin : <code style="font-family:var(--font-mono);font-size:10px;">${escHtml(e.path)}</code></span>
-    <span>Taille : <strong>${fmtSize(e.size)}</strong></span>
-    <span>Modifié : ${e.modified || '—'}</span>
+    <span>Chemin : <code style="font-family:var(--font-mono);font-size:10px;">${escHtml(el.dataset.path)}</code></span>
+    <span>Taille : <strong>${fmtSize(el.dataset.size)}</strong></span>
+    <span>Modifié : ${escHtml(el.dataset.modified) || '—'}</span>
   `;
   panel.style.display = 'block';
   panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
-
 function closePreview() {
   document.getElementById('file-preview').style.display = 'none';
 }
 
-// ── Alias — actions ───────────────────────────────────────────────────────────
-async function promptAlias(realPath, currentName) {
-  const newName = window.prompt(
-    `Alias personnel pour :\n${realPath}\n\n(laisser vide pour supprimer)`, currentName
-  );
-  if (newName === null) return;
-  if (newName.trim() === '') {
-    const alias = userAliases[realPath];
-    if (alias) await fetch(`/api/aliases/${alias.id}`, { method: 'DELETE' });
-  } else {
-    await fetch('/api/aliases', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ real_path: realPath, alias_name: newName.trim() })
-    });
-  }
-  await loadAliases();       // met à jour userAliases ET la liste en bas
-  await browse(currentPath); // re-render l'arborescence avec les alias à jour
+// ── Modal alias ───────────────────────────────────────────────────────────────
+function openAliasModal(realPath, currentName) {
+  _aliasModalPath = realPath;
+  document.getElementById('alias-path-display').textContent = realPath;
+  const hasAlias = !!userAliases[realPath];
+  document.getElementById('alias-input').value = hasAlias ? (userAliases[realPath].alias_name) : '';
+  document.getElementById('alias-delete-btn').style.display = hasAlias ? '' : 'none';
+  document.getElementById('alias-modal-err').style.display = 'none';
+  const overlay = document.getElementById('alias-overlay');
+  overlay.style.display = 'flex';
+  setTimeout(() => document.getElementById('alias-input').focus(), 60);
 }
-
-async function deleteAlias(id) {
+function closeAliasModal() {
+  document.getElementById('alias-overlay').style.display = 'none';
+  _aliasModalPath = '';
+}
+async function saveAlias() {
+  const name = document.getElementById('alias-input').value.trim();
+  const err  = document.getElementById('alias-modal-err');
+  err.style.display = 'none';
+  if (!name) { err.textContent = 'Nom requis.'; err.style.display = 'block'; return; }
+  const res  = await fetch('/api/aliases', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ real_path: _aliasModalPath, alias_name: name })
+  });
+  const data = await res.json();
+  if (!res.ok) { err.textContent = data.error || 'Erreur.'; err.style.display = 'block'; return; }
+  closeAliasModal();
+  await loadAliases();
+  await browse(currentPath);
+}
+async function deleteCurrentAlias() {
+  const alias = userAliases[_aliasModalPath];
+  if (alias) await fetch(`/api/aliases/${alias.id}`, { method: 'DELETE' });
+  closeAliasModal();
+  await loadAliases();
+  await browse(currentPath);
+}
+async function deleteAliasById(id) {
   await fetch(`/api/aliases/${id}`, { method: 'DELETE' });
   await loadAliases();
   await browse(currentPath);
 }
-
 async function addAlias() {
   const path = document.getElementById('new-alias-path').value.trim();
   const name = document.getElementById('new-alias-name').value.trim();
   const err  = document.getElementById('alias-error');
   err.style.display = 'none';
-  if (!path || !name) {
-    err.textContent = 'Chemin et nom requis.'; err.style.display = 'block'; return;
-  }
+  if (!path || !name) { err.textContent = 'Chemin et nom requis.'; err.style.display = 'block'; return; }
   const res  = await fetch('/api/aliases', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: {'Content-Type':'application/json'},
     body: JSON.stringify({ real_path: path, alias_name: name })
   });
   const data = await res.json();
@@ -312,9 +362,8 @@ async function addAlias() {
 <div class="card">
   <div class="card-title">Mes alias NAS — arborescence personnalisée</div>
   <p style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.6;">
-    Renommez les dossiers pour votre usage personnel via le bouton <strong>✎</strong> dans l'arborescence,
-    ou ajoutez-en un manuellement ci-dessous.
-    Ces alias n'affectent <strong>pas</strong> l'arborescence FAIR réelle — ils ne sont visibles que par vous.
+    Renommez les dossiers via <strong>✎ Alias</strong> dans l'arborescence, ou ajoutez manuellement ci-dessous.
+    Ces alias ne sont visibles que par vous.
   </p>
   <div id="aliases-list" style="margin-bottom:14px;">
     <div style="font-family:var(--font-mono);font-size:12px;color:var(--hint);">Chargement…</div>

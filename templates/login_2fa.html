@@ -99,6 +99,7 @@
       {% endif %}
 
       <form method="POST">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div style="display:flex;flex-direction:column;gap:14px;">
           <div>
             <label class="form-label" for="code-input">Code à 6 chiffres</label>
