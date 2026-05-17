@@ -577,9 +577,10 @@ def send_reset_email(to_addr: str, username: str, token: str) -> bool:
             s.starttls()
             if SMTP_USER:
                 s.login(SMTP_USER, SMTP_PASS)
-            s.sendmail(SMTP_FROM, to_addr, msg.as_string())
+            s.sendmail(SMTP_USER or SMTP_FROM, to_addr, msg.as_string())
         return True
-    except Exception:
+    except Exception as e:
+        app.logger.error("send_reset_email failed: %s", e)
         return False
 
 
@@ -603,9 +604,10 @@ def send_verification_email(to_addr: str, username: str, token: str) -> bool:
             s.ehlo(); s.starttls()
             if SMTP_USER:
                 s.login(SMTP_USER, SMTP_PASS)
-            s.sendmail(SMTP_FROM, to_addr, msg.as_string())
+            s.sendmail(SMTP_USER or SMTP_FROM, to_addr, msg.as_string())
         return True
-    except Exception:
+    except Exception as e:
+        app.logger.error("send_verification_email failed: %s", e)
         return False
 
 
