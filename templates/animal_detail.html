@@ -92,18 +92,21 @@
 {% set nifti_acqs = acqs | selectattr("nifti_url") | list %}
 {% if nifti_acqs %}
 <div class="card" id="viewer-card">
-  <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">
-    <span>Viewer IRM</span>
-    <div style="display:flex;gap:6px;align-items:center;">
+  <!-- Header -->
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <div class="card-title" style="margin:0;padding:0;border:none;">Viewer IRM</div>
       <span class="mono" style="font-size:10px;color:var(--hint);" id="viewer-dims"></span>
-      <button class="btn-ghost" style="font-size:10px;padding:3px 10px;" onclick="toggleColormap()">colormap</button>
-      <button class="btn-ghost" style="font-size:10px;padding:3px 10px;" onclick="toggleView()">vue</button>
+      <span class="mono" style="font-size:10px;color:var(--hint);" id="viewer-current">{{ nifti_acqs[0].sequence }}</span>
+    </div>
+    <div style="display:flex;gap:4px;align-items:center;font-size:10px;color:var(--hint);font-family:var(--font-mono);">
+      Souris : clic gauche = naviguer · molette = zoom · clic droit = luminosité/contraste
     </div>
   </div>
 
   <!-- Onglets par acquisition -->
   {% if nifti_acqs | length > 1 %}
-  <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap;">
+  <div style="display:flex;gap:6px;margin:8px 0;flex-wrap:wrap;">
     {% for a in nifti_acqs %}
     <button class="btn-ghost viewer-tab {% if loop.first %}tab-active{% endif %}"
             style="font-size:11px;padding:5px 14px;"
@@ -114,54 +117,93 @@
   </div>
   {% endif %}
 
+  <!-- Toolbar -->
+  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
+    <div style="display:flex;gap:2px;background:var(--bg3);border-radius:4px;padding:2px;border:1px solid var(--border);">
+      <button class="view-btn view-btn-active" onclick="setView(3, this)" title="Multi-panneaux (3 plans + 3D)">Multi</button>
+      <button class="view-btn" onclick="setView(0, this)" title="Axial">Axial</button>
+      <button class="view-btn" onclick="setView(1, this)" title="Coronal">Coronal</button>
+      <button class="view-btn" onclick="setView(2, this)" title="Sagittal">Sagittal</button>
+      <button class="view-btn" onclick="setView(4, this)" title="Rendu 3D">3D</button>
+    </div>
+    <div style="display:flex;gap:2px;background:var(--bg3);border-radius:4px;padding:2px;border:1px solid var(--border);">
+      <button class="view-btn cmap-btn" data-cmap="gray" onclick="setCmap('gray', this)" style="font-weight:500;">Gris</button>
+      <button class="view-btn cmap-btn" data-cmap="hot" onclick="setCmap('hot', this)">Chaud</button>
+      <button class="view-btn cmap-btn" data-cmap="cool" onclick="setCmap('cool', this)">Froid</button>
+      <button class="view-btn cmap-btn" data-cmap="viridis" onclick="setCmap('viridis', this)">Viridis</button>
+      <button class="view-btn cmap-btn" data-cmap="inferno" onclick="setCmap('inferno', this)">Inferno</button>
+    </div>
+    <button class="btn-ghost" style="font-size:10px;padding:4px 10px;" onclick="resetView()"
+            title="Réinitialiser luminosité et contraste">Reset</button>
+  </div>
+
+  <!-- Canvas -->
   <div style="background:#111;border-radius:4px;overflow:hidden;position:relative;">
-    <canvas id="niivue-gl" height="420" style="width:100%;height:420px;display:block;"></canvas>
+    <canvas id="niivue-gl" height="520" style="width:100%;height:520px;display:block;"></canvas>
     <div id="viewer-loading" style="position:absolute;inset:0;display:flex;align-items:center;
          justify-content:center;color:#9ca3af;font-family:monospace;font-size:12px;">
       Chargement du viewer…
     </div>
     <div id="viewer-error" style="display:none;position:absolute;inset:0;
-         display:none;align-items:center;justify-content:center;flex-direction:column;
+         align-items:center;justify-content:center;flex-direction:column;
          color:#9ca3af;font-family:monospace;font-size:12px;text-align:center;padding:20px;"></div>
   </div>
 
-  <!-- Sliders de contrôle -->
-  <div style="padding:12px 16px;background:var(--bg3);border-top:1px solid var(--border2);
-              border-radius:0 0 4px 4px;display:flex;flex-direction:column;gap:8px;">
-    <div style="display:grid;grid-template-columns:80px 1fr 44px;gap:10px;align-items:center;">
-      <span class="mono" style="font-size:9px;color:var(--hint);text-align:right;">Coupe (Z)</span>
-      <input type="range" id="s-slice" min="0" max="100" value="50" style="width:100%;accent-color:var(--teal);"
+  <!-- Contrôles sliders -->
+  <div style="padding:14px 16px;background:var(--bg3);border-top:1px solid var(--border2);
+              border-radius:0 0 4px 4px;display:flex;flex-direction:column;gap:10px;">
+    <div style="display:grid;grid-template-columns:100px 1fr 50px;gap:10px;align-items:center;">
+      <span class="mono slider-label">Coupe axiale</span>
+      <input type="range" id="s-slice" min="0" max="100" value="50" class="slider-teal"
              oninput="ctrlSlice(this.value)">
-      <span class="mono" id="v-slice" style="font-size:9px;color:var(--muted);text-align:right;">50 %</span>
+      <span class="mono slider-val" id="v-slice">50 %</span>
     </div>
-    <div style="display:grid;grid-template-columns:80px 1fr 44px;gap:10px;align-items:center;">
-      <span class="mono" style="font-size:9px;color:var(--hint);text-align:right;">Luminosité</span>
-      <input type="range" id="s-bright" min="-100" max="100" value="0" style="width:100%;accent-color:var(--teal);"
+    <div style="display:grid;grid-template-columns:100px 1fr 50px;gap:10px;align-items:center;">
+      <span class="mono slider-label">Luminosité</span>
+      <input type="range" id="s-bright" min="-100" max="100" value="0" class="slider-teal"
              oninput="ctrlBright(this.value)">
-      <span class="mono" id="v-bright" style="font-size:9px;color:var(--muted);text-align:right;">0</span>
+      <span class="mono slider-val" id="v-bright">0</span>
     </div>
-    <div style="display:grid;grid-template-columns:80px 1fr 44px;gap:10px;align-items:center;">
-      <span class="mono" style="font-size:9px;color:var(--hint);text-align:right;">Contraste</span>
-      <input type="range" id="s-contrast" min="10" max="300" value="100" style="width:100%;accent-color:var(--teal);"
+    <div style="display:grid;grid-template-columns:100px 1fr 50px;gap:10px;align-items:center;">
+      <span class="mono slider-label">Contraste</span>
+      <input type="range" id="s-contrast" min="10" max="300" value="100" class="slider-teal"
              oninput="ctrlContrast(this.value)">
-      <span class="mono" id="v-contrast" style="font-size:9px;color:var(--muted);text-align:right;">100 %</span>
+      <span class="mono slider-val" id="v-contrast">100 %</span>
     </div>
-    <div style="display:flex;justify-content:space-between;padding-top:2px;">
-      <span class="mono" style="font-size:9px;color:var(--hint);" id="viewer-meta"></span>
-      <span class="mono" style="font-size:10px;color:var(--hint);" id="viewer-current">{{ nifti_acqs[0].sequence }}</span>
+    <div style="display:grid;grid-template-columns:100px 1fr 50px;gap:10px;align-items:center;">
+      <span class="mono slider-label">Opacité 3D</span>
+      <input type="range" id="s-opacity" min="0" max="100" value="100" class="slider-teal"
+             oninput="ctrlOpacity(this.value)">
+      <span class="mono slider-val" id="v-opacity">100 %</span>
     </div>
   </div>
 </div>
 
+<style>
+  .viewer-tab.tab-active {
+    border-color: var(--teal) !important;
+    color: var(--teal) !important;
+    background: var(--teal-bg) !important;
+  }
+  .view-btn {
+    font-family: var(--font-mono); font-size: 10px; padding: 4px 10px;
+    border: none; border-radius: 3px; cursor: pointer;
+    background: transparent; color: var(--muted); transition: all 0.12s;
+  }
+  .view-btn:hover { background: rgba(0,0,0,0.05); }
+  .view-btn-active {
+    background: var(--teal) !important; color: #fff !important;
+  }
+  .slider-label { font-size: 10px; color: var(--hint); text-align: right; }
+  .slider-val   { font-size: 10px; color: var(--muted); text-align: right; }
+  .slider-teal  { width: 100%; accent-color: var(--teal); }
+</style>
+
 <script src="/static/js/niivue.umd.js"></script>
 <script>
-let nv        = null;
-let cmapIndex = 0;
-let viewIndex = 0;
-const cmaps   = ['gray', 'hot', 'cool', 'viridis', 'inferno'];
-const views   = [0, 1, 2, 3];
-
-let _calMin0 = 0, _calMax0 = 1000;  // plage de calibration initiale du volume
+let nv = null;
+let currentCmap = 'gray';
+let _calMin0 = 0, _calMax0 = 1000;
 
 const NiivueClass = window.Niivue || (window.niivue && window.niivue.Niivue);
 
@@ -170,7 +212,6 @@ function _storeCalRange() {
   const vol = nv.volumes[0];
   _calMin0  = vol.cal_min ?? 0;
   _calMax0  = vol.cal_max ?? 1000;
-  // Remettre les sliders à leur position neutre
   document.getElementById('s-slice').value    = '50';
   document.getElementById('s-bright').value   = '0';
   document.getElementById('s-contrast').value = '100';
@@ -195,11 +236,9 @@ function _applyCalRange() {
 
 function ctrlSlice(val) {
   document.getElementById('v-slice').textContent = val + ' %';
-  if (!nv) return;
-  if (nv.scene && nv.scene.crosshairPos) {
-    nv.scene.crosshairPos[2] = val / 100;
-    if (typeof nv.drawScene === 'function') nv.drawScene();
-  }
+  if (!nv || !nv.scene || !nv.scene.crosshairPos) return;
+  nv.scene.crosshairPos[2] = val / 100;
+  if (typeof nv.drawScene === 'function') nv.drawScene();
 }
 
 function ctrlBright(val) {
@@ -212,32 +251,71 @@ function ctrlContrast(val) {
   _applyCalRange();
 }
 
+function ctrlOpacity(val) {
+  document.getElementById('v-opacity').textContent = val + ' %';
+  if (!nv || !nv.volumes || !nv.volumes[0]) return;
+  nv.setOpacity(0, val / 100);
+}
+
+function setView(type, btn) {
+  if (!nv) return;
+  document.querySelectorAll('.view-btn').forEach(b => {
+    if (!b.classList.contains('cmap-btn')) b.classList.remove('view-btn-active');
+  });
+  btn.classList.add('view-btn-active');
+  nv.setSliceType(type);
+}
+
+function setCmap(name, btn) {
+  if (!nv || !nv.volumes.length) return;
+  currentCmap = name;
+  document.querySelectorAll('.cmap-btn').forEach(b => b.classList.remove('view-btn-active'));
+  btn.classList.add('view-btn-active');
+  nv.setColormap(nv.volumes[0].id, name);
+  nv.drawScene();
+}
+
+function resetView() {
+  _storeCalRange();
+  _applyCalRange();
+  document.getElementById('s-opacity').value = '100';
+  document.getElementById('v-opacity').textContent = '100 %';
+  if (nv && nv.volumes && nv.volumes[0]) nv.setOpacity(0, 1);
+}
+
+function _updateDims() {
+  if (!nv || !nv.volumes || !nv.volumes[0]) return;
+  const h = nv.volumes[0].hdr;
+  if (h && h.dims) {
+    const d = h.dims;
+    document.getElementById('viewer-dims').textContent = `${d[1]}×${d[2]}×${d[3]} voxels`;
+  }
+}
+
 async function initNiivue() {
   const canvas  = document.getElementById('niivue-gl');
   const loading = document.getElementById('viewer-loading');
   const errDiv  = document.getElementById('viewer-error');
   try {
-    if (!NiivueClass) throw new Error('Bibliothèque NiiVue non chargée (vérifiez votre connexion internet)');
+    if (!NiivueClass) throw new Error('Bibliothèque NiiVue non chargée');
     nv = new NiivueClass({
-      loadingText:    '',
-      backColor:      [0.08, 0.08, 0.08, 1],
-      crosshairColor: [0.2, 0.8, 0.6, 0.9],
+      loadingText:     '',
+      backColor:       [0.06, 0.06, 0.06, 1],
+      crosshairColor:  [0.2, 0.85, 0.6, 0.7],
+      crosshairWidth:  1,
       show3Dcrosshair: true,
+      multiplanarForceRender: true,
     });
     nv.attachToCanvas(canvas);
+    nv.setSliceType(3);
 
     const firstUrl = {{ nifti_acqs[0].nifti_url | tojson }};
     await nv.loadVolumes([{ url: firstUrl, colormap: 'gray' }]);
     loading.style.display = 'none';
     _storeCalRange();
+    _updateDims();
 
-    if (nv.volumes && nv.volumes[0]) {
-      const h = nv.volumes[0].hdr;
-      if (h && h.dims) {
-        const d = h.dims;
-        document.getElementById('viewer-dims').textContent = `${d[1]} × ${d[2]} × ${d[3]} voxels`;
-      }
-    }
+    document.querySelector('.cmap-btn[data-cmap="gray"]').classList.add('view-btn-active');
   } catch(e) {
     loading.style.display = 'none';
     errDiv.style.display  = 'flex';
@@ -251,41 +329,14 @@ async function loadVolume(url, name, btn) {
   btn.classList.add('tab-active');
   document.getElementById('viewer-current').textContent = name;
   try {
-    await nv.loadVolumes([{ url, colormap: cmaps[cmapIndex] }]);
+    await nv.loadVolumes([{ url, colormap: currentCmap }]);
     _storeCalRange();
-    if (nv.volumes && nv.volumes[0]) {
-      const h = nv.volumes[0].hdr;
-      if (h && h.dims) {
-        const d = h.dims;
-        document.getElementById('viewer-dims').textContent = `${d[1]} × ${d[2]} × ${d[3]} voxels`;
-      }
-    }
+    _updateDims();
   } catch(e) { alert('Erreur chargement : ' + e.message); }
-}
-
-function toggleColormap() {
-  if (!nv || !nv.volumes.length) return;
-  cmapIndex = (cmapIndex + 1) % cmaps.length;
-  nv.setColormap(nv.volumes[0].id, cmaps[cmapIndex]);
-  nv.drawScene();
-}
-
-function toggleView() {
-  if (!nv) return;
-  viewIndex = (viewIndex + 1) % views.length;
-  nv.setSliceType(views[viewIndex]);
 }
 
 initNiivue();
 </script>
-
-<style>
-  .viewer-tab.tab-active {
-    border-color: var(--teal) !important;
-    color: var(--teal) !important;
-    background: var(--teal-bg) !important;
-  }
-</style>
 {% endif %}
 
 <!-- Historique acquisitions -->

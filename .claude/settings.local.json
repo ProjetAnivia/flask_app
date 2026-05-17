@@ -10,7 +10,8 @@
       "Bash(python3 -c \"import qrcode; print\\('qrcode ok'\\)\")",
       "Bash(pip3 install *)",
       "Bash(chmod +x /Users/nolan/Documents/flask_app/setup.sh /Users/nolan/Documents/flask_app/backup.sh)",
-      "Bash(curl -fsSL \"https://cdn.jsdelivr.net/npm/@niivue/niivue/dist/niivue.umd.js\" -o /Users/nolan/Documents/flask_app/static/js/niivue.umd.js)"
+      "Bash(curl -fsSL \"https://cdn.jsdelivr.net/npm/@niivue/niivue/dist/niivue.umd.js\" -o /Users/nolan/Documents/flask_app/static/js/niivue.umd.js)",
+      "Bash(python3 -c \"from app import app; print\\('OK'\\)\")"
     ]
   }
 }

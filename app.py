@@ -2745,18 +2745,32 @@ def api_volumetrie_status(vol_id):
 def api_volumetrie_csv(vol_id):
     with get_db() as db:
         row = db.execute(
-            "SELECT fichier_csv, animal_id, sequence FROM volumetries WHERE id=?", (vol_id,)
+            "SELECT fichier_csv, animal_id, sequence, resultats FROM volumetries WHERE id=?", (vol_id,)
         ).fetchone()
-    if not row or not row["fichier_csv"]:
-        return "Fichier non disponible", 404
-    p = Path(row["fichier_csv"])
-    if not p.exists():
-        return "Fichier introuvable sur le serveur", 404
-    return send_from_directory(
-        str(p.parent), p.name,
-        as_attachment=True,
-        download_name=f"volumetrie_{row['animal_id']}_{row['sequence']}.csv"
-    )
+    if not row:
+        return "Volumétrie introuvable", 404
+
+    p = Path(row["fichier_csv"]) if row["fichier_csv"] else None
+    if p and p.exists():
+        return send_from_directory(
+            str(p.parent), p.name,
+            as_attachment=True,
+            download_name=f"volumetrie_{row['animal_id']}_{row['sequence']}.csv"
+        )
+
+    if not row["resultats"]:
+        return "Résultats non disponibles", 404
+    results = json.loads(row["resultats"])
+    buf = io.StringIO()
+    w = csv.writer(buf, delimiter=";")
+    w.writerow(["Tissu", "Voxels", "Volume (mm³)", "% cerveau"])
+    w.writerow(["Cerveau total", results["brain_voxels"], results["brain_vol_mm3"], "100.0"])
+    for t in results.get("tissus", []):
+        w.writerow([t["nom"], t["voxels"], t["vol_mm3"], t["pct"]])
+    resp = make_response(buf.getvalue())
+    resp.headers["Content-Type"] = "text/csv; charset=utf-8"
+    resp.headers["Content-Disposition"] = f'attachment; filename="volumetrie_{row["animal_id"]}_{row["sequence"]}.csv"'
+    return resp
 
 
 # ─────────────────────────────────────────────────
