@@ -614,6 +614,115 @@ function togglePw(inputId, btn) {
     inp.type = 'password'; btn.textContent = 'afficher';
   }
 }
+
+// ── Toasts ────────────────────────────────────────────────────────────────────
+function showToast(msg, type = 'info', duration = 5000) {
+  let container = document.getElementById('toast-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'toast-container';
+    container.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:9999;display:flex;flex-direction:column-reverse;gap:8px;';
+    document.body.appendChild(container);
+  }
+  const colors = {
+    info:    { bg: 'var(--teal-bg)',  border: 'rgba(13,148,112,0.3)',  text: 'var(--teal)'  },
+    success: { bg: 'var(--teal-bg)',  border: 'rgba(13,148,112,0.3)',  text: 'var(--teal)'  },
+    warning: { bg: 'var(--amber-bg)', border: 'rgba(180,83,9,0.3)',    text: 'var(--amber)' },
+    error:   { bg: 'var(--red-bg)',   border: 'rgba(220,38,38,0.3)',   text: 'var(--red)'   },
+  };
+  const c = colors[type] || colors.info;
+  const t = document.createElement('div');
+  t.style.cssText = `
+    font-family:var(--font-mono);font-size:11px;padding:10px 14px;
+    background:${c.bg};border:1px solid ${c.border};color:${c.text};
+    border-radius:4px;max-width:320px;line-height:1.6;
+    box-shadow:0 2px 8px rgba(0,0,0,0.08);
+    animation:toastIn 0.2s ease both;
+  `;
+  t.innerHTML = msg;
+  container.appendChild(t);
+  setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity 0.3s'; setTimeout(() => t.remove(), 300); }, duration);
+}
+
+// ── Server-Sent Events (mises à jour temps réel) ──────────────────────────────
+(function initSSE() {
+  const labels = {
+    acquisition_new:  '↑ nouvelle acquisition',
+    statut_acq:       '✎ statut acquisition modifié',
+    statut_animal:    '✎ statut animal modifié',
+    projet_new:       '+ nouveau projet créé',
+    projet_updated:   '⊡ projet archivé',
+  };
+
+  let lastId = 0;
+  let src;
+
+  function connect() {
+    src = new EventSource(`/api/events?lastEventId=${lastId}`);
+
+    src.onmessage = function(e) {
+      try {
+        const ev = JSON.parse(e.data);
+        if (ev.type === 'connected') return;      // silencieux
+        if (e.lastEventId) lastId = parseInt(e.lastEventId);
+
+        const label = labels[ev.type] || ev.type;
+        const p     = ev.payload || {};
+        let detail  = '';
+        if (p.animal_id) detail += ` · ${p.animal_id}`;
+        if (p.projet)    detail += ` (${p.projet})`;
+        if (p.nom)       detail += ` · ${p.nom}`;
+        if (p.par)       detail += ` <span style="opacity:.6">par ${p.par}</span>`;
+
+        // Ne pas notifier ses propres actions
+        const me = '{{ current_user.username }}';
+        if (p.par === me) return;
+
+        const needsRefresh = ['acquisition_new','statut_acq','statut_animal','projet_new','projet_updated'];
+        const refreshLink  = needsRefresh.includes(ev.type)
+          ? ' <a href="javascript:location.reload()" style="text-decoration:underline;opacity:0.8;">↺ rafraîchir</a>'
+          : '';
+
+        showToast(`${label}${detail}${refreshLink}`, 'info', 7000);
+
+        // Sur le dashboard : met à jour les métriques automatiquement
+        if (['acquisition_new','statut_acq','statut_animal'].includes(ev.type)) {
+          refreshDashboardMetrics();
+        }
+      } catch(err) {}
+    };
+
+    src.onerror = function() {
+      src.close();
+      setTimeout(connect, 5000);   // reconnexion automatique après 5 s
+    };
+  }
+
+  connect();
+})();
+
+async function refreshDashboardMetrics() {
+  const cards = document.querySelectorAll('[data-metric]');
+  if (!cards.length) return;   // pas sur le dashboard
+  try {
+    const res  = await fetch('/api/stats');
+    if (!res.ok) return;
+    const data = await res.json();
+    const map  = {
+      'nb-animaux': data.nb_animaux,
+      'nb-acq':     data.nb_acquisitions,
+      'nb-doublons':data.nb_doublons,
+    };
+    cards.forEach(el => {
+      const k = el.dataset.metric;
+      if (k in map) el.textContent = map[k];
+    });
+  } catch(e) {}
+}
 </script>
+
+<style>
+@keyframes toastIn { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:none} }
+</style>
 </body>
 </html>

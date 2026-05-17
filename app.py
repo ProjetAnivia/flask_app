@@ -10,11 +10,11 @@ Accéder : http://localhost:5000
 Comptes démo : admin/admin123  |  operateur/op123  |  chercheur/ch123
 """
 
-from flask import Flask, render_template, jsonify, request, redirect, url_for, session, make_response, send_from_directory
+from flask import Flask, render_template, jsonify, request, redirect, url_for, session, make_response, send_from_directory, Response, stream_with_context
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from functools import wraps
 from pathlib import Path
-import json, sqlite3, hashlib, os, re, csv, io, socket, threading, bcrypt as _bcrypt, secrets, calendar as _cal, random
+import json, sqlite3, hashlib, os, re, csv, io, socket, threading, bcrypt as _bcrypt, secrets, calendar as _cal, random, time
 import smtplib, urllib.request as _urllib_req
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -162,6 +162,7 @@ NAS_ROOT.mkdir(parents=True, exist_ok=True)
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
 def init_db():
@@ -283,6 +284,13 @@ def init_db():
             created_at TEXT NOT NULL,
             expires_at TEXT NOT NULL,
             used       INTEGER DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS events (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            type       TEXT NOT NULL,
+            payload    TEXT NOT NULL,
+            created_at TEXT NOT NULL
         );
         """)
 
@@ -612,6 +620,58 @@ def role_required(*roles):
             return f(*args, **kwargs)
         return wrapped
     return decorator
+
+
+# ─────────────────────────────────────────────────
+#  SERVER-SENT EVENTS — temps réel multi-utilisateurs
+# ─────────────────────────────────────────────────
+
+def emit_event(type_: str, payload: dict):
+    """Publie un événement dans la table events (visible par tous les clients SSE)."""
+    now    = datetime.utcnow().isoformat()
+    cutoff = (datetime.utcnow() - timedelta(hours=24)).isoformat()
+    with get_db() as db:
+        db.execute(
+            "INSERT INTO events (type, payload, created_at) VALUES (?, ?, ?)",
+            (type_, json.dumps(payload, ensure_ascii=False), now)
+        )
+        db.execute("DELETE FROM events WHERE created_at < ?", (cutoff,))
+        db.commit()
+
+
+@app.route("/api/events")
+@login_required
+def api_sse():
+    last_id = request.args.get("lastEventId", 0, type=int)
+
+    def generate():
+        nonlocal last_id
+        # Message de connexion immédiat
+        yield f"data: {json.dumps({'type': 'connected', 'user': current_user.username})}\n\n"
+        while True:
+            try:
+                with get_db() as db:
+                    rows = db.execute(
+                        "SELECT id, type, payload FROM events WHERE id > ? ORDER BY id LIMIT 20",
+                        (last_id,)
+                    ).fetchall()
+                for row in rows:
+                    last_id = row["id"]
+                    data = json.dumps({
+                        "type":    row["type"],
+                        "payload": json.loads(row["payload"])
+                    })
+                    yield f"id: {row['id']}\ndata: {data}\n\n"
+            except Exception:
+                pass
+            # Heartbeat toutes les 2 s pour maintenir la connexion
+            yield ": heartbeat\n\n"
+            time.sleep(2)
+
+    resp = Response(stream_with_context(generate()), mimetype="text/event-stream")
+    resp.headers["Cache-Control"]     = "no-cache"
+    resp.headers["X-Accel-Buffering"] = "no"   # désactive le buffer nginx/Synology
+    return resp
 
 
 # ─────────────────────────────────────────────────
@@ -1063,6 +1123,7 @@ def api_projets_statut(nom):
         db.commit()
     if not updated:
         return jsonify({"error": "Projet introuvable"}), 404
+    emit_event("projet_updated", {"nom": nom, "statut": statut, "par": current_user.username})
     return jsonify({"ok": True, "nom": nom, "statut": statut})
 
 
@@ -1167,6 +1228,7 @@ def api_add_projet():
             )
             db.commit()
         (NAS_ROOT / nom_clean).mkdir(parents=True, exist_ok=True)
+        emit_event("projet_new", {"nom": nom_clean, "resp": resp, "par": current_user.username})
         return jsonify({"ok": True, "nom": nom_clean, "resp": resp, "seq_par_animal": seq_par_animal}), 201
     except sqlite3.IntegrityError:
         return jsonify({"error": f"Le projet « {nom_clean} » existe déjà"}), 409
@@ -1250,6 +1312,10 @@ def api_add_acquisition():
             (data["animal_id"],)
         )
         db.commit()
+    emit_event("acquisition_new", {
+        "animal_id": data["animal_id"], "projet": data["projet"],
+        "sequence": data["sequence"], "par": current_user.username
+    })
     return jsonify({"ok": True}), 201
 
 
@@ -2318,6 +2384,8 @@ def api_update_animal_statut(projet, animal_id):
         db.commit()
     if not updated:
         return jsonify({"error": "Animal introuvable"}), 404
+    emit_event("statut_animal", {"animal_id": animal_id, "projet": projet,
+                                  "statut": statut, "par": current_user.username})
     return jsonify({"ok": True, "statut": statut})
 
 
@@ -2332,6 +2400,7 @@ def api_update_statut(acq_id):
     with get_db() as db:
         db.execute("UPDATE acquisitions SET statut=? WHERE id=?", (statut, acq_id))
         db.commit()
+    emit_event("statut_acq", {"acq_id": acq_id, "statut": statut, "par": current_user.username})
     return jsonify({"ok": True})
 
 # ─────────────────────────────────────────────────

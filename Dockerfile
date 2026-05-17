@@ -15,6 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app.py .
 COPY templates/ templates/
+COPY static/ static/
 COPY fair_import.py* ./
 
 # Embarquer les données réelles dans l'image (DB + NIfTI — 3.6 Mo)
@@ -28,5 +29,6 @@ ENV FLASK_ENV=production
 ENV DB_DIR=/app/db
 ENV NAS_ROOT=/app/nas_simule/structured
 
-# Gunicorn en production (2 workers, timeout 120s pour le viewer NIfTI)
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "120", "app:app"]
+# Gunicorn gthread : 2 workers × 4 threads = 8 requêtes simultanées
+# gthread permet les connexions SSE longues sans bloquer les autres workers
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--worker-class", "gthread", "--workers", "2", "--threads", "4", "--timeout", "300", "app:app"]
