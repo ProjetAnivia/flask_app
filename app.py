@@ -61,8 +61,8 @@ SMTP_FROM = os.environ.get("SMTP_FROM", "noreply@irm-fair.local")
 APP_URL   = os.environ.get("APP_URL",   "http://localhost:5001")
 
 # ── reCAPTCHA v2 (optionnel — désactivé si clés absentes) ───────────────────
-RECAPTCHA_SITE_KEY   = os.environ.get("RECAPTCHA_SITE_KEY",   "6Ldro-4sAAAAAJlYYyYfRNzto7k_Tk0d5tRy_E9w")
-RECAPTCHA_SECRET_KEY = os.environ.get("RECAPTCHA_SECRET_KEY", "6Ldro-4sAAAAAFKpzPH4NsAc3rgdXbki0JU4nnRf")
+RECAPTCHA_SITE_KEY   = os.environ.get("RECAPTCHA_SITE_KEY",   "")
+RECAPTCHA_SECRET_KEY = os.environ.get("RECAPTCHA_SECRET_KEY", "")
 RECAPTCHA_ENABLED    = bool(RECAPTCHA_SITE_KEY and RECAPTCHA_SECRET_KEY)
 
 def verify_recaptcha(token: str) -> bool:
@@ -305,6 +305,9 @@ def init_db():
             "ALTER TABLE users ADD COLUMN totp_enabled INTEGER DEFAULT 0",
             "ALTER TABLE users ADD COLUMN inactivity_timeout INTEGER DEFAULT 30",
             "ALTER TABLE projets ADD COLUMN protocole_ethique TEXT",
+            "ALTER TABLE users ADD COLUMN email TEXT",
+            "ALTER TABLE users ADD COLUMN email_verified INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN email_verify_token TEXT",
         ]:
             try:
                 db.execute(col_sql)
@@ -580,6 +583,32 @@ def send_reset_email(to_addr: str, username: str, token: str) -> bool:
         return False
 
 
+def send_verification_email(to_addr: str, username: str, token: str) -> bool:
+    """Envoie un email de vérification d'adresse. Retourne True si envoyé."""
+    if not SMTP_HOST or not to_addr:
+        return False
+    link = f"{APP_URL}/verify-email/{token}"
+    body = (
+        f"Bonjour {username},\n\n"
+        f"Cliquez sur le lien suivant pour vérifier votre adresse email :\n{link}\n\n"
+        f"Ce lien expire dans 24 heures.\n\n— IRM.FAIR"
+    )
+    try:
+        msg = MIMEMultipart()
+        msg["From"]    = SMTP_FROM
+        msg["To"]      = to_addr
+        msg["Subject"] = "IRM.FAIR — Vérification de votre adresse email"
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as s:
+            s.ehlo(); s.starttls()
+            if SMTP_USER:
+                s.login(SMTP_USER, SMTP_PASS)
+            s.sendmail(SMTP_FROM, to_addr, msg.as_string())
+        return True
+    except Exception:
+        return False
+
+
 def validate_password(pw: str) -> str | None:
     """Retourne un message d'erreur ou None si le mot de passe est valide."""
     if len(pw) < 10:
@@ -684,12 +713,14 @@ def login():
 
     def _render(error=None):
         """Rend login.html avec le bon type de captcha selon la config."""
-        if captcha_is_cleared(ip):
-            return render_template("login.html", error=error)
+        # reCAPTCHA v2 : toujours affiché (pas d'optimisation IP — évite les
+        # problèmes de load-balancer multi-instances et navigation privée)
         if RECAPTCHA_ENABLED:
             return render_template("login.html", error=error,
                                    recaptcha_site_key=RECAPTCHA_SITE_KEY)
-        # Fallback : captcha arithmétique
+        # Fallback : captcha arithmétique uniquement si reCAPTCHA désactivé
+        if captcha_is_cleared(ip):
+            return render_template("login.html", error=error)
         q, ans = captcha_generate()
         session["_captcha_answer"] = ans
         return render_template("login.html", error=error, captcha_question=q)
@@ -701,21 +732,22 @@ def login():
             mins = (secs + 59) // 60
             return _render(error=f"Trop de tentatives échouées. Compte temporairement bloqué — réessayez dans {mins} min.")
 
-        # ── Vérification CAPTCHA (si IP pas encore validée) ──────────────────
-        if not captcha_is_cleared(ip):
-            if RECAPTCHA_ENABLED:
-                token = request.form.get("g-recaptcha-response", "")
-                if not verify_recaptcha(token):
-                    return _render(error="Vérification reCAPTCHA échouée. Veuillez recommencer.")
-            else:
-                user_ans = request.form.get("captcha_answer", "").strip()
-                expected = session.pop("_captcha_answer", None)
-                try:
-                    correct = (int(user_ans) == expected)
-                except (ValueError, TypeError):
-                    correct = False
-                if not correct:
-                    return _render(error="Réponse au captcha incorrecte.")
+        # ── Vérification CAPTCHA ──────────────────────────────────────────────
+        if RECAPTCHA_ENABLED:
+            # Toujours vérifier quand reCAPTCHA est activé
+            token = request.form.get("g-recaptcha-response", "")
+            if not verify_recaptcha(token):
+                return _render(error="Vérification reCAPTCHA échouée. Veuillez recommencer.")
+        elif not captcha_is_cleared(ip):
+            # Fallback arithmétique
+            user_ans = request.form.get("captcha_answer", "").strip()
+            expected = session.pop("_captcha_answer", None)
+            try:
+                correct = (int(user_ans) == expected)
+            except (ValueError, TypeError):
+                correct = False
+            if not correct:
+                return _render(error="Réponse au captcha incorrecte.")
             captcha_clear_ip(ip)
 
         username = request.form.get("username", "").strip()
@@ -886,6 +918,50 @@ def unlock():
         error = "Mot de passe incorrect."
 
     return render_template("lock.html", error=error, username=current_user.username)
+
+
+@app.route("/api/users/<int:user_id>/email", methods=["PATCH"])
+@login_required
+def api_update_email(user_id):
+    if current_user.id != user_id:
+        return jsonify({"error": "Accès refusé"}), 403
+    data  = request.json or {}
+    email = data.get("email", "").strip().lower()
+    # Validation basique
+    if email and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        return jsonify({"error": "Adresse email invalide"}), 400
+    token = secrets.token_urlsafe(32) if email else None
+    with get_db() as db:
+        db.execute(
+            "UPDATE users SET email=?, email_verified=0, email_verify_token=? WHERE id=?",
+            (email or None, token, user_id)
+        )
+        db.commit()
+    if email and token:
+        sent = send_verification_email(email, current_user.username, token)
+        if not sent:
+            return jsonify({"ok": True, "verified": False,
+                            "warning": "Email sauvegardé mais non envoyé (SMTP non configuré)."})
+    return jsonify({"ok": True, "verified": False,
+                    "msg": "Un email de vérification a été envoyé." if email else "Email supprimé."})
+
+
+@app.route("/verify-email/<token>")
+@login_required
+def verify_email(token):
+    with get_db() as db:
+        row = db.execute(
+            "SELECT id FROM users WHERE email_verify_token=? AND id=?",
+            (token, current_user.id)
+        ).fetchone()
+        if not row:
+            return render_template("404.html"), 404
+        db.execute(
+            "UPDATE users SET email_verified=1, email_verify_token=NULL WHERE id=?",
+            (current_user.id,)
+        )
+        db.commit()
+    return redirect(url_for("page_profil") + "?email_verified=1")
 
 
 @app.route("/api/users/<int:user_id>/inactivity_timeout", methods=["PATCH"])
@@ -2174,10 +2250,17 @@ def api_change_password(user_id):
 @login_required
 def page_profil():
     with get_db() as db:
-        row = db.execute("SELECT inactivity_timeout FROM users WHERE id=?",
-                         (current_user.id,)).fetchone()
+        row = db.execute(
+            "SELECT inactivity_timeout, email, email_verified FROM users WHERE id=?",
+            (current_user.id,)
+        ).fetchone()
     timeout = int(row['inactivity_timeout']) if row and row['inactivity_timeout'] is not None else 30
-    return render_template("profil.html", inactivity_timeout=timeout)
+    return render_template("profil.html",
+        inactivity_timeout = timeout,
+        user_email         = row['email'] or "",
+        email_verified     = bool(row['email_verified']),
+        smtp_configured    = bool(SMTP_HOST)
+    )
 
 
 # ─────────────────────────────────────────────────
@@ -3041,22 +3124,19 @@ def forgot_password():
         db.commit()
 
     log_connexion(username, "reset_requested", ip)
-    reset_url = f"{APP_URL}/reset-password/{token}"
 
-    # Tenter d'envoyer par email
-    email_sent = False
+    # Envoyer par email uniquement — le lien n'est JAMAIS affiché dans la page
     with get_db() as db:
-        u = db.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
-    # Chercher un email si la colonne existe (future extension)
-    email_addr = dict(u).get("email", "") or ""
-    if SMTP_HOST and email_addr:
-        email_sent = send_reset_email(email_addr, user["username"], token)
+        u = db.execute(
+            "SELECT email, email_verified FROM users WHERE id=?", (user["id"],)
+        ).fetchone()
+    email_addr = (u["email"] or "") if u else ""
+    email_verified = bool(u["email_verified"]) if u else False
 
-    return render_template("forgot_password.html",
-        success=success_msg,
-        reset_url=reset_url if not email_sent else None,
-        email_sent=email_sent,
-        smtp_configured=bool(SMTP_HOST))
+    if SMTP_HOST and email_addr and email_verified:
+        send_reset_email(email_addr, user["username"], token)
+
+    return render_template("forgot_password.html", success=success_msg)
 
 
 @app.route("/reset-password/<token>", methods=["GET", "POST"])
@@ -3198,6 +3278,22 @@ def error_500(e):
         return jsonify({"error": "Erreur interne du serveur"}), 500
     return render_template("500.html"), 500
 
+
+# ─────────────────────────────────────────────────
+#  VÉRIFICATIONS SÉCURITÉ AU DÉMARRAGE
+# ─────────────────────────────────────────────────
+_DEFAULT_SECRET = "dev_secret_change_in_prod"
+if app.secret_key == _DEFAULT_SECRET:
+    print("\n" + "!"*60, flush=True)
+    print("  ⚠  AVERTISSEMENT SÉCURITÉ CRITIQUE", flush=True)
+    print("  SECRET_KEY = valeur par défaut de développement.", flush=True)
+    print("  Les sessions peuvent être forgées par n'importe qui.", flush=True)
+    print("  → Définissez SECRET_KEY dans les variables d'environnement.", flush=True)
+    print("!"*60 + "\n", flush=True)
+
+if not RECAPTCHA_SITE_KEY or not RECAPTCHA_SECRET_KEY:
+    print("[IRM FAIR] reCAPTCHA désactivé — définissez RECAPTCHA_SITE_KEY "
+          "et RECAPTCHA_SECRET_KEY pour l'activer.", flush=True)
 
 # Appelé au démarrage quel que soit le mode (gunicorn ou python3 app.py)
 init_db()

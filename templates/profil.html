@@ -25,6 +25,54 @@
   </div>
 </div>
 
+<!-- Adresse email -->
+<div class="card" style="max-width:520px;">
+  <div class="card-title">Adresse email</div>
+  <div id="email-msg" style="display:none;margin-bottom:8px;" class="msg-box"></div>
+
+  {% if not smtp_configured %}
+    <div class="msg-box msg-error" style="margin-bottom:12px;">
+      SMTP non configuré — la vérification par email est indisponible.
+    </div>
+  {% endif %}
+
+  <div style="display:flex;flex-direction:column;gap:12px;">
+    <div class="form-row">
+      <label class="form-label">Adresse email</label>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <input class="form-input" type="email" id="email-input"
+               value="{{ user_email }}" placeholder="vous@exemple.fr"
+               style="flex:1;max-width:320px;">
+        {% if user_email %}
+          {% if email_verified %}
+            <span class="pill pill-ok" title="Adresse vérifiée">✓ vérifiée</span>
+          {% else %}
+            <span class="pill pill-wait" title="En attente de vérification">non vérifiée</span>
+          {% endif %}
+        {% endif %}
+      </div>
+    </div>
+
+    {% if request.args.get('email_verified') %}
+      <div class="msg-box msg-success">✓ Adresse email vérifiée avec succès.</div>
+    {% endif %}
+
+    <div style="display:flex;gap:10px;align-items:center;">
+      <button class="btn-primary" onclick="saveEmail()" {% if not smtp_configured %}disabled title="SMTP requis"{% endif %}>
+        Enregistrer et vérifier
+      </button>
+      {% if user_email and not email_verified and smtp_configured %}
+        <button class="btn-ghost" onclick="resendVerification()">
+          Renvoyer le lien
+        </button>
+      {% endif %}
+    </div>
+    <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);line-height:1.7;">
+      Un email de vérification sera envoyé. L'adresse est utilisée pour la réinitialisation du mot de passe.
+    </div>
+  </div>
+</div>
+
 <!-- Changer mot de passe -->
 <div class="card" style="max-width:520px;">
   <div class="card-title">Changer mon mot de passe</div>
@@ -333,6 +381,47 @@ async function disable2fa() {
 }
 
 // ── Verrouillage automatique ─────────────────────────────────────────────────
+async function saveEmail() {
+  const val = document.getElementById('email-input').value.trim();
+  const msg = document.getElementById('email-msg');
+  msg.className = 'msg-box'; msg.style.display = 'none';
+  try {
+    const res  = await fetch('/api/users/{{ current_user.id }}/email', {
+      method: 'PATCH', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ email: val })
+    });
+    const data = await res.json();
+    msg.style.display = 'block';
+    if (!res.ok) {
+      msg.className = 'msg-box msg-error';
+      msg.textContent = data.error || 'Erreur.';
+    } else if (data.warning) {
+      msg.className = 'msg-box msg-error';
+      msg.textContent = data.warning;
+    } else {
+      msg.className = 'msg-box msg-success';
+      msg.textContent = data.msg || 'Email enregistré. Vérifiez votre boîte mail.';
+    }
+  } catch(e) {
+    msg.className = 'msg-box msg-error'; msg.style.display = 'block';
+    msg.textContent = 'Erreur réseau.';
+  }
+}
+
+async function resendVerification() {
+  const val = document.getElementById('email-input').value.trim();
+  const msg = document.getElementById('email-msg');
+  msg.className = 'msg-box'; msg.style.display = 'none';
+  const res  = await fetch('/api/users/{{ current_user.id }}/email', {
+    method: 'PATCH', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ email: val })
+  });
+  const data = await res.json();
+  msg.style.display = 'block';
+  msg.className = res.ok ? 'msg-box msg-success' : 'msg-box msg-error';
+  msg.textContent = res.ok ? 'Email de vérification renvoyé.' : (data.error || 'Erreur.');
+}
+
 async function saveLockTimeout() {
   const timeout = parseInt(document.getElementById('lock-timeout').value);
   const msg     = document.getElementById('lock-msg');
