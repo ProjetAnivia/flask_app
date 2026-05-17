@@ -52,16 +52,18 @@ app.config.update(
     SESSION_COOKIE_SECURE    = os.environ.get("HTTPS_ENABLED", "").lower() == "true",
 )
 
-# ── Email (Resend API ou SMTP fallback) ──────────────────────────────────────
+# ── Email (Brevo API, Resend API, ou SMTP fallback) ──────────────────────────
+BREVO_API_KEY  = os.environ.get("BREVO_API_KEY", "")
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 SMTP_HOST = os.environ.get("SMTP_HOST", "")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
 SMTP_USER = os.environ.get("SMTP_USER", "")
 SMTP_PASS = os.environ.get("SMTP_PASS", "")
 SMTP_FROM = os.environ.get("SMTP_FROM", "noreply@irm-fair.local")
-EMAIL_FROM = os.environ.get("EMAIL_FROM", "IRM.FAIR <onboarding@resend.dev>")
+EMAIL_FROM_NAME  = os.environ.get("EMAIL_FROM_NAME", "IRM.FAIR")
+EMAIL_FROM_ADDR  = os.environ.get("EMAIL_FROM_ADDR", "")
 APP_URL   = os.environ.get("APP_URL",   "http://localhost:5001")
-EMAIL_CONFIGURED = bool(RESEND_API_KEY or SMTP_HOST)
+EMAIL_CONFIGURED = bool(BREVO_API_KEY or RESEND_API_KEY or SMTP_HOST)
 
 # ── reCAPTCHA v2 (optionnel — désactivé si clés absentes) ───────────────────
 RECAPTCHA_SITE_KEY   = os.environ.get("RECAPTCHA_SITE_KEY",   "")
@@ -558,14 +560,45 @@ def get_lockout_remaining(ip: str) -> int:
 
 
 def _send_email(to_addr: str, subject: str, body: str) -> tuple[bool, str]:
-    """Envoie un email via Resend API (prioritaire) ou SMTP fallback."""
+    """Envoie un email via Brevo API (prioritaire), Resend API, ou SMTP fallback."""
     if not to_addr:
         return False, "Pas d'adresse destinataire"
 
-    if RESEND_API_KEY:
+    if BREVO_API_KEY:
         try:
             payload = json.dumps({
-                "from": EMAIL_FROM,
+                "sender": {"name": EMAIL_FROM_NAME, "email": EMAIL_FROM_ADDR},
+                "to": [{"email": to_addr}],
+                "subject": subject,
+                "textContent": body,
+            }).encode()
+            req = _urllib_req.Request(
+                "https://api.brevo.com/v3/smtp/email",
+                data=payload,
+                headers={
+                    "api-key": BREVO_API_KEY,
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                method="POST",
+            )
+            with _urllib_req.urlopen(req, timeout=10) as resp:
+                if resp.status in (200, 201):
+                    return True, ""
+                return False, f"Brevo HTTP {resp.status}"
+        except _urllib_req.HTTPError as e:
+            err_body = e.read().decode(errors="replace")
+            app.logger.error("Brevo API failed: %s %s", e, err_body)
+            return False, f"Brevo {e.code}: {err_body}"
+        except Exception as e:
+            app.logger.error("Brevo API failed: %s", e)
+            return False, str(e)
+
+    if RESEND_API_KEY:
+        try:
+            from_str = f"{EMAIL_FROM_NAME} <{EMAIL_FROM_ADDR}>" if EMAIL_FROM_ADDR else EMAIL_FROM_NAME
+            payload = json.dumps({
+                "from": from_str,
                 "to": [to_addr],
                 "subject": subject,
                 "text": body,
@@ -608,7 +641,7 @@ def _send_email(to_addr: str, subject: str, body: str) -> tuple[bool, str]:
             app.logger.error("SMTP failed: %s", e)
             return False, str(e)
 
-    return False, "Email non configuré (ni RESEND_API_KEY ni SMTP_HOST)"
+    return False, "Email non configuré (BREVO_API_KEY, RESEND_API_KEY, ou SMTP_HOST)"
 
 
 def send_reset_email(to_addr: str, username: str, token: str) -> tuple[bool, str]:
@@ -964,7 +997,7 @@ def api_update_email(user_id):
     if email and token:
         if not EMAIL_CONFIGURED:
             return jsonify({"ok": True, "verified": False,
-                            "warning": "Email sauvegardé. Email non configuré — ajoutez RESEND_API_KEY."})
+                            "warning": "Email sauvegardé. Email non configuré — ajoutez BREVO_API_KEY."})
         sent, smtp_err = send_verification_email(email, current_user.username, token)
         if not sent:
             return jsonify({"ok": True, "verified": False,
