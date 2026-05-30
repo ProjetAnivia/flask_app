@@ -357,19 +357,32 @@ def init_db():
             except sqlite3.OperationalError:
                 pass
 
-        # Utilisateurs démo (toujours insérés si absents)
+        # Utilisateurs démo — toujours resynchronisés au démarrage pour garantir
+        # que les mots de passe correspondent à ceux affichés sur la page de login.
+        # (les comptes créés par l'utilisateur final ne sont PAS impactés)
         users_demo = [
-            ("admin",      hash_pw("admin123"),   "admin"),
-            ("nicolas",    hash_pw("nico123"),     "admin"),
-            ("clemence",   hash_pw("clem123"),     "admin"),
-            ("florent",    hash_pw("flo123"),      "admin"),
-            ("pauline",    hash_pw("Pauline45"),   "operateur"),
-            ("chercheur",  hash_pw("ch123"),       "chercheur"),
+            ("admin",      "admin123",   "admin"),
+            ("nicolas",    "nico123",    "admin"),
+            ("clemence",   "clem123",    "admin"),
+            ("florent",    "flo123",     "admin"),
+            ("pauline",    "Pauline45",  "operateur"),
+            ("chercheur",  "ch123",      "chercheur"),
         ]
-        for u in users_demo:
-            db.execute("INSERT OR IGNORE INTO users (username,password,role) VALUES (?,?,?)", u)
-        # Mise à jour du rôle de florent en admin (migration pour bases existantes)
-        db.execute("UPDATE users SET role='admin' WHERE username='florent'")
+        for username, plain_pw, role in users_demo:
+            existing = db.execute(
+                "SELECT id FROM users WHERE username=?", (username,)
+            ).fetchone()
+            if existing:
+                # Resynchronise mot de passe + rôle pour rester cohérent avec login.html
+                db.execute(
+                    "UPDATE users SET password=?, role=? WHERE username=?",
+                    (hash_pw(plain_pw), role, username)
+                )
+            else:
+                db.execute(
+                    "INSERT INTO users (username, password, role) VALUES (?,?,?)",
+                    (username, hash_pw(plain_pw), role)
+                )
 
         # Projets et animaux démo — uniquement si la base est vide (évite d'écraser les données réelles)
         if db.execute("SELECT COUNT(*) FROM projets").fetchone()[0] == 0:
