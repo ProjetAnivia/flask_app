@@ -339,9 +339,84 @@ initNiivue();
 </script>
 {% endif %}
 
-<!-- Historique acquisitions -->
+<!-- Cahier de manips : poids / qualité / problèmes (éditables) -->
+{% if acqs %}
 <div class="card">
-  <div class="card-title">Historique des acquisitions</div>
+  <div class="card-title">
+    Cahier de manips
+    <span style="font-family:var(--font-mono);font-size:9px;color:var(--hint);
+                 margin-left:8px;letter-spacing:0;text-transform:none;">
+      poids · qualité image · problèmes — édition inline
+    </span>
+  </div>
+  <div style="overflow-x:auto;">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Séquence</th>
+        <th>Date</th>
+        <th style="width:110px;">Poids (g)</th>
+        <th style="width:150px;">Qualité</th>
+        <th style="width:160px;">Problème</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for a in acqs %}
+      <tr>
+        <td class="mono">{{ a.sequence or "—" }}</td>
+        <td class="mono">{{ a.date_acq or "—" }}</td>
+        <td>
+          <input class="form-input metadata-input" type="number" step="0.1" min="0.1" max="5000"
+                 data-acq-id="{{ a.id }}" data-field="poids_g"
+                 value="{{ a.poids_g if a.poids_g is not none else '' }}"
+                 placeholder="—"
+                 style="padding:4px 8px;font-size:11px;width:90px;">
+        </td>
+        <td>
+          <select class="form-select metadata-input"
+                  data-acq-id="{{ a.id }}" data-field="qualite"
+                  style="padding:4px 8px;font-size:11px;">
+            <option value="" {% if not a.qualite %}selected{% endif %}>— non évaluée —</option>
+            <option value="excellente"  {% if a.qualite=='excellente' %}selected{% endif %}>Excellente</option>
+            <option value="bonne"       {% if a.qualite=='bonne' %}selected{% endif %}>Bonne</option>
+            <option value="degradee"    {% if a.qualite=='degradee' %}selected{% endif %}>Dégradée</option>
+            <option value="inutilisable" {% if a.qualite=='inutilisable' %}selected{% endif %}>Inutilisable</option>
+          </select>
+        </td>
+        <td>
+          <select class="form-select metadata-input"
+                  data-acq-id="{{ a.id }}" data-field="probleme_type"
+                  style="padding:4px 8px;font-size:11px;">
+            <option value="" {% if not a.probleme_type %}selected{% endif %}>— —</option>
+            <option value="aucun"          {% if a.probleme_type=='aucun' %}selected{% endif %}>Aucun (RAS)</option>
+            <option value="positionnement" {% if a.probleme_type=='positionnement' %}selected{% endif %}>Positionnement</option>
+            <option value="artefact"       {% if a.probleme_type=='artefact' %}selected{% endif %}>Artéfact</option>
+            <option value="mouvement"      {% if a.probleme_type=='mouvement' %}selected{% endif %}>Mouvement</option>
+            <option value="materiel"       {% if a.probleme_type=='materiel' %}selected{% endif %}>Matériel</option>
+            <option value="autre"          {% if a.probleme_type=='autre' %}selected{% endif %}>Autre</option>
+          </select>
+        </td>
+        <td>
+          <input class="form-input metadata-input" type="text" maxlength="1000"
+                 data-acq-id="{{ a.id }}" data-field="probleme_desc"
+                 value="{{ a.probleme_desc or '' }}"
+                 placeholder="détail (facultatif)"
+                 style="padding:4px 8px;font-size:11px;">
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <div id="metadata-save-status" style="margin-top:8px;font-family:var(--font-mono);
+       font-size:10px;color:var(--hint);min-height:14px;"></div>
+</div>
+{% endif %}
+
+<!-- Planning acquisitions -->
+<div class="card">
+  <div class="card-title">Planning acquisitions</div>
   {% if acqs %}
   <table class="data-table">
     <thead>
@@ -367,6 +442,14 @@ initNiivue();
           {% elif a.statut == "a_refaire" %}<span class="pill pill-redo">à refaire</span>
           {% elif a.statut == "en_cours" %}<span class="pill pill-prog">en cours</span>
           {% else %}<span class="pill pill-wait">en attente</span>{% endif %}
+          {% if a.probleme_type and a.probleme_type != 'aucun' %}
+            <span title="Problème : {{ a.probleme_type }}{% if a.probleme_desc %} — {{ a.probleme_desc }}{% endif %}"
+                  style="color:var(--red);font-size:11px;margin-left:2px;cursor:help;">⚠</span>
+          {% endif %}
+          {% if a.qualite in ('degradee', 'inutilisable') %}
+            <span title="Qualité : {{ a.qualite }}"
+                  style="color:var(--amber);font-size:11px;margin-left:2px;cursor:help;">●</span>
+          {% endif %}
         </td>
         <!-- Volumétrie -->
         <td id="vol-cell-{{ a.id }}">
@@ -549,7 +632,7 @@ initNiivue();
          padding:14px;font-size:11px;font-family:var(--font-mono);overflow-x:auto;white-space:pre-wrap;
          color:var(--text);"></pre>
     <div id="dti-modal-fa" style="display:none;margin-top:14px;padding:12px;background:var(--teal-bg);
-         border:1px solid rgba(13,148,112,0.2);border-radius:4px;font-family:var(--font-mono);font-size:12px;">
+         border:1px solid rgba(234,124,28,0.22);border-radius:4px;font-family:var(--font-mono);font-size:12px;">
       <span style="color:var(--hint);">FA moyen (cerveau) : </span>
       <span id="dti-modal-fa-val" style="color:var(--teal);font-weight:500;"></span>
     </div>
@@ -705,6 +788,56 @@ async function updateStatut(acqId, newStatut) {
   });
   if (!res.ok) alert('Erreur lors de la mise à jour du statut.');
 }
+
+// ── Cahier de manips : sauvegarde inline (poids/qualité/problème) ────────────
+(function initMetadataSave() {
+  const inputs = document.querySelectorAll('.metadata-input');
+  if (!inputs.length) return;
+  const status = document.getElementById('metadata-save-status');
+
+  // Debounce par champ — évite un PATCH à chaque frappe
+  const timers = {};
+
+  function showStatus(msg, color) {
+    status.textContent = msg;
+    status.style.color = color || 'var(--hint)';
+  }
+
+  async function save(input) {
+    const acqId = input.dataset.acqId;
+    const field = input.dataset.field;
+    let value = input.value;
+    if (value === '') value = null;
+    if (field === 'poids_g' && value !== null) value = parseFloat(value);
+
+    showStatus('⟳ enregistrement…', 'var(--amber)');
+    try {
+      const res = await fetch(`/api/acquisitions/${acqId}/metadata`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [field]: value }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        showStatus('✗ ' + (j.error || 'erreur'), 'var(--red)');
+        return;
+      }
+      showStatus('✓ enregistré', 'var(--teal)');
+      setTimeout(() => { if (status.textContent === '✓ enregistré') showStatus(''); }, 1500);
+    } catch (e) {
+      showStatus('✗ erreur réseau', 'var(--red)');
+    }
+  }
+
+  inputs.forEach(input => {
+    const trigger = input.tagName === 'SELECT' ? 'change' : 'input';
+    input.addEventListener(trigger, () => {
+      const key = `${input.dataset.acqId}-${input.dataset.field}`;
+      clearTimeout(timers[key]);
+      timers[key] = setTimeout(() => save(input), trigger === 'input' ? 600 : 0);
+    });
+  });
+})();
 
 // ── Volumétrie ────────────────────────────────────────────────────────────────
 async function startVolumetrie(acqId) {

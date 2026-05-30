@@ -11,9 +11,23 @@
     {% elif pct >= 40 %}<span class="pill pill-prog">en cours</span>
     {% elif total_acq == 0 %}<span class="pill pill-wait">démarrage</span>
     {% else %}<span class="pill pill-redo">retard</span>{% endif %}
+    {% if my_role_projet %}
+      <span class="pill pill-prog" title="Votre rôle dans ce projet">
+        Mon rôle : {{ my_role_projet }}
+      </span>
+    {% elif current_user.role == 'admin' %}
+      <span class="pill pill-admin" title="Accès admin global">
+        Admin global
+      </span>
+    {% endif %}
     <div style="margin-left:auto;display:flex;gap:8px;">
       <a href="/api/export/projet/{{ projet.nom }}/rapport.csv" class="btn-ghost" style="font-size:11px;padding:5px 14px;">↓ Rapport CSV</a>
       <a href="/api/export/animaux.csv?projet={{ projet.nom }}" class="btn-ghost" style="font-size:11px;padding:5px 14px;">↓ Animaux CSV</a>
+      <a href="/api/export/bids/{{ projet.nom }}.zip" class="btn-ghost"
+         style="font-size:11px;padding:5px 14px;"
+         title="Export BIDS-like : dataset_description.json, participants.tsv, sub-X/ses-Y/*.nii.gz + sidecars JSON">
+        ↓ Export BIDS
+      </a>
     </div>
   </div>
   <div class="page-sub">Resp. {{ projet.resp or "—" }} · {{ projet.nb_animaux_prevus }} animaux prévus</div>
@@ -57,6 +71,165 @@
     {% if sm.get('a_refaire') %}<span class="pill pill-redo">{{ sm.a_refaire }} à refaire</span>{% endif %}
   </div>
 </div>
+
+<!-- ─── Membres du projet (droits par projet) ────────────────────────────── -->
+<div class="card">
+  <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;">
+    <span>
+      Membres du projet
+      {% if not membres %}
+        <span style="font-family:var(--font-mono);font-size:9px;color:var(--red);
+                     margin-left:8px;letter-spacing:0;text-transform:none;">
+          ⚠ aucun membre — seuls les admins y ont accès
+        </span>
+      {% endif %}
+    </span>
+    {% if can_manage %}
+    <button class="btn-ghost" style="font-size:11px;padding:4px 12px;"
+            onclick="toggleAddMembre()">+ Ajouter</button>
+    {% endif %}
+  </div>
+
+  {% if membres %}
+  <table class="data-table" style="margin-bottom:0;">
+    <thead>
+      <tr>
+        <th>Utilisateur</th>
+        <th style="width:160px;">Rôle projet</th>
+        <th style="width:140px;">Ajouté par</th>
+        <th style="width:120px;">Date</th>
+        {% if can_manage %}<th style="width:80px;">Action</th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for m in membres %}
+      <tr id="membre-row-{{ m.user_id }}">
+        <td><strong>{{ m.username }}</strong></td>
+        <td>
+          {% if can_manage %}
+            <select class="form-select" style="padding:4px 8px;font-size:11px;"
+                    onchange="updateMembreRole({{ m.user_id }}, this.value)">
+              <option value="responsable" {% if m.role_projet=='responsable' %}selected{% endif %}>responsable</option>
+              <option value="membre"      {% if m.role_projet=='membre' %}selected{% endif %}>membre</option>
+              <option value="lecteur"     {% if m.role_projet=='lecteur' %}selected{% endif %}>lecteur</option>
+            </select>
+          {% else %}
+            <span class="pill {% if m.role_projet=='responsable' %}pill-admin-green{% elif m.role_projet=='membre' %}pill-op{% else %}pill-obs{% endif %}">
+              {{ m.role_projet }}
+            </span>
+          {% endif %}
+        </td>
+        <td class="mono" style="color:var(--muted);">{{ m.added_by or "—" }}</td>
+        <td class="mono" style="font-size:11px;color:var(--hint);">
+          {{ m.added_at[:10] if m.added_at else "—" }}
+        </td>
+        {% if can_manage %}
+        <td>
+          <button class="btn-ghost" style="font-size:11px;padding:3px 10px;color:var(--red);"
+                  onclick="removeMembre({{ m.user_id }}, '{{ m.username }}')">
+            Retirer
+          </button>
+        </td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div style="font-family:var(--font-mono);font-size:11px;color:var(--muted);
+              padding:8px 12px;background:var(--red-bg);border-radius:4px;
+              border:1px solid rgba(220,38,38,0.18);">
+    Aucun membre. Ce projet est <strong>invisible pour les chercheurs et opérateurs</strong>
+    tant qu'aucun membre n'est ajouté. Seuls les admins globaux y ont accès actuellement.
+  </div>
+  {% endif %}
+
+  {% if can_manage %}
+  <div id="add-membre-form" style="display:none;margin-top:14px;padding-top:14px;
+       border-top:1px solid var(--border);">
+    <div style="display:grid;grid-template-columns:1fr 180px auto auto;gap:10px;align-items:end;">
+      <div class="form-row">
+        <label class="form-label">Utilisateur</label>
+        <input class="form-input" type="text" id="new-membre-username" list="users-datalist"
+               placeholder="nom d'utilisateur">
+        <datalist id="users-datalist">
+          {% for u in all_users %}<option value="{{ u }}">{% endfor %}
+        </datalist>
+      </div>
+      <div class="form-row">
+        <label class="form-label">Rôle</label>
+        <select class="form-select" id="new-membre-role">
+          <option value="membre" selected>membre</option>
+          <option value="responsable">responsable</option>
+          <option value="lecteur">lecteur</option>
+        </select>
+      </div>
+      <button class="btn-primary" onclick="addMembre()">Ajouter</button>
+      <button class="btn-ghost" onclick="toggleAddMembre()">Annuler</button>
+    </div>
+    <div id="add-membre-msg" style="margin-top:6px;font-family:var(--font-mono);font-size:11px;"></div>
+  </div>
+  {% endif %}
+</div>
+
+<script>
+const PROJET_NOM = "{{ projet.nom }}";
+
+function toggleAddMembre() {
+  const f = document.getElementById('add-membre-form');
+  f.style.display = (f.style.display === 'none') ? 'block' : 'none';
+  if (f.style.display === 'block') document.getElementById('new-membre-username').focus();
+}
+
+async function addMembre() {
+  const username = document.getElementById('new-membre-username').value.trim();
+  const role     = document.getElementById('new-membre-role').value;
+  const msg      = document.getElementById('add-membre-msg');
+  if (!username) { msg.textContent = 'Renseigne un nom d\'utilisateur.'; msg.style.color = 'var(--amber)'; return; }
+
+  const res = await fetch(`/api/projets/${encodeURIComponent(PROJET_NOM)}/membres`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, role_projet: role }),
+  });
+  const j = await res.json();
+  if (!res.ok) {
+    msg.textContent = '✗ ' + (j.error || 'Erreur');
+    msg.style.color = 'var(--red)';
+    return;
+  }
+  msg.textContent = '✓ ajouté';
+  msg.style.color = 'var(--teal)';
+  setTimeout(() => location.reload(), 600);
+}
+
+async function updateMembreRole(userId, newRole) {
+  const res = await fetch(`/api/projets/${encodeURIComponent(PROJET_NOM)}/membres/${userId}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role_projet: newRole }),
+  });
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    showToast(j.error || 'Erreur lors du changement de rôle', 'error');
+  } else {
+    showToast('Rôle mis à jour', 'success', 2000);
+  }
+}
+
+async function removeMembre(userId, username) {
+  if (!confirm(`Retirer ${username} du projet ?`)) return;
+  const res = await fetch(`/api/projets/${encodeURIComponent(PROJET_NOM)}/membres/${userId}`, {
+    method: 'DELETE',
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    showToast(j.error || 'Erreur', 'error');
+    return;
+  }
+  showToast('Membre retiré.', 'success', 2000);
+  document.getElementById(`membre-row-${userId}`)?.remove();
+  setTimeout(() => location.reload(), 800);
+}
+</script>
 
 <!-- Protocole éthique -->
 <div class="card">

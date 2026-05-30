@@ -15,41 +15,148 @@
   <div class="page-sub">Suivi des séries restantes · statuts modifiables directement dans le tableau</div>
 </div>
 
-<!-- Légende -->
-<div class="card" style="background:var(--bg3);border-color:var(--border);">
-  <div class="card-title">Comment lire cette page</div>
-  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;font-size:13px;">
+<!-- ─── Créneaux IRM (en haut, mise en avant) ───────────────────────────── -->
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
+    <div class="card-title" style="margin:0;padding:0;border:none;">
+      Créneaux IRM
+      {% if nb_conflits > 0 %}
+        <span style="margin-left:8px;font-family:var(--font-mono);font-size:10px;
+                     padding:2px 8px;border-radius:2px;background:var(--red-bg);
+                     color:var(--red);border:1px solid rgba(220,38,38,0.25);">
+          {{ nb_conflits }} conflit(s) détecté(s)
+        </span>
+      {% endif %}
+    </div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn-ghost" type="button" onclick="openSerieModal()">
+        ↻ Planifier une série
+      </button>
+      <button class="btn-primary" type="button" onclick="openCreneauModal()">
+        + Réserver un créneau
+      </button>
+    </div>
+  </div>
+
+  {% if conflits %}
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      {% for c in conflits %}
+      <div style="display:grid;grid-template-columns:110px 1fr 1fr;gap:12px;align-items:center;
+                  padding:10px 12px;border-radius:4px;
+                  background:var(--red-bg);border:1px solid rgba(220,38,38,0.25);">
+        <div>
+          <div style="font-family:var(--font-mono);font-size:10px;color:var(--red);font-weight:500;">
+            CONFLIT
+          </div>
+          <div style="font-family:var(--font-mono);font-size:11px;color:var(--muted);">
+            {{ c.date_acq }}
+          </div>
+        </div>
+
+        <div style="font-size:12px;">
+          <a href="/animal/{{ c.a_projet }}/{{ c.a_animal }}"
+             style="font-weight:500;color:var(--text);text-decoration:none;">{{ c.a_animal }}</a>
+          <span style="color:var(--muted);"> · {{ c.a_seq }}</span>
+          <div style="font-family:var(--font-mono);font-size:10px;color:var(--muted);margin-top:2px;">
+            {{ c.a_heure }} → {{ c.a_fin }} · {{ c.a_user or '—' }}
+          </div>
+        </div>
+
+        <div style="font-size:12px;">
+          <a href="/animal/{{ c.b_projet }}/{{ c.b_animal }}"
+             style="font-weight:500;color:var(--text);text-decoration:none;">{{ c.b_animal }}</a>
+          <span style="color:var(--muted);"> · {{ c.b_seq }}</span>
+          <div style="font-family:var(--font-mono);font-size:10px;color:var(--muted);margin-top:2px;">
+            {{ c.b_heure }} → {{ c.b_fin }} · {{ c.b_user or '—' }}
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div style="text-align:center;padding:6px 0;font-size:12px;color:var(--muted);">
+      Aucun conflit de créneau détecté.
+    </div>
+  {% endif %}
+</div>
+
+<!-- ─── Légende (avec doc des 2 boutons) ────────────────────────────────── -->
+<details class="card" style="background:var(--bg3);border-color:var(--border);">
+  <summary style="cursor:pointer;font-family:var(--font-mono);font-size:9px;
+                   letter-spacing:0.15em;text-transform:uppercase;color:var(--hint);list-style:none;">
+    ▸ Comment lire cette page
+  </summary>
+  <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);
+              display:grid;grid-template-columns:1fr 1fr;gap:16px;font-size:13px;">
+
+    <!-- Action 1 : Réserver un créneau -->
     <div>
-      <div style="font-weight:500;margin-bottom:6px;">Barre d'avancement</div>
-      <div style="color:var(--muted);">
-        <span style="font-family:var(--font-mono);font-size:11px;">
-          acquisitions enregistrées ÷ (animaux prévus × séquences/animal)
-        </span><br>
-        Ex : 6 acq. / (10 animaux × 3 séq.) = <strong>20%</strong>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+        <span class="btn-primary" style="padding:3px 10px;font-size:10px;cursor:default;">+ Réserver un créneau</span>
+      </div>
+      <div style="color:var(--muted);font-size:12px;line-height:1.6;">
+        Réserve <strong>un seul créneau IRM</strong> sur la machine — pour un animal donné,
+        une séquence précise, à une date et une heure choisies. Le système vérifie
+        automatiquement qu'aucun autre chercheur n'a déjà ce créneau et propose des
+        alternatives en cas de conflit.
       </div>
     </div>
+
+    <!-- Action 2 : Planifier une série -->
+    <div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+        <span class="btn-ghost" style="padding:3px 10px;font-size:10px;cursor:default;">↻ Planifier une série</span>
+      </div>
+      <div style="color:var(--muted);font-size:12px;line-height:1.6;">
+        Génère <strong>N créneaux récurrents</strong> selon une fréquence
+        (toutes les 24 h / 3 j / semaine / mois…). Idéal pour un suivi longitudinal
+        d'un même animal. Un aperçu liste les créneaux libres ✓ et ceux en conflit ⚠
+        avant confirmation.
+      </div>
+    </div>
+
+    <!-- Barre d'avancement -->
+    <div>
+      <div style="font-weight:500;margin-bottom:6px;">Barre d'avancement</div>
+      <div style="color:var(--muted);font-size:12px;">
+        <span style="font-family:var(--font-mono);font-size:11px;">
+          acquisitions ÷ (animaux prévus × séquences/animal)
+        </span><br>
+        Ex : 6 acq. / (10 × 3) = <strong>20 %</strong>
+      </div>
+    </div>
+
+    <!-- Statuts -->
     <div>
       <div style="font-weight:500;margin-bottom:6px;">Statut animal</div>
-      <div style="display:flex;flex-direction:column;gap:4px;">
-        <div><span class="pill pill-ok">OK</span> — toutes les acquisitions sont validées</div>
-        <div><span class="pill pill-prog">en cours</span> — acquisitions en train de se faire</div>
+      <div style="display:flex;flex-direction:column;gap:4px;font-size:12px;">
+        <div><span class="pill pill-ok">OK</span> — toutes les acquisitions validées</div>
+        <div><span class="pill pill-prog">en cours</span> — acquisitions en cours</div>
         <div><span class="pill pill-wait">en attente</span> — pas encore démarré</div>
         <div><span class="pill pill-redo">à refaire</span> — une acquisition a échoué</div>
       </div>
     </div>
-    <div>
+
+    <!-- Alertes -->
+    <div style="grid-column:1 / -1;">
       <div style="font-weight:500;margin-bottom:6px;">Types d'alertes</div>
-      <div style="display:flex;flex-direction:column;gap:4px;">
-        <div style="color:var(--red);font-family:var(--font-mono);font-size:11px;">REPRISE</div>
-        <div style="color:var(--muted);font-size:12px;margin-bottom:4px;">Statut « à refaire » — l'acquisition a échoué et doit être recommencée.</div>
-        <div style="color:var(--amber);font-family:var(--font-mono);font-size:11px;">MANQUANT</div>
-        <div style="color:var(--muted);font-size:12px;margin-bottom:4px;">Moins d'acquisitions que prévu pour cet animal.</div>
-        <div style="color:var(--blue);font-family:var(--font-mono);font-size:11px;">RETARD</div>
-        <div style="color:var(--muted);font-size:12px;">Projet global en dessous de 50% d'avancement.</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;font-size:12px;">
+        <div>
+          <div style="color:var(--red);font-family:var(--font-mono);font-size:11px;">REPRISE</div>
+          <div style="color:var(--muted);">Statut « à refaire » — l'acquisition doit être recommencée.</div>
+        </div>
+        <div>
+          <div style="color:var(--amber);font-family:var(--font-mono);font-size:11px;">MANQUANT</div>
+          <div style="color:var(--muted);">Moins d'acquisitions que prévu pour cet animal.</div>
+        </div>
+        <div>
+          <div style="color:var(--blue);font-family:var(--font-mono);font-size:11px;">RETARD</div>
+          <div style="color:var(--muted);">Projet global sous 50 % d'avancement.</div>
+        </div>
       </div>
     </div>
   </div>
-</div>
+</details>
 
 <!-- Alertes actives -->
 {% if alertes %}
@@ -81,12 +188,398 @@
   </div>
 </div>
 {% else %}
-<div class="card" style="border-color:rgba(13,148,112,0.2);background:var(--teal-bg);">
+<div class="card" style="border-color:rgba(234,124,28,0.22);background:var(--teal-bg);">
   <div style="text-align:center;padding:8px 0;font-size:13px;color:var(--teal);">
     Aucune alerte — tous les projets sont dans les temps.
   </div>
 </div>
 {% endif %}
+
+<!-- ─── Modal Réserver un créneau ────────────────────────────────────────── -->
+<div id="creneauModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);
+     z-index:1000;align-items:center;justify-content:center;padding:20px;">
+  <div style="background:var(--bg2);border-radius:10px;max-width:520px;width:100%;
+              padding:24px;box-shadow:0 12px 40px rgba(0,0,0,0.25);">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+      <div style="font-size:15px;font-weight:600;color:var(--text);">Réserver un créneau IRM</div>
+      <button onclick="closeCreneauModal()" style="background:none;border:none;font-size:20px;
+              color:var(--muted);cursor:pointer;line-height:1;">&times;</button>
+    </div>
+
+    <form id="creneauForm" class="form-grid" onsubmit="submitCreneau(event)">
+      <div class="form-row" style="grid-column:1/-1;">
+        <label class="form-label">Projet *</label>
+        <select class="form-select" name="projet" required>
+          <option value="">— sélectionner —</option>
+          {% for p in projets %}
+            <option value="{{ p.nom }}">{{ p.nom }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="form-row">
+        <label class="form-label">Animal *</label>
+        <input class="form-input" name="animal_id" required placeholder="ex: B3">
+      </div>
+
+      <div class="form-row">
+        <label class="form-label">Séquence *</label>
+        <input class="form-input" name="sequence" required placeholder="ex: T2_MSME">
+      </div>
+
+      <div class="form-row">
+        <label class="form-label">Date *</label>
+        <input class="form-input" type="date" name="date_acq" required>
+      </div>
+
+      <div class="form-row">
+        <label class="form-label">Heure début *</label>
+        <input class="form-input" type="time" name="heure_debut" required>
+      </div>
+
+      <div class="form-row">
+        <label class="form-label">Durée (min) *</label>
+        <input class="form-input" type="number" name="duree_min" min="1" max="480" value="30" required>
+      </div>
+
+      <div class="form-row">
+        <label class="form-label">Statut</label>
+        <select class="form-select" name="statut">
+          <option value="en_attente">en attente (planifié)</option>
+          <option value="en_cours">en cours</option>
+          <option value="ok">terminé</option>
+        </select>
+      </div>
+
+      <!-- Zone de résultat (conflits / suggestions / OK) -->
+      <div id="creneauResult" style="grid-column:1/-1;display:none;"></div>
+
+      <div style="grid-column:1/-1;display:flex;gap:8px;justify-content:flex-end;margin-top:8px;">
+        <button type="button" class="btn-ghost" onclick="closeCreneauModal()">Annuler</button>
+        <button type="button" class="btn-ghost" onclick="checkCreneau()">Vérifier le créneau</button>
+        <button type="submit" class="btn-primary" id="creneauSubmitBtn">Réserver</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+function todayISO() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const j = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${j}`;
+}
+
+function openCreneauModal() {
+  document.getElementById('creneauModal').style.display = 'flex';
+  document.getElementById('creneauResult').style.display = 'none';
+  document.getElementById('creneauForm').reset();
+  // Préremplit la date d'acquisition avec aujourd'hui
+  const dateInp = document.querySelector('#creneauForm [name=date_acq]');
+  if (dateInp) dateInp.value = todayISO();
+}
+function closeCreneauModal() {
+  document.getElementById('creneauModal').style.display = 'none';
+}
+
+async function checkCreneau() {
+  const f = document.getElementById('creneauForm');
+  const data = Object.fromEntries(new FormData(f));
+  if (!data.date_acq || !data.heure_debut || !data.duree_min) {
+    showToast('Renseigne date, heure et durée pour vérifier.', 'warning');
+    return;
+  }
+  const res = await fetch('/api/planification/check', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const j = await res.json();
+  renderCreneauResult(j);
+}
+
+function renderCreneauResult(j) {
+  const box = document.getElementById('creneauResult');
+  box.style.display = 'block';
+  if (j.ok) {
+    box.innerHTML = `
+      <div style="padding:10px 12px;border-radius:4px;background:var(--teal-bg);
+                  border:1px solid rgba(234,124,28,0.28);color:var(--teal);font-size:12px;">
+        Créneau libre — tu peux réserver.
+      </div>`;
+    return;
+  }
+  let html = `<div style="padding:10px 12px;border-radius:4px;background:var(--red-bg);
+                          border:1px solid rgba(220,38,38,0.25);font-size:12px;">
+    <div style="color:var(--red);font-weight:500;margin-bottom:6px;">
+      Conflit avec ${j.conflicts.length} créneau(x) existant(s) :
+    </div>
+    <ul style="margin:0 0 8px 16px;color:var(--text);">`;
+  for (const c of j.conflicts) {
+    const fin = c.heure_fin || '—';
+    html += `<li>${c.animal_id} · ${c.sequence} (${c.heure_debut}–${fin}) — ${c.importé_par || '—'}</li>`;
+  }
+  html += '</ul>';
+  if (j.suggestions && j.suggestions.length) {
+    html += '<div style="color:var(--muted);font-size:11px;margin-top:6px;">Créneaux suggérés :</div>';
+    html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;">';
+    for (const s of j.suggestions) {
+      html += `<button type="button" class="btn-ghost" style="padding:4px 10px;font-size:11px;"
+              onclick="applySuggestion('${s.heure_debut}')">${s.heure_debut} → ${s.heure_fin}</button>`;
+    }
+    html += '</div>';
+  }
+  html += '</div>';
+  box.innerHTML = html;
+}
+
+function applySuggestion(heure) {
+  document.querySelector('#creneauForm [name=heure_debut]').value = heure;
+  checkCreneau();
+}
+
+async function submitCreneau(e) {
+  e.preventDefault();
+  const f = document.getElementById('creneauForm');
+  const data = Object.fromEntries(new FormData(f));
+  const res = await fetch('/api/acquisitions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (res.status === 409) {
+    const j = await res.json();
+    renderCreneauResult({ ok: false, conflicts: j.conflicts || [], suggestions: [] });
+    showToast('Conflit — choisis un autre créneau.', 'error');
+    return;
+  }
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    showToast(j.error || 'Erreur lors de la réservation', 'error');
+    return;
+  }
+  showToast('Créneau réservé.', 'success');
+  closeCreneauModal();
+  setTimeout(() => location.reload(), 800);
+}
+
+// Fermer la modal en cliquant en dehors
+document.getElementById('creneauModal').addEventListener('click', (e) => {
+  if (e.target.id === 'creneauModal') closeCreneauModal();
+});
+</script>
+
+<!-- ─── Modal Planifier une série ────────────────────────────────────────── -->
+<div id="serieModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);
+     z-index:1000;align-items:center;justify-content:center;padding:20px;overflow-y:auto;">
+  <div style="background:var(--bg2);border-radius:10px;max-width:760px;width:100%;
+              padding:24px;box-shadow:0 12px 40px rgba(0,0,0,0.25);max-height:90vh;
+              overflow-y:auto;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+      <div style="font-size:15px;font-weight:600;color:var(--text);">Planifier une série d'acquisitions</div>
+      <button onclick="closeSerieModal()" style="background:none;border:none;font-size:20px;
+              color:var(--muted);cursor:pointer;line-height:1;">&times;</button>
+    </div>
+    <div style="font-size:11px;color:var(--hint);margin-bottom:16px;">
+      Génère N acquisitions planifiées (statut « en attente ») selon une fréquence donnée.
+    </div>
+
+    <form id="serieForm" class="form-grid" onsubmit="event.preventDefault();">
+      <div class="form-row" style="grid-column:1/-1;">
+        <label class="form-label">Projet *</label>
+        <select class="form-select" name="projet" required>
+          <option value="">— sélectionner —</option>
+          {% for p in projets %}
+            <option value="{{ p.nom }}">{{ p.nom }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="form-row">
+        <label class="form-label">Animal *</label>
+        <input class="form-input" name="animal_id" required placeholder="ex: B3">
+      </div>
+
+      <div class="form-row">
+        <label class="form-label">Séquence *</label>
+        <input class="form-input" name="sequence" required placeholder="ex: T2_MSME">
+      </div>
+
+      <div class="form-row">
+        <label class="form-label">Date 1ère acquisition *</label>
+        <input class="form-input" type="date" name="date_debut" required>
+      </div>
+
+      <div class="form-row">
+        <label class="form-label">Heure début *</label>
+        <input class="form-input" type="time" name="heure_debut" value="09:00" required>
+      </div>
+
+      <div class="form-row">
+        <label class="form-label">Durée (min) *</label>
+        <input class="form-input" type="number" name="duree_min" min="1" max="480" value="30" required>
+      </div>
+
+      <div class="form-row">
+        <label class="form-label">Fréquence *</label>
+        <select class="form-select" name="frequence" required onchange="toggleCustomDays()">
+          <option value="24h">24h</option>
+          <option value="48h">48h</option>
+          <option value="72h">72h</option>
+          <option value="1sem" selected>1 semaine</option>
+          <option value="2sem">2 semaines</option>
+          <option value="1mois">1 mois</option>
+          <option value="custom">Personnalisée…</option>
+        </select>
+      </div>
+
+      <div class="form-row" id="serie-custom-days-row" style="display:none;">
+        <label class="form-label">Tous les N jours</label>
+        <input class="form-input" type="number" name="custom_days" min="1" max="365" value="7">
+      </div>
+
+      <div class="form-row">
+        <label class="form-label">Nombre d'acquisitions *</label>
+        <input class="form-input" type="number" name="nb_repetitions" min="1" max="50" value="6" required>
+      </div>
+
+      <!-- Aperçu de la série -->
+      <div id="seriePreview" style="grid-column:1/-1;display:none;">
+        <div style="display:flex;gap:14px;align-items:center;margin:8px 0 6px;">
+          <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);
+                       letter-spacing:0.1em;text-transform:uppercase;">Aperçu de la série</div>
+          <div id="serieStats" style="display:flex;gap:10px;"></div>
+        </div>
+        <div id="serieItems" style="border:1px solid var(--border);border-radius:6px;
+             max-height:260px;overflow-y:auto;"></div>
+      </div>
+
+      <div style="grid-column:1/-1;display:flex;gap:8px;justify-content:flex-end;margin-top:8px;
+                  align-items:center;">
+        <label style="font-size:11px;color:var(--muted);display:none;align-items:center;gap:6px;
+                       margin-right:auto;" id="serieForceWrap">
+          <input type="checkbox" id="serieForce"> <span>Forcer même les créneaux en conflit</span>
+        </label>
+        <button type="button" class="btn-ghost" onclick="closeSerieModal()">Annuler</button>
+        <button type="button" class="btn-ghost" onclick="previewSerie()">Aperçu</button>
+        <button type="button" class="btn-primary" id="serieConfirmBtn"
+                onclick="confirmSerie()" disabled>Confirmer</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+function openSerieModal() {
+  document.getElementById('serieModal').style.display = 'flex';
+  document.getElementById('seriePreview').style.display = 'none';
+  document.getElementById('serieForceWrap').style.display = 'none';
+  document.getElementById('serieConfirmBtn').disabled = true;
+  document.getElementById('serieForm').reset();
+  // Préremplit la date de départ avec aujourd'hui
+  const dateInp = document.querySelector('#serieForm [name=date_debut]');
+  if (dateInp) dateInp.value = todayISO();
+  toggleCustomDays();
+}
+function closeSerieModal() {
+  document.getElementById('serieModal').style.display = 'none';
+}
+function toggleCustomDays() {
+  const sel = document.querySelector('#serieForm [name=frequence]').value;
+  document.getElementById('serie-custom-days-row').style.display = (sel === 'custom') ? '' : 'none';
+}
+
+let _seriePreviewItems = null;
+let _seriePreviewDuree = null;
+
+async function previewSerie() {
+  const f = document.getElementById('serieForm');
+  const data = Object.fromEntries(new FormData(f));
+  if (!f.reportValidity()) return;
+
+  const res = await fetch('/api/planification/serie/preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const j = await res.json();
+  if (!res.ok) {
+    showToast(j.error || 'Erreur', 'error');
+    return;
+  }
+
+  _seriePreviewItems = j.items;
+  _seriePreviewDuree = j.duree_min;
+
+  // Stats
+  const stats = document.getElementById('serieStats');
+  stats.innerHTML = `
+    <span class="pill pill-ok">${j.nb_libres} libre(s)</span>
+    ${j.nb_conflits > 0 ? `<span class="pill pill-redo">${j.nb_conflits} en conflit</span>` : ''}
+    <span class="pill pill-obs">${j.nb_total} au total</span>`;
+
+  // Liste
+  let html = '';
+  for (const it of j.items) {
+    const bg = it.conflicts.length
+      ? 'background:var(--red-bg);border-left:3px solid var(--red);'
+      : 'background:var(--teal-bg);border-left:3px solid var(--teal);';
+    let conflictTxt = '';
+    if (it.conflicts.length) {
+      conflictTxt = ' — conflit : ' + it.conflicts
+        .map(c => `${c.animal_id}/${c.sequence} (${c.heure_debut}${c.user ? ', '+c.user : ''})`)
+        .join(', ');
+    }
+    html += `<div style="${bg}padding:6px 12px;font-family:var(--font-mono);font-size:11px;
+                       border-bottom:1px solid var(--border);display:flex;gap:12px;align-items:center;">
+      <span style="color:var(--hint);min-width:24px;">#${it.n}</span>
+      <span style="min-width:90px;color:var(--text);">${it.date_acq}</span>
+      <span style="min-width:55px;color:var(--muted);">${it.heure_debut}</span>
+      <span style="color:${it.conflicts.length ? 'var(--red)' : 'var(--teal)'};
+                   font-size:10px;">${it.conflicts.length ? '⚠ conflit' : '✓ libre'}${conflictTxt}</span>
+    </div>`;
+  }
+  document.getElementById('serieItems').innerHTML = html;
+  document.getElementById('seriePreview').style.display = 'block';
+  document.getElementById('serieConfirmBtn').disabled = (j.nb_libres === 0 && j.nb_conflits === 0);
+  document.getElementById('serieForceWrap').style.display = j.nb_conflits > 0 ? 'flex' : 'none';
+}
+
+async function confirmSerie() {
+  if (!_seriePreviewItems) return;
+  const f    = document.getElementById('serieForm');
+  const data = Object.fromEntries(new FormData(f));
+  const force = document.getElementById('serieForce').checked;
+
+  const payload = {
+    projet:     data.projet,
+    animal_id:  data.animal_id,
+    sequence:   data.sequence,
+    items:      _seriePreviewItems,
+    duree_min:  _seriePreviewDuree,
+    force:      force,
+  };
+  const res = await fetch('/api/planification/serie/confirm', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const j = await res.json();
+  if (!res.ok) {
+    showToast(j.error || 'Erreur lors de la création', 'error');
+    return;
+  }
+  showToast(`${j.nb_created} acquisition(s) créée(s)${j.nb_skipped ? ', '+j.nb_skipped+' ignorée(s)' : ''}.`, 'success', 5000);
+  closeSerieModal();
+  setTimeout(() => location.reload(), 800);
+}
+
+document.getElementById('serieModal').addEventListener('click', (e) => {
+  if (e.target.id === 'serieModal') closeSerieModal();
+});
+</script>
 
 <!-- Par projet -->
 {% for p in projets %}

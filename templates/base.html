@@ -1,12 +1,27 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="fr" data-theme="light">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
   <meta name="csrf-token" content="{{ csrf_token }}">
   <title>IRM.FAIR — {% block title %}{% endblock %}</title>
+
+  <!-- Applique le thème AVANT le render pour éviter le flash -->
+  <script>
+    (function() {
+      const stored = localStorage.getItem('theme') || 'auto';
+      let theme = stored;
+      if (stored === 'auto') {
+        theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      }
+      document.documentElement.setAttribute('data-theme', theme);
+      document.documentElement.setAttribute('data-theme-pref', stored);
+    })();
+  </script>
+
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -14,6 +29,13 @@
       --font-mono: 'IBM Plex Mono', monospace;
       --font-sans: 'IBM Plex Sans', sans-serif;
 
+      --sidebar-w:   210px;
+      --sidebar-col: 52px;
+      --topbar-h:    48px;
+    }
+
+    /* ─── Thème CLAIR (par défaut) ─────────────────────────────────────────── */
+    [data-theme="light"] {
       --bg:       #f4f5f7;
       --bg2:      #ffffff;
       --bg3:      #f0f2f5;
@@ -26,10 +48,12 @@
       --border:   rgba(0,0,0,0.07);
       --border2:  rgba(0,0,0,0.13);
 
-      --teal:     #0d9470;
-      --teal-dim: #0a7a5c;
-      --teal-bg:  rgba(13,148,112,0.09);
+      /* ── Accent principal de la DA : orange ──────────────────────────── */
+      --teal:     #ea7c1c;
+      --teal-dim: #c8651a;
+      --teal-bg:  rgba(234,124,28,0.10);
 
+      /* Pour les statuts secondaires (warning/success différenciés) */
       --amber:    #b45309;
       --amber-bg: rgba(180,83,9,0.08);
 
@@ -39,9 +63,148 @@
       --blue:     #1d4ed8;
       --blue-bg:  rgba(29,78,216,0.08);
 
-      --sidebar-w:   210px;
-      --sidebar-col: 52px;   /* largeur réduite */
-      --topbar-h:    48px;
+      --sidebar-bg:        #1a2035;
+      --sidebar-bg-hover:  #242c4a;
+      --sidebar-text:      rgba(255,255,255,0.6);
+      --sidebar-text-hover:rgba(255,255,255,0.98);
+      --sidebar-section:   rgba(255,255,255,0.35);
+      --main-bg:           #eef0f4;
+
+      --btn-primary:       #ea7c1c;
+      --btn-primary-dim:   #c8651a;
+      --btn-primary-shadow: rgba(234,124,28,0.32);
+      --btn-primary-text:  #ffffff;
+    }
+
+    /* ─── Thème SOMBRE ─────────────────────────────────────────────────────── */
+    [data-theme="dark"] {
+      --bg:       #0f1419;
+      --bg2:      #1a2030;
+      --bg3:      #232a3d;
+      --bg4:      #2d3447;
+
+      --text:     #e5e7eb;
+      --muted:    #9ca3af;
+      --hint:     #6b7280;
+
+      --border:   rgba(255,255,255,0.08);
+      --border2:  rgba(255,255,255,0.13);
+
+      /* Accent orange en mode sombre — plus saturé */
+      --teal:     #fb923c;
+      --teal-dim: #ea580c;
+      --teal-bg:  rgba(251,146,60,0.14);
+
+      --amber:    #fbbf24;
+      --amber-bg: rgba(251,191,36,0.14);
+
+      --red:      #f87171;
+      --red-bg:   rgba(248,113,113,0.12);
+
+      --blue:     #60a5fa;
+      --blue-bg:  rgba(96,165,250,0.12);
+
+      --sidebar-bg:        #0a0e18;
+      --sidebar-bg-hover:  #161c2e;
+      --sidebar-text:      rgba(255,255,255,0.65);
+      --sidebar-text-hover:rgba(255,255,255,0.98);
+      --sidebar-section:   rgba(255,255,255,0.35);
+      --main-bg:           #0a0e18;
+
+      --btn-primary:       #f59e0b;
+      --btn-primary-dim:   #d97706;
+      --btn-primary-shadow: rgba(245,158,11,0.4);
+      --btn-primary-text:  #1a1a1a;
+    }
+
+    /* ─── Thème SÉPIA (entre clair et sombre, chaleureux) ─────────────────── */
+    [data-theme="sepia"] {
+      --bg:       #f1e7d0;
+      --bg2:      #faf3e0;
+      --bg3:      #ebe0c5;
+      --bg4:      #ddd0b0;
+
+      --text:     #3d2f1e;
+      --muted:    #6b5538;
+      --hint:     #9c8866;
+
+      --border:   rgba(61,47,30,0.1);
+      --border2:  rgba(61,47,30,0.18);
+
+      /* Accent orange chaud en mode sépia */
+      --teal:     #c46a1c;
+      --teal-dim: #9a5012;
+      --teal-bg:  rgba(196,106,28,0.13);
+
+      --amber:    #8a5d20;
+      --amber-bg: rgba(138,93,32,0.12);
+
+      --red:      #b91c1c;
+      --red-bg:   rgba(185,28,28,0.1);
+
+      --blue:     #1e5680;
+      --blue-bg:  rgba(30,86,128,0.1);
+
+      --sidebar-bg:        #3d2f1e;
+      --sidebar-bg-hover:  #4e3d27;
+      --sidebar-text:      rgba(245,232,200,0.7);
+      --sidebar-text-hover:rgba(245,232,200,0.99);
+      --sidebar-section:   rgba(245,232,200,0.42);
+      --main-bg:           #ece1c5;
+
+      --btn-primary:       #b8651a;
+      --btn-primary-dim:   #8f4f12;
+      --btn-primary-shadow: rgba(184,101,26,0.35);
+      --btn-primary-text:  #faf3e0;
+    }
+
+    /* ─── Thème CONTRASTE ÉLEVÉ (accessibilité) ───────────────────────────── */
+    [data-theme="contrast"] {
+      --bg:       #000000;
+      --bg2:      #000000;
+      --bg3:      #1a1a1a;
+      --bg4:      #2a2a2a;
+
+      --text:     #ffffff;
+      --muted:    #ffffff;
+      --hint:     #d4d4d4;
+
+      --border:   rgba(255,255,255,0.5);
+      --border2:  rgba(255,255,255,0.7);
+
+      /* Orange pur en mode contraste élevé */
+      --teal:     #ff9500;
+      --teal-dim: #cc7700;
+      --teal-bg:  rgba(255,149,0,0.22);
+
+      --amber:    #ffcc00;
+      --amber-bg: rgba(255,204,0,0.20);
+
+      --red:      #ff5050;
+      --red-bg:   rgba(255,80,80,0.18);
+
+      --blue:     #66b3ff;
+      --blue-bg:  rgba(102,179,255,0.18);
+
+      --sidebar-bg:        #000000;
+      --sidebar-bg-hover:  #262626;
+      --sidebar-text:      #ffffff;
+      --sidebar-text-hover:#ffaa00;
+      --sidebar-section:   #d4d4d4;
+      --main-bg:           #000000;
+
+      --btn-primary:       #ffaa00;
+      --btn-primary-dim:   #cc8800;
+      --btn-primary-shadow: rgba(255,170,0,0.5);
+      --btn-primary-text:  #000000;
+    }
+
+    /* Transition douce lors du changement de thème */
+    html { transition: background-color 0.25s ease; }
+    body, .topbar, .sidebar, .card, .metric-card,
+    .form-input, .form-select, .btn-primary, .btn-ghost,
+    .user-dropdown, .topbar-user-btn {
+      transition: background-color 0.25s ease, color 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
     }
 
     html, body { height: 100%; }
@@ -86,14 +249,14 @@
       width: var(--sidebar-w);
       min-width: var(--sidebar-w);
       height: var(--topbar-h);
-      background: #1a2035; border: none; cursor: pointer;
-      font-family: var(--font-mono); font-size: 11px; color: rgba(255,255,255,0.45);
+      background: var(--sidebar-bg); border: none; cursor: pointer;
+      font-family: var(--font-mono); font-size: 11px; color: var(--sidebar-section);
       gap: 10px;
       border-right: 1px solid rgba(255,255,255,0.06);
       transition: background 0.12s, width 0.22s, min-width 0.22s, color 0.12s;
       flex-shrink: 0;
     }
-    .sidebar-toggle:hover { background: #1e2540; color: rgba(255,255,255,0.85); }
+    .sidebar-toggle:hover { background: var(--sidebar-bg-hover); color: var(--sidebar-text-hover); }
     .shell.collapsed .sidebar-toggle { width: var(--sidebar-col); min-width: var(--sidebar-col); }
     .sidebar-toggle .toggle-label { transition: opacity 0.15s; white-space: nowrap; }
     .shell.collapsed .sidebar-toggle .toggle-label { display: none; }
@@ -118,7 +281,7 @@
       border-radius: 2px;
       background: var(--teal-bg);
       color: var(--teal);
-      border: 1px solid rgba(13,148,112,0.25);
+      border: 1px solid rgba(234,124,28,0.28);
     }
 
     /* ── Dropdown profil ── */
@@ -158,7 +321,7 @@
 
     /* ── Sidebar ── */
     .sidebar {
-      background: #1a2035;
+      background: var(--sidebar-bg);
       border-right: none;
       padding: 16px 0;
       display: flex;
@@ -166,14 +329,14 @@
       gap: 1px;
       overflow-y: auto;
       overflow-x: hidden;
-      transition: width 0.22s ease;
+      transition: width 0.22s ease, background 0.25s ease;
     }
     .nav-section {
       font-family: var(--font-mono);
       font-size: 9px;
       letter-spacing: 0.15em;
       text-transform: uppercase;
-      color: rgba(255,255,255,0.28);
+      color: var(--sidebar-section);
       padding: 14px 18px 5px;
       white-space: nowrap;
       overflow: hidden;
@@ -181,24 +344,92 @@
     }
     .shell.collapsed .nav-section { opacity: 0; padding: 8px 0; pointer-events: none; }
 
+    /* ── Widget NAS dans la sidebar ──────────────────────────────────────── */
+    .nav-nas-widget {
+      margin-top: auto;
+      padding: 12px 14px 14px;
+      border-top: 1px solid rgba(255,255,255,0.07);
+    }
+    .nav-nas-title {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      padding: 4px 0 8px;
+      gap: 8px;
+    }
+    .nav-nas-title #nav-nas-host {
+      font-family: var(--font-mono);
+      font-size: 8px;
+      color: rgba(255,255,255,0.4);
+      letter-spacing: 0;
+      text-transform: none;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 120px;
+      white-space: nowrap;
+    }
+    .nav-nas-loading {
+      font-family: var(--font-mono); font-size: 10px;
+      color: rgba(255,255,255,0.4); padding: 4px 0;
+    }
+    .nav-nas-body {
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .nav-nas-row {
+      display: flex; flex-direction: column; gap: 3px;
+    }
+    .nav-nas-row-head {
+      display: flex; justify-content: space-between;
+      font-family: var(--font-mono); font-size: 10px;
+    }
+    .nav-nas-row-head .nav-nas-label { color: rgba(255,255,255,0.55); }
+    .nav-nas-row-head .nav-nas-value { color: rgba(255,255,255,0.92); font-weight: 500; }
+    .nav-nas-bar {
+      height: 4px; background: rgba(255,255,255,0.08);
+      border-radius: 2px; overflow: hidden;
+    }
+    .nav-nas-bar > div {
+      height: 100%; border-radius: 2px;
+      transition: width 0.4s ease, background 0.2s ease;
+    }
+    .nav-nas-detail {
+      font-family: var(--font-mono); font-size: 9px;
+      color: rgba(255,255,255,0.4); margin-top: 1px;
+    }
+    .nav-nas-uptime {
+      display: flex; justify-content: space-between;
+      font-family: var(--font-mono); font-size: 10px;
+      padding-top: 8px; margin-top: 2px;
+      border-top: 1px solid rgba(255,255,255,0.06);
+    }
+    .nav-nas-uptime .nav-nas-label { color: rgba(255,255,255,0.55); }
+    .nav-nas-uptime .nav-nas-value { color: rgba(255,255,255,0.92); }
+    .nav-nas-note {
+      font-family: var(--font-mono); font-size: 9px;
+      color: rgba(255,255,255,0.35); font-style: italic;
+      line-height: 1.45; margin-top: 4px;
+    }
+    /* Caché en mode sidebar repliée */
+    .shell.collapsed .nav-nas-widget { display: none; }
+
     .nav-item {
       display: flex;
       align-items: center;
       gap: 10px;
       padding: 9px 18px;
       font-size: 13px;
-      color: rgba(255,255,255,0.55);
+      color: var(--sidebar-text);
       text-decoration: none;
       transition: background 0.12s, color 0.12s, padding 0.22s;
       border-left: 2px solid transparent;
       white-space: nowrap;
       overflow: hidden;
     }
-    .nav-item:hover { background: rgba(255,255,255,0.07); color: rgba(255,255,255,0.9); }
+    .nav-item:hover { background: var(--sidebar-bg-hover); color: var(--sidebar-text-hover); }
     .nav-item.active {
-      background: rgba(13,148,112,0.18);
-      color: #34d399;
-      border-left-color: #34d399;
+      background: var(--teal-bg);
+      color: var(--teal);
+      border-left-color: var(--teal);
       font-weight: 500;
     }
     .nav-icon {
@@ -215,7 +446,7 @@
 
     /* Collapsed : centrer les icônes */
     .shell.collapsed .nav-item { padding: 9px 0; justify-content: center; border-left-color: transparent !important; }
-    .shell.collapsed .nav-item.active { border-left-color: #34d399 !important; }
+    .shell.collapsed .nav-item.active { border-left-color: var(--teal) !important; }
     .shell.collapsed .nav-label { display: none; }
     .shell.collapsed .nav-icon { width: auto; min-width: auto; font-size: 14px; opacity: 0.7; }
     .shell.collapsed .nav-item.active .nav-icon { opacity: 1; }
@@ -236,11 +467,45 @@
     .main {
       overflow-y: auto;
       padding: 28px 32px;
-      background: #eef0f4;
+      background: var(--main-bg);
       display: flex;
       flex-direction: column;
       gap: 20px;
+      transition: background 0.25s ease;
     }
+
+    /* ── Theme switcher ── */
+    .theme-switcher {
+      padding: 8px 12px;
+      border-top: 1px solid var(--border);
+    }
+    .theme-switcher-label {
+      font-family: var(--font-mono); font-size: 9px;
+      letter-spacing: 0.1em; text-transform: uppercase; color: var(--hint);
+      padding: 4px 4px 8px;
+    }
+    .theme-options {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 4px;
+    }
+    .theme-opt {
+      cursor: pointer; border: 1px solid var(--border2); border-radius: 4px;
+      padding: 6px 2px; display: flex; flex-direction: column; align-items: center;
+      gap: 3px; background: var(--bg2); transition: all 0.15s;
+      font-family: var(--font-mono); font-size: 8.5px;
+      letter-spacing: 0.05em; color: var(--muted);
+    }
+    .theme-opt:hover { border-color: var(--teal); color: var(--text); }
+    .theme-opt.active {
+      border-color: var(--teal); background: var(--teal-bg); color: var(--teal);
+      box-shadow: 0 0 0 2px var(--teal-bg);
+    }
+    .theme-swatch {
+      width: 18px; height: 18px; border-radius: 3px; border: 1px solid var(--border2);
+      display: flex; overflow: hidden;
+    }
+    .theme-swatch span { flex: 1; }
 
     /* ── Page header ── */
     .page-header { display: flex; flex-direction: column; gap: 4px; margin-bottom: 2px; }
@@ -303,12 +568,12 @@
       display: inline-block; font-family: var(--font-mono); font-size: 10px;
       padding: 2px 8px; border-radius: 3px; border: 1px solid transparent;
     }
-    .pill-ok    { background: rgba(13,148,112,0.1);  color: var(--teal);  border-color: rgba(13,148,112,0.25); }
+    .pill-ok    { background: rgba(234,124,28,0.12);  color: var(--teal);  border-color: rgba(234,124,28,0.28); }
     .pill-wait  { background: var(--amber-bg);        color: var(--amber); border-color: rgba(180,83,9,0.2); }
     .pill-redo  { background: var(--red-bg);          color: var(--red);   border-color: rgba(220,38,38,0.2); }
     .pill-prog  { background: var(--blue-bg);         color: var(--blue);  border-color: rgba(29,78,216,0.2); }
     .pill-admin       { background: rgba(220,38,38,0.08);   color: var(--red);  border-color: rgba(220,38,38,0.25); }
-    .pill-admin-green { background: rgba(13,148,112,0.08); color: var(--teal); border-color: rgba(13,148,112,0.25); }
+    .pill-admin-green { background: rgba(234,124,28,0.10); color: var(--teal); border-color: rgba(234,124,28,0.28); }
     .pill-op    { background: var(--blue-bg);         color: var(--blue);  border-color: rgba(29,78,216,0.2); }
     .pill-obs   { background: var(--bg3);             color: var(--muted); border-color: var(--border2); }
 
@@ -350,13 +615,16 @@
     /* ── Boutons ── */
     .btn-primary {
       font-family: var(--font-mono); font-size: 12px;
-      background: var(--teal); color: #ffffff;
+      background: var(--btn-primary); color: var(--btn-primary-text);
       border: none; border-radius: 6px; padding: 9px 20px;
       cursor: pointer; font-weight: 500;
       transition: background 0.15s, box-shadow 0.15s;
-      box-shadow: 0 1px 4px rgba(13,148,112,0.3);
+      box-shadow: 0 1px 4px var(--btn-primary-shadow);
     }
-    .btn-primary:hover { background: var(--teal-dim); box-shadow: 0 2px 8px rgba(13,148,112,0.4); }
+    .btn-primary:hover {
+      background: var(--btn-primary-dim);
+      box-shadow: 0 2px 10px var(--btn-primary-shadow);
+    }
     .btn-ghost {
       font-family: var(--font-mono); font-size: 12px;
       background: transparent; color: var(--muted);
@@ -481,16 +749,47 @@
         <button class="topbar-user-btn" onclick="toggleUserMenu(event)">
           <span class="topbar-tag"
             {% if current_user.username == 'admin' %}style="background:rgba(220,38,38,0.08);color:var(--red);border-color:rgba(220,38,38,0.25);"
-            {% elif current_user.role == 'admin' %}style="background:rgba(13,148,112,0.08);color:var(--teal);border-color:rgba(13,148,112,0.25);"{% endif %}>
+            {% elif current_user.role == 'admin' %}style="background:rgba(234,124,28,0.10);color:var(--teal);border-color:rgba(234,124,28,0.28);"{% endif %}>
             {% if current_user.username == 'admin' %}SUDO{% elif current_user.role == 'admin' %}ADMIN{% else %}{{ current_user.role | upper }}{% endif %}
           </span>
           <span>{{ current_user.username }}</span>
           <span class="topbar-caret">▾</span>
         </button>
-        <div class="user-dropdown">
+        <div class="user-dropdown" style="min-width: 260px;">
           <div class="user-dropdown-header">{{ current_user.username }}</div>
           <a href="/profil" class="user-dropdown-item">Mon profil &amp; mot de passe</a>
           <div class="user-dropdown-sep"></div>
+
+          <div class="theme-switcher">
+            <div class="theme-switcher-label">Apparence</div>
+            <div class="theme-options" id="themeOptions">
+              <div class="theme-opt" data-theme-choice="light" title="Clair">
+                <div class="theme-swatch"><span style="background:#f4f5f7"></span><span style="background:#ffffff"></span></div>
+                Clair
+              </div>
+              <div class="theme-opt" data-theme-choice="sepia" title="Sépia">
+                <div class="theme-swatch"><span style="background:#f1e7d0"></span><span style="background:#faf3e0"></span></div>
+                Sépia
+              </div>
+              <div class="theme-opt" data-theme-choice="dark" title="Sombre">
+                <div class="theme-swatch"><span style="background:#0f1419"></span><span style="background:#1a2030"></span></div>
+                Sombre
+              </div>
+              <div class="theme-opt" data-theme-choice="contrast" title="Contraste élevé">
+                <div class="theme-swatch"><span style="background:#000"></span><span style="background:#fff"></span></div>
+                Contraste
+              </div>
+              <div class="theme-opt" data-theme-choice="auto" title="Système">
+                <div class="theme-swatch"><span style="background:#f4f5f7"></span><span style="background:#0f1419"></span></div>
+                Auto
+              </div>
+            </div>
+          </div>
+
+          <div class="user-dropdown-sep"></div>
+          {% if current_user.role == 'admin' %}
+          <a href="/api/docs" target="_blank" class="user-dropdown-item">📖 Documentation API</a>
+          {% endif %}
           <a href="/unlock?force=1" class="user-dropdown-item">🔒 Verrouiller</a>
           <a href="/logout" class="user-dropdown-item danger">Déconnexion</a>
         </div>
@@ -512,11 +811,13 @@
     <a href="/archive" class="nav-item {% if request.path == '/archive' %}active{% endif %}">
       <span class="nav-icon">⊡</span><span class="nav-label"> Archive</span>
     </a>
+
+    {% if current_user.role in ['admin', 'operateur'] %}
     <a href="/planification" class="nav-item {% if request.path == '/planification' %}active{% endif %}">
       <span class="nav-icon">→</span><span class="nav-label"> Planification</span>
     </a>
     <a href="/calendrier" class="nav-item {% if request.path == '/calendrier' %}active{% endif %}">
-      <span class="nav-icon">◫</span><span class="nav-label"> Historique acquisitions</span>
+      <span class="nav-icon">◫</span><span class="nav-label"> Planning acquisitions</span>
     </a>
     <a href="/nas-explorer" class="nav-item {% if request.path == '/nas-explorer' %}active{% endif %}">
       <span class="nav-icon">⊞</span><span class="nav-label"> Explorateur NAS</span>
@@ -529,6 +830,7 @@
     <a href="/logs" class="nav-item {% if request.path == '/logs' %}active{% endif %}">
       <span class="nav-icon">!</span><span class="nav-label"> Logs</span>
     </a>
+    {% endif %}
 
     {% if current_user.role == 'admin' %}
     <div class="nav-section">Administration</div>
@@ -538,6 +840,17 @@
     <a href="/connexions" class="nav-item {% if request.path == '/connexions' %}active{% endif %}">
       <span class="nav-icon">§</span><span class="nav-label"> Logs de connexion</span>
     </a>
+
+    <!-- Utilisation du NAS — admin uniquement, en bas de la nav -->
+    <div id="nav-nas-widget" class="nav-nas-widget">
+      <div class="nav-section nav-nas-title">
+        <span>Utilisation NAS</span>
+        <span id="nav-nas-host"></span>
+      </div>
+      <div id="nav-nas-body">
+        <div class="nav-nas-loading">chargement…</div>
+      </div>
+    </div>
     {% endif %}
   </nav>
 
@@ -601,6 +914,42 @@ function toggleUserMenu(e) {
 document.addEventListener('click', () => {
   document.getElementById('userMenuWrap')?.classList.remove('open');
 });
+// Empêcher la fermeture en cliquant à l'intérieur du dropdown
+document.querySelector('.user-dropdown')?.addEventListener('click', e => e.stopPropagation());
+
+// ── Sélecteur de thème ────────────────────────────────────────────────────────
+(function initThemeSwitcher() {
+  const opts = document.querySelectorAll('[data-theme-choice]');
+  if (!opts.length) return;
+
+  function applyTheme(pref) {
+    let theme = pref;
+    if (pref === 'auto') {
+      theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    document.documentElement.setAttribute('data-theme', theme);
+    document.documentElement.setAttribute('data-theme-pref', pref);
+    localStorage.setItem('theme', pref);
+    opts.forEach(o => o.classList.toggle('active', o.dataset.themeChoice === pref));
+  }
+
+  // État initial
+  const current = localStorage.getItem('theme') || 'auto';
+  opts.forEach(o => o.classList.toggle('active', o.dataset.themeChoice === current));
+
+  opts.forEach(o => {
+    o.addEventListener('click', e => {
+      e.stopPropagation();
+      applyTheme(o.dataset.themeChoice);
+    });
+  });
+
+  // Réagir aux changements de thème système (uniquement si pref = auto)
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
+    const pref = localStorage.getItem('theme') || 'auto';
+    if (pref === 'auto') applyTheme('auto');
+  });
+})();
 
 // ── Afficher/masquer mot de passe ─────────────────────────────────────────────
 function togglePw(inputId, btn) {
@@ -622,8 +971,8 @@ function showToast(msg, type = 'info', duration = 5000) {
     document.body.appendChild(container);
   }
   const colors = {
-    info:    { bg: 'var(--teal-bg)',  border: 'rgba(13,148,112,0.3)',  text: 'var(--teal)'  },
-    success: { bg: 'var(--teal-bg)',  border: 'rgba(13,148,112,0.3)',  text: 'var(--teal)'  },
+    info:    { bg: 'var(--teal-bg)',  border: 'rgba(234,124,28,0.32)',  text: 'var(--teal)'  },
+    success: { bg: 'var(--teal-bg)',  border: 'rgba(234,124,28,0.32)',  text: 'var(--teal)'  },
     warning: { bg: 'var(--amber-bg)', border: 'rgba(180,83,9,0.3)',    text: 'var(--amber)' },
     error:   { bg: 'var(--red-bg)',   border: 'rgba(220,38,38,0.3)',   text: 'var(--red)'   },
   };
@@ -716,6 +1065,89 @@ async function refreshDashboardMetrics() {
     });
   } catch(e) {}
 }
+
+// ── Widget NAS dans la sidebar (admin uniquement) ────────────────────────────
+(function initNavNasWidget() {
+  const $body = document.getElementById('nav-nas-body');
+  const $host = document.getElementById('nav-nas-host');
+  if (!$body) return;   // pas admin → widget absent
+
+  function fmtGb(n) {
+    if (n == null) return '—';
+    return n >= 1024 ? (n/1024).toFixed(1) + ' To' : n.toFixed(1) + ' Go';
+  }
+  function fmtMb(n) {
+    if (n == null) return '—';
+    return n >= 1024 ? (n/1024).toFixed(1) + ' Go' : n.toFixed(0) + ' Mo';
+  }
+  function fmtUp(h) {
+    if (h == null) return '—';
+    if (h < 24) return h.toFixed(1) + ' h';
+    return Math.floor(h/24) + ' j ' + Math.round(h % 24) + ' h';
+  }
+
+  function barColor(pct) {
+    if (pct == null) return 'rgba(255,255,255,0.15)';
+    if (pct > 85) return 'var(--red)';
+    if (pct > 65) return 'var(--amber)';
+    return 'var(--teal)';
+  }
+
+  function row(label, pct, detail) {
+    const safe = pct == null ? 0 : Math.max(0, Math.min(100, pct));
+    const val  = pct == null ? '—' : Math.round(pct) + '%';
+    return `
+      <div class="nav-nas-row">
+        <div class="nav-nas-row-head">
+          <span class="nav-nas-label">${label}</span>
+          <span class="nav-nas-value">${val}</span>
+        </div>
+        <div class="nav-nas-bar">
+          <div style="width:${safe}%;background:${barColor(pct)};"></div>
+        </div>
+        ${detail ? `<div class="nav-nas-detail">${detail}</div>` : ''}
+      </div>`;
+  }
+
+  async function refresh() {
+    try {
+      const res = await fetch('/api/system/metrics');
+      if (!res.ok) {
+        $body.innerHTML = `<div class="nav-nas-loading" style="color:var(--red);">indisponible</div>`;
+        return;
+      }
+      const m = await res.json();
+      $host.textContent = m.hostname || '';
+
+      let html = '<div class="nav-nas-body">';
+      html += row('CPU', m.cpu_pct,
+                  m.cpu_pct == null ? 'collecte…' : null);
+      html += row('RAM', m.ram_pct,
+                  (m.ram_used_mb != null && m.ram_total_mb != null)
+                    ? `${fmtMb(m.ram_used_mb)} / ${fmtMb(m.ram_total_mb)}` : null);
+      html += row('Stockage', m.disk_pct,
+                  (m.disk_used_gb != null && m.disk_total_gb != null)
+                    ? `libre ${fmtGb(m.disk_free_gb)} / ${fmtGb(m.disk_total_gb)}` : null);
+      html += `
+        <div class="nav-nas-uptime">
+          <span class="nav-nas-label">Uptime</span>
+          <span class="nav-nas-value">${fmtUp(m.uptime_hours)}</span>
+        </div>`;
+
+      if (m.cpu_pct == null && m.ram_pct == null) {
+        html += `<div class="nav-nas-note">CPU/RAM dispo. sur NAS Linux uniquement.</div>`;
+      }
+      html += '</div>';
+      $body.innerHTML = html;
+    } catch (e) {
+      $body.innerHTML = `<div class="nav-nas-loading" style="color:var(--red);">erreur réseau</div>`;
+    }
+  }
+
+  refresh();
+  setTimeout(refresh, 1200);
+  setInterval(refresh, 5000);
+})();
 </script>
 
 <style>

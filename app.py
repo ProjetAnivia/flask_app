@@ -14,7 +14,7 @@ from flask import Flask, render_template, jsonify, request, redirect, url_for, s
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from functools import wraps
 from pathlib import Path
-import json, sqlite3, hashlib, os, re, csv, io, socket, threading, bcrypt as _bcrypt, secrets, calendar as _cal, random, time
+import json, sqlite3, hashlib, os, re, csv, io, socket, threading, bcrypt as _bcrypt, secrets, calendar as _cal, random, time, shutil
 import smtplib, urllib.request as _urllib_req, urllib.parse as _urllib_parse
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -65,15 +65,20 @@ EMAIL_FROM_ADDR  = os.environ.get("EMAIL_FROM_ADDR", "")
 APP_URL   = os.environ.get("APP_URL",   "http://localhost:5001")
 EMAIL_CONFIGURED = bool(BREVO_API_KEY or RESEND_API_KEY or SMTP_HOST)
 
-# ── reCAPTCHA v2 (optionnel — désactivé si clés absentes) ───────────────────
-RECAPTCHA_SITE_KEY   = os.environ.get("RECAPTCHA_SITE_KEY",   "")
-RECAPTCHA_SECRET_KEY = os.environ.get("RECAPTCHA_SECRET_KEY", "")
-RECAPTCHA_ENABLED    = bool(RECAPTCHA_SITE_KEY and RECAPTCHA_SECRET_KEY)
+# ── reCAPTCHA v3 (optionnel — désactivé si clés absentes) ───────────────────
+RECAPTCHA_SITE_KEY      = os.environ.get("RECAPTCHA_SITE_KEY",   "")
+RECAPTCHA_SECRET_KEY    = os.environ.get("RECAPTCHA_SECRET_KEY", "")
+RECAPTCHA_MIN_SCORE     = float(os.environ.get("RECAPTCHA_MIN_SCORE", "0.5"))
+RECAPTCHA_ENABLED       = bool(RECAPTCHA_SITE_KEY and RECAPTCHA_SECRET_KEY)
 
-def verify_recaptcha(token: str) -> bool:
-    """Vérifie un token reCAPTCHA v2 auprès de l'API Google."""
+def verify_recaptcha(token: str, expected_action: str = "login") -> tuple[bool, str]:
+    """
+    Vérifie un token reCAPTCHA v3 auprès de l'API Google.
+    Retourne (succès, message d'erreur si échec).
+    v3 retourne un score 0.0–1.0 + le nom de l'action exécutée.
+    """
     if not token:
-        return False
+        return False, "Token absent"
     try:
         data = f"secret={RECAPTCHA_SECRET_KEY}&response={token}".encode()
         req  = _urllib_req.Request(
@@ -83,10 +88,22 @@ def verify_recaptcha(token: str) -> bool:
         )
         with _urllib_req.urlopen(req, timeout=5) as r:
             result = json.loads(r.read())
-        return bool(result.get("success"))
+
+        if not result.get("success"):
+            errors = ",".join(result.get("error-codes", []))
+            return False, f"Échec Google ({errors})"
+
+        score  = float(result.get("score", 0))
+        action = result.get("action", "")
+
+        if action != expected_action:
+            return False, f"Action inattendue : {action}"
+        if score < RECAPTCHA_MIN_SCORE:
+            return False, f"Score trop bas ({score:.2f} < {RECAPTCHA_MIN_SCORE})"
+        return True, ""
     except Exception as exc:
         print(f"[reCAPTCHA] vérification échouée : {exc}", flush=True)
-        return False
+        return False, "Erreur réseau"
 
 # ── Protection anti-brute-force ──────────────────────────────────────────────
 BRUTEFORCE_MAX_ATTEMPTS = 5   # tentatives max
@@ -297,6 +314,18 @@ def init_db():
             payload    TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS projet_membres (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            projet      TEXT NOT NULL,
+            user_id     INTEGER NOT NULL,
+            role_projet TEXT NOT NULL DEFAULT 'membre',
+            added_by    TEXT,
+            added_at    TEXT NOT NULL,
+            UNIQUE(projet, user_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_projet_membres_projet  ON projet_membres(projet);
+        CREATE INDEX IF NOT EXISTS idx_projet_membres_userid  ON projet_membres(user_id);
         """)
 
         # Migration douce — ajoute les colonnes si absentes (SQLite ne supporte pas IF NOT EXISTS sur ALTER)
@@ -314,6 +343,14 @@ def init_db():
             "ALTER TABLE users ADD COLUMN email_verified INTEGER DEFAULT 0",
             "ALTER TABLE users ADD COLUMN email_verify_token TEXT",
             "ALTER TABLE projets ADD COLUMN acq_prevues_override INTEGER",
+            # ── Suivi expérimental enrichi (cahier des charges) ───────────────
+            "ALTER TABLE acquisitions ADD COLUMN poids_g REAL",
+            "ALTER TABLE acquisitions ADD COLUMN qualite TEXT",
+            "ALTER TABLE acquisitions ADD COLUMN probleme_type TEXT",
+            "ALTER TABLE acquisitions ADD COLUMN probleme_desc TEXT",
+            # ── Planification (créneau réservé sur l'IRM) ─────────────────────
+            "ALTER TABLE acquisitions ADD COLUMN heure_debut TEXT",
+            "ALTER TABLE acquisitions ADD COLUMN duree_min INTEGER",
         ]:
             try:
                 db.execute(col_sql)
@@ -710,6 +747,82 @@ def role_required(*roles):
 
 
 # ─────────────────────────────────────────────────
+#  DROITS PAR PROJET
+# ─────────────────────────────────────────────────
+#
+# Modèle (strict, par défaut) :
+#   • Les admins globaux ont accès à TOUS les projets, toujours.
+#   • Tout autre utilisateur (opérateur, chercheur) doit être explicitement
+#     ajouté comme membre du projet pour y avoir accès.
+#   • Un projet sans aucun membre déclaré n'est visible que par les admins.
+#
+# Rôles projet : 'responsable' (gère membres + édite) / 'membre' (édite) /
+#                'lecteur' (lecture seule)
+# ─────────────────────────────────────────────────
+
+def projet_membres(projet: str) -> list[sqlite3.Row]:
+    """Liste des membres d'un projet (rows {user_id, username, role_projet, added_by, added_at})."""
+    with get_db() as db:
+        return db.execute(
+            """SELECT pm.id, pm.user_id, u.username, pm.role_projet, pm.added_by, pm.added_at
+               FROM projet_membres pm
+               JOIN users u ON u.id = pm.user_id
+               WHERE pm.projet = ?
+               ORDER BY pm.role_projet, u.username""",
+            (projet,)
+        ).fetchall()
+
+def projet_is_restricted(projet: str) -> bool:
+    """True si le projet a au moins un membre déclaré (mode restreint)."""
+    with get_db() as db:
+        n = db.execute(
+            "SELECT COUNT(*) FROM projet_membres WHERE projet = ?", (projet,)
+        ).fetchone()[0]
+    return n > 0
+
+def user_projet_role(user, projet: str) -> str | None:
+    """Retourne le rôle projet de l'utilisateur ('responsable'/'membre'/'lecteur') ou None."""
+    if not user or not getattr(user, "is_authenticated", False):
+        return None
+    with get_db() as db:
+        r = db.execute(
+            "SELECT role_projet FROM projet_membres WHERE projet=? AND user_id=?",
+            (projet, user.id)
+        ).fetchone()
+    return r["role_projet"] if r else None
+
+def user_can_view_projet(user, projet: str) -> bool:
+    """Accès lecture : admin global OU membre déclaré (n'importe quel rôle projet)."""
+    if not user or not getattr(user, "is_authenticated", False):
+        return False
+    if user.role == "admin":
+        return True
+    return user_projet_role(user, projet) is not None
+
+def user_can_edit_projet(user, projet: str) -> bool:
+    """Édition acquisitions / commentaires : admin global OU membre/responsable du projet."""
+    if not user or not getattr(user, "is_authenticated", False):
+        return False
+    if user.role == "admin":
+        return True
+    return user_projet_role(user, projet) in ("responsable", "membre")
+
+def user_can_manage_projet(user, projet: str) -> bool:
+    """Gestion des membres et settings du projet."""
+    if not user or not getattr(user, "is_authenticated", False):
+        return False
+    if user.role == "admin":
+        return True
+    return user_projet_role(user, projet) == "responsable"
+
+def projet_require_view(projet: str):
+    """Retourne une réponse 403 si l'utilisateur n'a pas le droit de voir, sinon None."""
+    if not user_can_view_projet(current_user, projet):
+        return jsonify({"error": "Accès refusé à ce projet"}), 403
+    return None
+
+
+# ─────────────────────────────────────────────────
 #  SERVER-SENT EVENTS — temps réel multi-utilisateurs
 # ─────────────────────────────────────────────────
 
@@ -792,9 +905,11 @@ def login():
 
         # ── Vérification CAPTCHA ──────────────────────────────────────────────
         if RECAPTCHA_ENABLED:
-            # Toujours vérifier quand reCAPTCHA est activé
+            # reCAPTCHA v3 : score + action
             token = request.form.get("g-recaptcha-response", "")
-            if not verify_recaptcha(token):
+            ok, err = verify_recaptcha(token, expected_action="login")
+            if not ok:
+                print(f"[reCAPTCHA v3] refus : {err}", flush=True)
                 return _render(error="Vérification reCAPTCHA échouée. Veuillez recommencer.")
         elif not captcha_is_cleared(ip):
             # Fallback arithmétique
@@ -856,8 +971,11 @@ def set_security_headers(resp):
     resp.headers.setdefault("Referrer-Policy",          "strict-origin-when-cross-origin")
     resp.headers.setdefault("Content-Security-Policy",
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' https://www.google.com https://www.gstatic.com; "
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' "
+            "https://www.google.com https://www.gstatic.com "
+            "https://cdn.tailwindcss.com https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' "
+            "https://fonts.googleapis.com https://cdn.jsdelivr.net; "
         "font-src 'self' https://fonts.gstatic.com; "
         "frame-src https://www.google.com; "
         "img-src 'self' data: https:; "
@@ -1080,6 +1198,9 @@ def dashboard():
         statut_map.setdefault(s["projet"], {})[s["statut"]] = s["n"]
 
     today = datetime.now().strftime("%Y-%m-%d")
+    # Filtrer les projets selon les droits utilisateur (projets restreints)
+    projets_raw = [p for p in projets_raw if user_can_view_projet(current_user, p["nom"])]
+
     projets = []
     for p in projets_raw:
         if f_projet and p["nom"] != f_projet:
@@ -1132,9 +1253,14 @@ def page_animaux():
         animaux = db.execute(q + " ORDER BY projet, animal_id", params).fetchall()
         projets = db.execute("SELECT nom FROM projets ORDER BY nom").fetchall()
         total   = db.execute("SELECT COUNT(*) FROM animaux").fetchone()[0]
+
+    # Filtrer selon les droits par projet
+    animaux = [a for a in animaux if user_can_view_projet(current_user, a["projet"])]
+    projets = [p for p in projets if user_can_view_projet(current_user, p["nom"])]
+
     return render_template("animaux.html",
         animaux=[dict(a) for a in animaux], projets=[p["nom"] for p in projets],
-        total=total, filtre_projet=filtre_projet, filtre_statut=filtre_statut)
+        total=len(animaux), filtre_projet=filtre_projet, filtre_statut=filtre_statut)
 
 @app.route("/projets")
 @login_required
@@ -1175,8 +1301,9 @@ def page_archive():
 
 @app.route("/api/projets/<nom>/dates", methods=["PATCH"])
 @login_required
-@role_required("admin")
 def api_projets_dates(nom):
+    if not user_can_manage_projet(current_user, nom):
+        return jsonify({"error": "Seul un admin ou un responsable peut modifier ce projet"}), 403
     data = request.json or {}
     updates, params = [], []
     for field in ("date_debut", "date_fin_prevue"):
@@ -1199,8 +1326,9 @@ def api_projets_dates(nom):
 
 @app.route("/api/projets/<nom>/acq-prevues", methods=["PATCH"])
 @login_required
-@role_required("admin", "operateur")
 def api_projets_acq_prevues(nom):
+    if not user_can_manage_projet(current_user, nom):
+        return jsonify({"error": "Seul un admin ou un responsable peut modifier ce projet"}), 403
     data = request.json or {}
     val  = data.get("acq_prevues_override")
     if val is not None:
@@ -1225,8 +1353,9 @@ def api_projets_acq_prevues(nom):
 
 @app.route("/api/projets/<nom>/ethique", methods=["PATCH"])
 @login_required
-@role_required("admin", "operateur")
 def api_projets_ethique(nom):
+    if not user_can_manage_projet(current_user, nom):
+        return jsonify({"error": "Seul un admin ou un responsable peut modifier ce projet"}), 403
     data  = request.json or {}
     proto = data.get("protocole_ethique", "").strip()
     with get_db() as db:
@@ -1241,8 +1370,9 @@ def api_projets_ethique(nom):
 
 @app.route("/api/projets/<nom>/statut", methods=["PATCH"])
 @login_required
-@role_required("admin")
 def api_projets_statut(nom):
+    if not user_can_manage_projet(current_user, nom):
+        return jsonify({"error": "Seul un admin ou un responsable peut modifier ce projet"}), 403
     data   = request.json or {}
     statut = data.get("statut", "").strip()
     if statut not in ("actif", "terminé"):
@@ -1260,6 +1390,7 @@ def api_projets_statut(nom):
 
 @app.route("/import")
 @login_required
+@role_required("admin", "operateur")
 def page_import():
     with get_db() as db:
         projets     = db.execute("SELECT nom FROM projets ORDER BY nom").fetchall()
@@ -1276,6 +1407,7 @@ def page_import():
 
 @app.route("/logs")
 @login_required
+@role_required("admin", "operateur")
 def page_logs():
     with get_db() as db:
         logs       = db.execute("SELECT * FROM pipeline_logs ORDER BY timestamp DESC LIMIT 100").fetchall()
@@ -1376,8 +1508,94 @@ def api_delete_projet(nom):
         if nb_acq > 0:
             return jsonify({"error": f"Impossible : {nb_acq} acquisition(s) liée(s) à ce projet"}), 409
         db.execute("DELETE FROM projets WHERE nom=?", (nom,))
+        db.execute("DELETE FROM projet_membres WHERE projet=?", (nom,))
         db.commit()
     return jsonify({"ok": True, "deleted": nom})
+
+
+# ─────────────────────────────────────────────────
+#  API — MEMBRES DE PROJET (droits par projet)
+# ─────────────────────────────────────────────────
+
+@app.route("/api/projets/<nom>/membres")
+@login_required
+def api_projet_membres(nom):
+    """Liste les membres d'un projet (accessible à quiconque peut voir le projet)."""
+    if not user_can_view_projet(current_user, nom):
+        return jsonify({"error": "Accès refusé à ce projet"}), 403
+    membres = projet_membres(nom)
+    return jsonify({
+        "projet":     nom,
+        "restricted": projet_is_restricted(nom),
+        "membres":    [dict(m) for m in membres],
+    })
+
+
+@app.route("/api/projets/<nom>/membres", methods=["POST"])
+@login_required
+def api_projet_add_membre(nom):
+    if not user_can_manage_projet(current_user, nom):
+        return jsonify({"error": "Seul un responsable ou un admin peut gérer les membres"}), 403
+    d = request.json or {}
+    username    = (d.get("username") or "").strip()
+    role_projet = (d.get("role_projet") or "membre").strip()
+    if not username:
+        return jsonify({"error": "username requis"}), 400
+    if role_projet not in ("responsable", "membre", "lecteur"):
+        return jsonify({"error": "Rôle invalide"}), 400
+
+    with get_db() as db:
+        user = db.execute("SELECT id, username FROM users WHERE username=?", (username,)).fetchone()
+        if not user:
+            return jsonify({"error": "Utilisateur inconnu"}), 404
+        try:
+            db.execute(
+                """INSERT INTO projet_membres (projet, user_id, role_projet, added_by, added_at)
+                   VALUES (?,?,?,?,?)""",
+                (nom, user["id"], role_projet, current_user.username, datetime.now().isoformat())
+            )
+            db.commit()
+        except sqlite3.IntegrityError:
+            return jsonify({"error": "Cet utilisateur est déjà membre"}), 409
+    return jsonify({"ok": True})
+
+
+@app.route("/api/projets/<nom>/membres/<int:user_id>", methods=["PATCH"])
+@login_required
+def api_projet_update_membre(nom, user_id):
+    if not user_can_manage_projet(current_user, nom):
+        return jsonify({"error": "Seul un responsable ou un admin peut gérer les membres"}), 403
+    d = request.json or {}
+    role_projet = (d.get("role_projet") or "").strip()
+    if role_projet not in ("responsable", "membre", "lecteur"):
+        return jsonify({"error": "Rôle invalide"}), 400
+    with get_db() as db:
+        db.execute(
+            "UPDATE projet_membres SET role_projet=? WHERE projet=? AND user_id=?",
+            (role_projet, nom, user_id)
+        )
+        db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/projets/<nom>/membres/<int:user_id>", methods=["DELETE"])
+@login_required
+def api_projet_remove_membre(nom, user_id):
+    if not user_can_manage_projet(current_user, nom):
+        return jsonify({"error": "Seul un responsable ou un admin peut gérer les membres"}), 403
+    with get_db() as db:
+        # Empêche de retirer le dernier responsable
+        nb_resp = db.execute(
+            "SELECT COUNT(*) FROM projet_membres WHERE projet=? AND role_projet='responsable'", (nom,)
+        ).fetchone()[0]
+        me = db.execute(
+            "SELECT role_projet FROM projet_membres WHERE projet=? AND user_id=?", (nom, user_id)
+        ).fetchone()
+        if me and me["role_projet"] == "responsable" and nb_resp <= 1 and current_user.role != "admin":
+            return jsonify({"error": "Impossible : dernier responsable du projet"}), 409
+        db.execute("DELETE FROM projet_membres WHERE projet=? AND user_id=?", (nom, user_id))
+        db.commit()
+    return jsonify({"ok": True})
 
 
 # ─────────────────────────────────────────────────
@@ -1389,6 +1607,8 @@ def api_delete_projet(nom):
 def api_animaux():
     projet = request.args.get("projet")
     statut = request.args.get("statut")
+    if projet and not user_can_view_projet(current_user, projet):
+        return jsonify({"error": "Accès refusé à ce projet"}), 403
     q = "SELECT * FROM animaux WHERE 1=1"
     params = []
     if projet:
@@ -1397,6 +1617,8 @@ def api_animaux():
         q += " AND statut=?"; params.append(statut)
     with get_db() as db:
         rows = db.execute(q, params).fetchall()
+    # Filtre les projets restreints quand pas de paramètre projet
+    rows = [r for r in rows if user_can_view_projet(current_user, r["projet"])]
     return jsonify([dict(r) for r in rows])
 
 @app.route("/api/animaux/<animal_id>")
@@ -1407,7 +1629,273 @@ def api_animal_detail(animal_id):
         acqs   = db.execute("SELECT * FROM acquisitions WHERE animal_id=?", (animal_id,)).fetchall()
     if not animal:
         return jsonify({"error": "Animal introuvable"}), 404
+    if not user_can_view_projet(current_user, animal["projet"]):
+        return jsonify({"error": "Accès refusé à ce projet"}), 403
+    # Garde seulement les acquisitions accessibles (sécurité au cas où animal_id existe sur plusieurs projets)
+    acqs = [a for a in acqs if user_can_view_projet(current_user, a["projet"])]
     return jsonify({"animal": dict(animal), "acquisitions": [dict(a) for a in acqs]})
+
+
+# ─────────────────────────────────────────────────
+#  PLANIFICATION — détection de conflits de créneaux
+# ─────────────────────────────────────────────────
+
+def _hhmm_to_min(s: str) -> int:
+    """'HH:MM' → minutes depuis minuit. Retourne -1 si invalide."""
+    try:
+        h, m = s.split(":")
+        return int(h) * 60 + int(m)
+    except (ValueError, AttributeError):
+        return -1
+
+def _min_to_hhmm(m: int) -> str:
+    return f"{m//60:02d}:{m%60:02d}"
+
+def detect_conflicts(date_acq: str, heure_debut: str, duree_min: int,
+                     exclude_id: int | None = None) -> list[dict]:
+    """
+    Retourne la liste des acquisitions qui chevauchent le créneau demandé
+    (même jour, plages horaires en intersection).
+    """
+    start = _hhmm_to_min(heure_debut)
+    if start < 0 or not duree_min:
+        return []
+    end = start + int(duree_min)
+
+    with get_db() as db:
+        rows = db.execute(
+            """SELECT id, animal_id, projet, sequence, heure_debut, duree_min,
+                      importé_par, statut
+               FROM acquisitions
+               WHERE date_acq = ?
+                 AND heure_debut IS NOT NULL
+                 AND duree_min IS NOT NULL""",
+            (date_acq,)
+        ).fetchall()
+
+    conflicts = []
+    for r in rows:
+        if exclude_id is not None and r["id"] == exclude_id:
+            continue
+        r_start = _hhmm_to_min(r["heure_debut"])
+        r_end   = r_start + int(r["duree_min"])
+        # Chevauchement si [start, end) ∩ [r_start, r_end) non vide
+        if start < r_end and r_start < end:
+            d = dict(r)
+            d["heure_fin"] = _min_to_hhmm(r_end)
+            conflicts.append(d)
+    return conflicts
+
+
+@app.route("/api/planification/check", methods=["POST"])
+@login_required
+def api_planification_check():
+    """Vérifie si un créneau est disponible. Retourne la liste des conflits."""
+    data = request.json or {}
+    date_acq    = data.get("date_acq")
+    heure_debut = data.get("heure_debut")
+    duree_min   = data.get("duree_min")
+    exclude_id  = data.get("exclude_id")
+
+    if not date_acq or not heure_debut or not duree_min:
+        return jsonify({"error": "Champs requis : date_acq, heure_debut, duree_min"}), 400
+    try:
+        duree_min = int(duree_min)
+    except (ValueError, TypeError):
+        return jsonify({"error": "Durée invalide"}), 400
+
+    conflicts = detect_conflicts(date_acq, heure_debut, duree_min,
+                                 exclude_id=int(exclude_id) if exclude_id else None)
+
+    # Propositions : 3 créneaux libres après la dernière acquisition du jour
+    suggestions = []
+    if conflicts:
+        last_end = max(_hhmm_to_min(c["heure_debut"]) + int(c["duree_min"]) for c in conflicts)
+        for offset in [0, 30, 60]:
+            cand = last_end + offset
+            if cand + duree_min <= 22 * 60:  # avant 22h
+                suggestions.append({
+                    "heure_debut": _min_to_hhmm(cand),
+                    "heure_fin":   _min_to_hhmm(cand + duree_min),
+                })
+
+    return jsonify({
+        "ok": len(conflicts) == 0,
+        "conflicts": conflicts,
+        "suggestions": suggestions,
+    })
+
+
+def _parse_frequence(freq: str, custom_days: int | None = None) -> timedelta | None:
+    """
+    Convertit un libellé de fréquence en timedelta.
+    Valeurs acceptées : 24h, 48h, 72h, 1sem, 2sem, 1mois, custom (avec custom_days)
+    """
+    if freq == "24h":   return timedelta(hours=24)
+    if freq == "48h":   return timedelta(hours=48)
+    if freq == "72h":   return timedelta(hours=72)
+    if freq == "1sem":  return timedelta(weeks=1)
+    if freq == "2sem":  return timedelta(weeks=2)
+    if freq == "1mois": return timedelta(days=30)
+    if freq == "custom" and custom_days and 1 <= custom_days <= 365:
+        return timedelta(days=int(custom_days))
+    return None
+
+
+@app.route("/api/planification/serie/preview", methods=["POST"])
+@login_required
+def api_planification_serie_preview():
+    """
+    Génère un aperçu d'une série d'acquisitions récurrentes.
+    Retourne la liste des dates calculées + détection des conflits par créneau.
+    N'écrit RIEN en base.
+    """
+    d = request.json or {}
+    required = ("projet", "animal_id", "sequence", "date_debut",
+                "heure_debut", "duree_min", "frequence", "nb_repetitions")
+    if not all(k in d for k in required):
+        return jsonify({"error": f"Champs requis : {', '.join(required)}"}), 400
+
+    try:
+        date_debut = datetime.strptime(d["date_debut"], "%Y-%m-%d").date()
+    except ValueError:
+        return jsonify({"error": "Date invalide (YYYY-MM-DD)"}), 400
+
+    if not re.match(r"^\d{2}:\d{2}$", d["heure_debut"]):
+        return jsonify({"error": "Heure invalide (HH:MM)"}), 400
+
+    try:
+        duree_min = int(d["duree_min"])
+        nb        = int(d["nb_repetitions"])
+        if not (1 <= duree_min <= 480): raise ValueError
+        if not (1 <= nb <= 50):         raise ValueError("nb_repetitions doit être entre 1 et 50")
+    except (ValueError, TypeError) as e:
+        return jsonify({"error": f"Durée ou nombre invalide : {e}"}), 400
+
+    delta = _parse_frequence(d["frequence"], d.get("custom_days"))
+    if delta is None:
+        return jsonify({"error": "Fréquence invalide"}), 400
+
+    # Génère les dates
+    items = []
+    current = datetime.combine(date_debut, datetime.min.time())
+    for i in range(nb):
+        date_str = current.strftime("%Y-%m-%d")
+        conflicts = detect_conflicts(date_str, d["heure_debut"], duree_min)
+        items.append({
+            "n":           i + 1,
+            "date_acq":    date_str,
+            "heure_debut": d["heure_debut"],
+            "conflicts":   [{"animal_id": c["animal_id"], "sequence": c["sequence"],
+                             "heure_debut": c["heure_debut"], "user": c["importé_par"]}
+                            for c in conflicts],
+        })
+        current += delta
+
+    nb_libres   = sum(1 for it in items if not it["conflicts"])
+    nb_conflits = nb - nb_libres
+    return jsonify({
+        "items":       items,
+        "nb_total":    nb,
+        "nb_libres":   nb_libres,
+        "nb_conflits": nb_conflits,
+        "duree_min":   duree_min,
+    })
+
+
+@app.route("/api/planification/serie/confirm", methods=["POST"])
+@login_required
+@role_required("admin", "operateur")
+def api_planification_serie_confirm():
+    """
+    Confirme la création d'une série d'acquisitions planifiées (statut 'en_attente').
+    Skip automatique des créneaux en conflit sauf si force=true.
+    Retourne les IDs créés + ceux ignorés.
+    """
+    d = request.json or {}
+    required = ("projet", "animal_id", "sequence", "items")
+    if not all(k in d for k in required):
+        return jsonify({"error": f"Champs requis : {', '.join(required)}"}), 400
+
+    if not user_can_edit_projet(current_user, d["projet"]):
+        return jsonify({"error": "Vous n'avez pas les droits d'édition sur ce projet"}), 403
+
+    force      = bool(d.get("force", False))
+    duree_min  = int(d.get("duree_min") or 0) or None
+    created    = []
+    skipped    = []
+    now_iso    = datetime.now().isoformat()
+
+    with get_db() as db:
+        for it in d["items"]:
+            date_acq    = it.get("date_acq")
+            heure_debut = it.get("heure_debut")
+            if not date_acq or not heure_debut:
+                continue
+
+            # Re-vérification serveur des conflits (la preview pourrait être obsolète)
+            conflicts = detect_conflicts(date_acq, heure_debut, duree_min or 30)
+            if conflicts and not force:
+                skipped.append({"date_acq": date_acq, "heure_debut": heure_debut,
+                                "reason": "conflit"})
+                continue
+
+            cur = db.execute(
+                """INSERT INTO acquisitions
+                   (animal_id,projet,sequence,date_acq,heure_debut,duree_min,
+                    statut,importé_par,importé_le)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                (d["animal_id"], d["projet"], d["sequence"], date_acq,
+                 heure_debut, duree_min, "en_attente",
+                 current_user.username, now_iso)
+            )
+            created.append({"id": cur.lastrowid, "date_acq": date_acq,
+                            "heure_debut": heure_debut})
+        db.commit()
+
+    return jsonify({
+        "ok":         True,
+        "nb_created": len(created),
+        "nb_skipped": len(skipped),
+        "created":    created,
+        "skipped":    skipped,
+    })
+
+
+@app.route("/api/planification/conflicts")
+@login_required
+def api_planification_conflicts():
+    """
+    Retourne tous les conflits actuellement présents en BDD
+    (paires d'acquisitions qui se chevauchent).
+    """
+    with get_db() as db:
+        rows = db.execute(
+            """SELECT id, animal_id, projet, sequence, date_acq,
+                      heure_debut, duree_min, importé_par, statut
+               FROM acquisitions
+               WHERE heure_debut IS NOT NULL AND duree_min IS NOT NULL
+               ORDER BY date_acq, heure_debut"""
+        ).fetchall()
+
+    by_date: dict[str, list] = {}
+    for r in rows:
+        by_date.setdefault(r["date_acq"], []).append(dict(r))
+
+    conflicts = []
+    for date_acq, acqs in by_date.items():
+        for i in range(len(acqs)):
+            a = acqs[i]; a_start = _hhmm_to_min(a["heure_debut"])
+            a_end = a_start + int(a["duree_min"])
+            for j in range(i + 1, len(acqs)):
+                b = acqs[j]; b_start = _hhmm_to_min(b["heure_debut"])
+                b_end = b_start + int(b["duree_min"])
+                if a_start < b_end and b_start < a_end:
+                    conflicts.append({
+                        "date_acq": date_acq,
+                        "a": a, "b": b,
+                    })
+    return jsonify({"count": len(conflicts), "conflicts": conflicts})
 
 
 # ─────────────────────────────────────────────────
@@ -1421,6 +1909,8 @@ def api_acquisitions():
         rows = db.execute(
             "SELECT * FROM acquisitions ORDER BY date_acq DESC LIMIT 50"
         ).fetchall()
+    # Filtre selon les droits par projet
+    rows = [r for r in rows if user_can_view_projet(current_user, r["projet"])]
     return jsonify([dict(r) for r in rows])
 
 @app.route("/api/acquisitions", methods=["POST"])
@@ -1431,12 +1921,67 @@ def api_add_acquisition():
     required = ["animal_id", "projet", "sequence", "date_acq"]
     if not all(k in data for k in required):
         return jsonify({"error": "Champs manquants"}), 400
+
+    # Vérif des droits d'édition sur le projet ciblé
+    if not user_can_edit_projet(current_user, data["projet"]):
+        return jsonify({"error": "Vous n'avez pas les droits d'édition sur ce projet"}), 403
+
+    # ── Validation des champs enrichis (poids, qualité, problème, créneau) ───
+    poids_g = data.get("poids_g")
+    if poids_g is not None:
+        try:
+            poids_g = float(poids_g)
+            if poids_g <= 0 or poids_g > 5000:
+                return jsonify({"error": "Poids invalide (0–5000 g)"}), 400
+        except (ValueError, TypeError):
+            return jsonify({"error": "Poids doit être un nombre"}), 400
+
+    qualite_valides = {None, "", "excellente", "bonne", "degradee", "inutilisable"}
+    qualite = data.get("qualite") or None
+    if qualite not in qualite_valides:
+        return jsonify({"error": "Qualité invalide"}), 400
+
+    probleme_types = {None, "", "aucun", "positionnement", "artefact", "mouvement", "materiel", "autre"}
+    probleme_type = data.get("probleme_type") or None
+    if probleme_type not in probleme_types:
+        return jsonify({"error": "Type de problème invalide"}), 400
+
+    heure_debut = data.get("heure_debut") or None
+    if heure_debut and not re.match(r"^\d{2}:\d{2}$", heure_debut):
+        return jsonify({"error": "Heure invalide (format HH:MM)"}), 400
+
+    duree_min = data.get("duree_min")
+    if duree_min is not None and duree_min != "":
+        try:
+            duree_min = int(duree_min)
+            if duree_min < 1 or duree_min > 480:
+                return jsonify({"error": "Durée invalide (1–480 min)"}), 400
+        except (ValueError, TypeError):
+            return jsonify({"error": "Durée doit être un entier"}), 400
+    else:
+        duree_min = None
+
+    # ── Détection de conflit de créneau (si heure + durée fournies) ──────────
+    if heure_debut and duree_min:
+        conflicts = detect_conflicts(data["date_acq"], heure_debut, duree_min)
+        if conflicts and not data.get("force"):
+            return jsonify({
+                "error": "Conflit de créneau détecté",
+                "conflicts": conflicts,
+            }), 409
+
     with get_db() as db:
         db.execute(
-            "INSERT INTO acquisitions (animal_id,projet,sequence,date_acq,statut,importé_par,importé_le) VALUES (?,?,?,?,?,?,?)",
+            """INSERT INTO acquisitions
+               (animal_id,projet,sequence,date_acq,statut,importé_par,importé_le,
+                poids_g,qualite,probleme_type,probleme_desc,heure_debut,duree_min)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (data["animal_id"], data["projet"], data["sequence"],
              data["date_acq"], data.get("statut","ok"),
-             current_user.username, datetime.now().isoformat())
+             current_user.username, datetime.now().isoformat(),
+             poids_g, qualite, probleme_type,
+             data.get("probleme_desc") or None,
+             heure_debut, duree_min)
         )
         db.execute(
             "UPDATE animaux SET nb_acquisitions=nb_acquisitions+1 WHERE animal_id=?",
@@ -1807,10 +2352,33 @@ def api_upload_file():
     date_acq  = request.form.get("date_acq",  datetime.now().strftime("%Y-%m-%d")).strip()
     espece    = request.form.get("espece",    "—").strip() or "—"
 
+    # ── Champs enrichis (poids, qualité, problème) — optionnels ─────────────
+    poids_raw     = request.form.get("poids_g", "").strip()
+    qualite       = request.form.get("qualite", "").strip() or None
+    probleme_type = request.form.get("probleme_type", "").strip() or None
+    probleme_desc = request.form.get("probleme_desc", "").strip() or None
+
+    poids_g = None
+    if poids_raw:
+        try:
+            poids_g = float(poids_raw)
+            if poids_g <= 0 or poids_g > 5000:
+                return jsonify({"error": "Poids invalide (0–5000 g)"}), 400
+        except ValueError:
+            return jsonify({"error": "Poids doit être un nombre"}), 400
+    if qualite and qualite not in ("excellente", "bonne", "degradee", "inutilisable"):
+        return jsonify({"error": "Qualité invalide"}), 400
+    if probleme_type and probleme_type not in ("aucun", "positionnement", "artefact", "mouvement", "materiel", "autre"):
+        return jsonify({"error": "Type de problème invalide"}), 400
+
     if not files or files[0].filename == "":
         return jsonify({"error": "Aucun fichier reçu"}), 400
     if not project or not animal_id:
         return jsonify({"error": "project et animal_id requis"}), 400
+
+    # Droits d'édition sur le projet ciblé
+    if not user_can_edit_projet(current_user, project):
+        return jsonify({"error": "Vous n'avez pas les droits d'édition sur ce projet"}), 403
 
     now = datetime.now().isoformat()
 
@@ -1869,10 +2437,12 @@ def api_upload_file():
     with get_db() as db:
         db.execute(
             "INSERT INTO acquisitions "
-            "(animal_id,projet,sequence,date_acq,fichier_dest,md5,statut,importé_par,importé_le) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
+            "(animal_id,projet,sequence,date_acq,fichier_dest,md5,statut,importé_par,importé_le,"
+            " poids_g,qualite,probleme_type,probleme_desc) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (final_animal, project, final_seq, final_date,
-             normalize_path_for_storage(str(nifti_path)), md5, "ok", current_user.username, now)
+             normalize_path_for_storage(str(nifti_path)), md5, "ok", current_user.username, now,
+             poids_g, qualite, probleme_type, probleme_desc)
         )
         existing = db.execute(
             "SELECT id FROM animaux WHERE animal_id=? AND projet=?",
@@ -1913,6 +2483,7 @@ def api_upload_file():
 
 @app.route("/planification")
 @login_required
+@role_required("admin", "operateur")
 def page_planification():
     with get_db() as db:
         projets_raw = db.execute("SELECT * FROM projets ORDER BY nom").fetchall()
@@ -1989,10 +2560,45 @@ def page_planification():
             "animaux": enrich,
         })
 
+    # ── Conflits de créneaux IRM (acquisitions le même jour qui se chevauchent) ──
+    with get_db() as db:
+        rows = db.execute(
+            """SELECT id, animal_id, projet, sequence, date_acq,
+                      heure_debut, duree_min, importé_par, statut
+               FROM acquisitions
+               WHERE heure_debut IS NOT NULL AND duree_min IS NOT NULL
+               ORDER BY date_acq, heure_debut"""
+        ).fetchall()
+
+    by_date: dict[str, list] = {}
+    for r in rows:
+        by_date.setdefault(r["date_acq"], []).append(dict(r))
+
+    conflits = []
+    for date_acq, acqs in by_date.items():
+        for i in range(len(acqs)):
+            a = acqs[i]; a_start = _hhmm_to_min(a["heure_debut"])
+            a_end = a_start + int(a["duree_min"])
+            for j in range(i + 1, len(acqs)):
+                b = acqs[j]; b_start = _hhmm_to_min(b["heure_debut"])
+                b_end = b_start + int(b["duree_min"])
+                if a_start < b_end and b_start < a_end:
+                    conflits.append({
+                        "date_acq": date_acq,
+                        "a_heure": a["heure_debut"], "a_fin": _min_to_hhmm(a_end),
+                        "a_animal": a["animal_id"], "a_projet": a["projet"],
+                        "a_seq": a["sequence"], "a_user": a["importé_par"], "a_id": a["id"],
+                        "b_heure": b["heure_debut"], "b_fin": _min_to_hhmm(b_end),
+                        "b_animal": b["animal_id"], "b_projet": b["projet"],
+                        "b_seq": b["sequence"], "b_user": b["importé_par"], "b_id": b["id"],
+                    })
+
     return render_template("planification.html",
         projets=projets_plan,
         alertes=alertes,
         nb_alertes=len(alertes),
+        conflits=conflits,
+        nb_conflits=len(conflits),
     )
 
 
@@ -2148,6 +2754,743 @@ def export_projet_rapport_csv(nom):
     resp.headers["Content-Type"]        = "text/csv; charset=utf-8"
     resp.headers["Content-Disposition"] = f'attachment; filename="rapport_{nom}.csv"'
     return resp
+
+
+# ─────────────────────────────────────────────────
+#  EXPORT BIDS — Brain Imaging Data Structure
+# ─────────────────────────────────────────────────
+#
+# Format BIDS-inspiré (extension préclinique non officielle) pour interopérabilité.
+# Structure générée :
+#   <projet>/
+#     dataset_description.json
+#     participants.tsv
+#     README
+#     sub-<animal>/
+#       ses-<YYYYMMDD>/
+#         anat/  ou  dwi/  ou  func/
+#           sub-<animal>_ses-<date>_<seq>.nii.gz
+#           sub-<animal>_ses-<date>_<seq>.json   (sidecar métadonnées)
+# ─────────────────────────────────────────────────
+
+def _bids_modality(sequence: str) -> str:
+    """Classe une séquence dans une modalité BIDS (anat/dwi/func/misc)."""
+    s = (sequence or "").upper()
+    if "DTI" in s or "DWI" in s:               return "dwi"
+    if "BOLD" in s or "FMRI" in s or "REST" in s: return "func"
+    if any(t in s for t in ("T1", "T2", "FLAIR", "PD", "MPRAGE", "RARE", "MSME", "MGE")):
+        return "anat"
+    return "misc"
+
+def _bids_safe(s: str) -> str:
+    """Nettoie une chaîne pour utilisation comme label BIDS (alphanumérique uniquement)."""
+    return re.sub(r"[^a-zA-Z0-9]", "", s or "")
+
+def _bids_session(date_acq: str) -> str:
+    """Convertit 2026-05-12 → 20260512 (label session BIDS)."""
+    return re.sub(r"[^0-9]", "", date_acq or "")[:8] or "00000000"
+
+
+@app.route("/api/export/bids/<nom>.zip")
+@login_required
+def export_projet_bids(nom):
+    """
+    Génère un dataset BIDS-like du projet sous forme de ZIP.
+    Inclut les fichiers NIfTI existants + métadonnées dans des sidecars JSON.
+    """
+    import zipfile
+
+    if not user_can_view_projet(current_user, nom):
+        return jsonify({"error": "Accès refusé à ce projet"}), 403
+
+    with get_db() as db:
+        projet  = db.execute("SELECT * FROM projets WHERE nom=?", (nom,)).fetchone()
+        if not projet:
+            return jsonify({"error": "Projet introuvable"}), 404
+
+        animaux = db.execute(
+            "SELECT * FROM animaux WHERE projet=?", (nom,)
+        ).fetchall()
+        acqs = db.execute(
+            "SELECT * FROM acquisitions WHERE projet=? ORDER BY animal_id, date_acq",
+            (nom,)
+        ).fetchall()
+
+    buf = io.BytesIO()
+    now_iso = datetime.utcnow().isoformat() + "Z"
+
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        root = nom
+
+        # ── dataset_description.json ─────────────────────────────────────────
+        dataset_desc = {
+            "Name":           nom,
+            "BIDSVersion":    "1.8.0",
+            "DatasetType":    "raw",
+            "Authors":        [projet["resp"] or "—"],
+            "Acknowledgements": f"Exporté depuis IRM FAIR le {now_iso}",
+            "License":        "internal",
+            "EthicsApprovals": [projet["protocole_ethique"]] if projet["protocole_ethique"] else [],
+        }
+        zf.writestr(f"{root}/dataset_description.json",
+                    json.dumps(dataset_desc, indent=2, ensure_ascii=False))
+
+        # ── README ───────────────────────────────────────────────────────────
+        readme = (
+            f"# {nom}\n\n"
+            f"Dataset IRM préclinique exporté depuis IRM FAIR.\n\n"
+            f"- Responsable : {projet['resp'] or '—'}\n"
+            f"- Animaux prévus : {projet['nb_animaux_prevus']}\n"
+            f"- Séquences/animal : {projet['seq_par_animal']}\n"
+            f"- Date export : {now_iso}\n\n"
+            f"Convention :\n"
+            f"  sub-<animal>/ses-<YYYYMMDD>/<modality>/sub-<animal>_ses-<date>_<sequence>.nii.gz\n\n"
+            f"Modalités utilisées : anat (T1/T2/FLAIR/RARE/MSME), dwi (DTI/DWI), "
+            f"func (BOLD/fMRI), misc (autres).\n"
+        )
+        zf.writestr(f"{root}/README", readme)
+
+        # ── participants.tsv ─────────────────────────────────────────────────
+        lines = ["participant_id\tspecies\tstatut\tnb_acquisitions\tdate_premiere_acq"]
+        for a in animaux:
+            pid = f"sub-{_bids_safe(a['animal_id'])}"
+            lines.append("\t".join([
+                pid,
+                a["espece"] or "n/a",
+                a["statut"] or "n/a",
+                str(a["nb_acquisitions"]),
+                a["date_premiere_acq"] or "n/a",
+            ]))
+        zf.writestr(f"{root}/participants.tsv", "\n".join(lines) + "\n")
+
+        # ── participants.json (data dictionary) ──────────────────────────────
+        participants_dict = {
+            "participant_id": {"Description": "Identifiant unique de l'animal (préfixe sub-)"},
+            "species":        {"Description": "Espèce", "Levels": {
+                                "Rat": "Rat", "Souris": "Mouse", "Lapin": "Rabbit"}},
+            "statut":         {"Description": "Statut de suivi animal",
+                               "Levels": {"ok": "Acquisitions complètes",
+                                          "en_cours": "En cours",
+                                          "en_attente": "En attente",
+                                          "a_refaire": "À refaire"}},
+            "nb_acquisitions":     {"Description": "Nombre d'acquisitions effectuées"},
+            "date_premiere_acq":   {"Description": "Date de la première acquisition (YYYYMMDD)"},
+        }
+        zf.writestr(f"{root}/participants.json",
+                    json.dumps(participants_dict, indent=2, ensure_ascii=False))
+
+        # ── Une entrée par acquisition : sub-X/ses-Y/<modality>/... ─────────
+        nb_files = 0
+        for acq in acqs:
+            sub_label = _bids_safe(acq["animal_id"])
+            ses_label = _bids_session(acq["date_acq"])
+            modality  = _bids_modality(acq["sequence"])
+            seq_label = _bids_safe(acq["sequence"]) or "seq"
+            stem      = f"sub-{sub_label}_ses-{ses_label}_{seq_label}"
+            target_dir = f"{root}/sub-{sub_label}/ses-{ses_label}/{modality}"
+
+            # Sidecar JSON (toujours créé, même sans NIfTI)
+            sidecar = {
+                "TaskName":         acq["sequence"] or "n/a",
+                "AcquisitionDate":  acq["date_acq"] or "n/a",
+                "AcquisitionTime":  acq["heure_debut"] or "n/a",
+                "ScanDuration":     acq["duree_min"] if acq["duree_min"] else "n/a",
+                "Operator":         acq["importé_par"] or "n/a",
+                "AnimalWeight_g":   acq["poids_g"] if acq["poids_g"] is not None else "n/a",
+                "ImageQuality":     acq["qualite"] or "n/a",
+                "Problem":          acq["probleme_type"] or "n/a",
+                "ProblemDescription": acq["probleme_desc"] or "",
+                "Status":           acq["statut"] or "n/a",
+                "MD5":              acq["md5"] or "",
+                "_source_path":     acq["fichier_dest"] or "",
+                "_irm_fair_acq_id": acq["id"],
+            }
+            zf.writestr(f"{target_dir}/{stem}.json",
+                        json.dumps(sidecar, indent=2, ensure_ascii=False))
+
+            # Fichier NIfTI s'il existe
+            if acq["fichier_dest"]:
+                src = NAS_ROOT / acq["fichier_dest"]
+                if src.exists() and src.is_file():
+                    ext = ".nii.gz" if str(src).endswith(".nii.gz") else src.suffix
+                    zf.write(src, f"{target_dir}/{stem}{ext}")
+                    nb_files += 1
+
+        # ── Manifeste d'export ───────────────────────────────────────────────
+        manifest = {
+            "exported_at":  now_iso,
+            "exported_by":  current_user.username,
+            "projet":       nom,
+            "nb_animaux":   len(animaux),
+            "nb_acquisitions": len(acqs),
+            "nb_nifti_inclus": nb_files,
+            "note": ("BIDS adapté préclinique — non strictement conforme BIDS 1.8 "
+                     "car les animaux ne sont pas humains. Structure compatible "
+                     "avec les outils BIDS via 'bids-validator --ignore-warnings'."),
+        }
+        zf.writestr(f"{root}/_export_manifest.json",
+                    json.dumps(manifest, indent=2, ensure_ascii=False))
+
+    buf.seek(0)
+    resp = make_response(buf.getvalue())
+    resp.headers["Content-Type"]        = "application/zip"
+    resp.headers["Content-Disposition"] = f'attachment; filename="bids_{nom}.zip"'
+    return resp
+
+
+# ─────────────────────────────────────────────────
+#  DOCUMENTATION API — OpenAPI 3.1 + Swagger UI
+# ─────────────────────────────────────────────────
+
+OPENAPI_SPEC = {
+    "openapi": "3.1.0",
+    "info": {
+        "title":       "IRM FAIR — API",
+        "version":     "1.0.0",
+        "description": ("API REST de la plateforme IRM FAIR (gestion de projets "
+                        "IRM précliniques). Authentification par session — il faut "
+                        "appeler `POST /login` au préalable puis renvoyer le cookie."),
+        "contact":     {"name": "Équipe IRM FAIR"},
+    },
+    "servers": [{"url": "/", "description": "Instance courante"}],
+    "tags": [
+        {"name": "Auth",         "description": "Connexion, 2FA, mot de passe"},
+        {"name": "Projets",      "description": "CRUD projets + membres (droits par projet)"},
+        {"name": "Animaux",      "description": "Animaux d'un projet"},
+        {"name": "Acquisitions", "description": "Acquisitions IRM (métadonnées, statut, créneau)"},
+        {"name": "Planification","description": "Conflits de créneaux, séries récurrentes"},
+        {"name": "Pipeline",     "description": "Upload DICOM/NIfTI vers le NAS FAIR"},
+        {"name": "Export",       "description": "Exports CSV et BIDS"},
+        {"name": "Admin",        "description": "Utilisateurs, connexions, logs"},
+    ],
+    "components": {
+        "securitySchemes": {
+            "sessionCookie": {"type": "apiKey", "in": "cookie", "name": "session"}
+        },
+        "schemas": {
+            "Error":   {"type": "object", "properties": {"error": {"type": "string"}}},
+            "Projet": {
+                "type": "object",
+                "properties": {
+                    "nom":               {"type": "string"},
+                    "resp":              {"type": "string"},
+                    "nb_animaux_prevus": {"type": "integer"},
+                    "seq_par_animal":    {"type": "integer"},
+                    "statut":            {"type": "string", "enum": ["actif", "terminé"]},
+                    "date_debut":        {"type": "string", "format": "date"},
+                    "date_fin_prevue":   {"type": "string", "format": "date"},
+                    "protocole_ethique": {"type": "string"},
+                },
+            },
+            "Animal": {
+                "type": "object",
+                "properties": {
+                    "id":                {"type": "integer"},
+                    "animal_id":         {"type": "string"},
+                    "espece":            {"type": "string"},
+                    "projet":            {"type": "string"},
+                    "statut":            {"type": "string"},
+                    "nb_acquisitions":   {"type": "integer"},
+                    "date_premiere_acq": {"type": "string"},
+                },
+            },
+            "Acquisition": {
+                "type": "object",
+                "properties": {
+                    "id":           {"type": "integer"},
+                    "animal_id":    {"type": "string"},
+                    "projet":       {"type": "string"},
+                    "sequence":     {"type": "string"},
+                    "date_acq":     {"type": "string", "format": "date"},
+                    "heure_debut":  {"type": "string", "example": "09:30"},
+                    "duree_min":    {"type": "integer"},
+                    "fichier_dest": {"type": "string"},
+                    "md5":          {"type": "string"},
+                    "statut":       {"type": "string",
+                                     "enum": ["ok", "en_attente", "en_cours", "a_refaire"]},
+                    "poids_g":      {"type": "number", "description": "Poids animal (g)"},
+                    "qualite":      {"type": "string",
+                                     "enum": ["excellente", "bonne", "degradee", "inutilisable"]},
+                    "probleme_type": {"type": "string",
+                                      "enum": ["aucun","positionnement","artefact","mouvement",
+                                               "materiel","autre"]},
+                    "probleme_desc": {"type": "string"},
+                    "importé_par":   {"type": "string"},
+                    "importé_le":    {"type": "string", "format": "date-time"},
+                },
+            },
+            "Membre": {
+                "type": "object",
+                "properties": {
+                    "user_id":     {"type": "integer"},
+                    "username":    {"type": "string"},
+                    "role_projet": {"type": "string",
+                                    "enum": ["responsable","membre","lecteur"]},
+                    "added_by":    {"type": "string"},
+                    "added_at":    {"type": "string", "format": "date-time"},
+                },
+            },
+            "Conflict": {
+                "type": "object",
+                "properties": {
+                    "animal_id":   {"type": "string"},
+                    "sequence":    {"type": "string"},
+                    "heure_debut": {"type": "string"},
+                    "heure_fin":   {"type": "string"},
+                    "importé_par": {"type": "string"},
+                },
+            },
+        },
+    },
+    "security": [{"sessionCookie": []}],
+
+    "paths": {
+        # ── Auth ─────────────────────────────────────────────────────────────
+        "/login": {
+            "post": {
+                "tags": ["Auth"], "summary": "Connexion (login + mot de passe)",
+                "requestBody": {"required": True, "content": {
+                    "application/x-www-form-urlencoded": {"schema": {"type": "object",
+                        "required": ["username", "password"],
+                        "properties": {
+                            "username": {"type": "string"},
+                            "password": {"type": "string"},
+                            "g-recaptcha-response": {"type": "string"},
+                        }}}}},
+                "responses": {
+                    "302": {"description": "Redirection vers / (succès) ou /login (échec)"},
+                    "200": {"description": "Page login (échec)"},
+                },
+                "security": [],
+            }
+        },
+        "/logout": {
+            "get": {"tags": ["Auth"], "summary": "Déconnexion",
+                    "responses": {"302": {"description": "Redirection vers /login"}}}
+        },
+
+        # ── Projets ──────────────────────────────────────────────────────────
+        "/api/projets": {
+            "post": {
+                "tags": ["Projets"], "summary": "Créer un projet (admin)",
+                "requestBody": {"required": True, "content": {
+                    "application/json": {"schema": {"$ref": "#/components/schemas/Projet"}}}},
+                "responses": {"201": {"description": "Créé"},
+                              "400": {"description": "Champs manquants"},
+                              "403": {"description": "Accès refusé"}},
+            }
+        },
+        "/api/projets/{nom}": {
+            "delete": {
+                "tags": ["Projets"], "summary": "Supprimer un projet (admin)",
+                "parameters": [{"name": "nom", "in": "path", "required": True,
+                                "schema": {"type": "string"}}],
+                "responses": {"200": {"description": "Supprimé"},
+                              "409": {"description": "Acquisitions liées : suppression refusée"}},
+            }
+        },
+        "/api/projets/{nom}/dates": {
+            "patch": {
+                "tags": ["Projets"], "summary": "Modifier les dates (responsable/admin)",
+                "parameters": [{"name": "nom", "in": "path", "required": True,
+                                "schema": {"type": "string"}}],
+                "requestBody": {"required": True, "content": {"application/json": {"schema": {
+                    "type": "object", "properties": {
+                        "date_debut":      {"type": "string", "format": "date"},
+                        "date_fin_prevue": {"type": "string", "format": "date"},
+                    }}}}},
+                "responses": {"200": {"description": "OK"}, "403": {"description": "Droits insuffisants"}},
+            }
+        },
+        "/api/projets/{nom}/statut":     {"patch": {"tags": ["Projets"],
+            "summary": "Modifier le statut (responsable/admin)",
+            "parameters": [{"name":"nom","in":"path","required":True,"schema":{"type":"string"}}],
+            "responses": {"200": {"description": "OK"}}}},
+        "/api/projets/{nom}/ethique":    {"patch": {"tags": ["Projets"],
+            "summary": "Modifier le protocole éthique",
+            "parameters": [{"name":"nom","in":"path","required":True,"schema":{"type":"string"}}],
+            "responses": {"200": {"description": "OK"}}}},
+        "/api/projets/{nom}/acq-prevues": {"patch": {"tags": ["Projets"],
+            "summary": "Override du nb d'acquisitions prévues",
+            "parameters": [{"name":"nom","in":"path","required":True,"schema":{"type":"string"}}],
+            "responses": {"200": {"description": "OK"}}}},
+
+        # ── Membres ──────────────────────────────────────────────────────────
+        "/api/projets/{nom}/membres": {
+            "get": {
+                "tags": ["Projets"], "summary": "Liste des membres",
+                "parameters": [{"name":"nom","in":"path","required":True,"schema":{"type":"string"}}],
+                "responses": {"200": {"description": "OK", "content": {"application/json":
+                    {"schema": {"type": "object", "properties": {
+                        "projet":     {"type": "string"},
+                        "restricted": {"type": "boolean"},
+                        "membres": {"type": "array", "items": {"$ref": "#/components/schemas/Membre"}},
+                    }}}}}},
+            },
+            "post": {
+                "tags": ["Projets"], "summary": "Ajouter un membre (responsable/admin)",
+                "parameters": [{"name":"nom","in":"path","required":True,"schema":{"type":"string"}}],
+                "requestBody": {"required": True, "content": {"application/json": {"schema": {
+                    "type": "object", "required": ["username"],
+                    "properties": {
+                        "username":    {"type": "string"},
+                        "role_projet": {"type": "string",
+                                        "enum": ["responsable","membre","lecteur"]},
+                    }}}}},
+                "responses": {"200": {"description": "OK"},
+                              "404": {"description": "Utilisateur inconnu"},
+                              "409": {"description": "Déjà membre"}},
+            },
+        },
+        "/api/projets/{nom}/membres/{user_id}": {
+            "patch": {
+                "tags": ["Projets"], "summary": "Changer le rôle d'un membre",
+                "parameters": [
+                    {"name":"nom","in":"path","required":True,"schema":{"type":"string"}},
+                    {"name":"user_id","in":"path","required":True,"schema":{"type":"integer"}}],
+                "responses": {"200": {"description": "OK"}}
+            },
+            "delete": {
+                "tags": ["Projets"], "summary": "Retirer un membre",
+                "parameters": [
+                    {"name":"nom","in":"path","required":True,"schema":{"type":"string"}},
+                    {"name":"user_id","in":"path","required":True,"schema":{"type":"integer"}}],
+                "responses": {"200": {"description": "OK"},
+                              "409": {"description": "Dernier responsable"}},
+            },
+        },
+
+        # ── Animaux ──────────────────────────────────────────────────────────
+        "/api/animaux": {
+            "get": {
+                "tags": ["Animaux"], "summary": "Liste des animaux (filtre par projet/statut)",
+                "parameters": [
+                    {"name":"projet","in":"query","schema":{"type":"string"}},
+                    {"name":"statut","in":"query","schema":{"type":"string"}}],
+                "responses": {"200": {"description": "OK", "content": {"application/json":
+                    {"schema": {"type": "array",
+                                "items": {"$ref": "#/components/schemas/Animal"}}}}}},
+            }
+        },
+        "/api/animaux/{animal_id}": {
+            "get": {
+                "tags": ["Animaux"], "summary": "Détail d'un animal + acquisitions",
+                "parameters": [{"name":"animal_id","in":"path","required":True,
+                                "schema":{"type":"string"}}],
+                "responses": {"200": {"description": "OK"},
+                              "403": {"description": "Accès refusé"},
+                              "404": {"description": "Animal introuvable"}},
+            }
+        },
+        "/api/animaux/{projet}/{animal_id}/statut": {
+            "patch": {
+                "tags": ["Animaux"], "summary": "Modifier le statut animal",
+                "parameters": [
+                    {"name":"projet","in":"path","required":True,"schema":{"type":"string"}},
+                    {"name":"animal_id","in":"path","required":True,"schema":{"type":"string"}}],
+                "responses": {"200": {"description": "OK"}}
+            }
+        },
+
+        # ── Acquisitions ─────────────────────────────────────────────────────
+        "/api/acquisitions": {
+            "get":  {"tags": ["Acquisitions"], "summary": "50 dernières acquisitions",
+                     "responses": {"200": {"description": "OK"}}},
+            "post": {
+                "tags": ["Acquisitions"], "summary": "Créer une acquisition",
+                "requestBody": {"required": True, "content": {"application/json":
+                    {"schema": {"$ref": "#/components/schemas/Acquisition"}}}},
+                "responses": {"200": {"description": "Créé"},
+                              "409": {"description": "Conflit de créneau",
+                                      "content": {"application/json": {"schema": {
+                                          "type": "object",
+                                          "properties": {
+                                              "error":     {"type": "string"},
+                                              "conflicts": {"type": "array",
+                                                            "items": {"$ref": "#/components/schemas/Conflict"}}}}}}}}
+            },
+        },
+        "/api/acquisitions/{acq_id}/statut": {"patch": {"tags": ["Acquisitions"],
+            "summary": "Modifier le statut d'une acquisition",
+            "parameters": [{"name":"acq_id","in":"path","required":True,"schema":{"type":"integer"}}],
+            "responses": {"200": {"description": "OK"}}}},
+        "/api/acquisitions/{acq_id}/metadata": {"patch": {"tags": ["Acquisitions"],
+            "summary": "Modifier poids/qualité/problème",
+            "parameters": [{"name":"acq_id","in":"path","required":True,"schema":{"type":"integer"}}],
+            "requestBody": {"content": {"application/json": {"schema": {"type": "object",
+                "properties": {
+                    "poids_g":       {"type": "number"},
+                    "qualite":       {"type": "string"},
+                    "probleme_type": {"type": "string"},
+                    "probleme_desc": {"type": "string"}}}}}},
+            "responses": {"200": {"description": "OK"}}}},
+
+        # ── Planification ────────────────────────────────────────────────────
+        "/api/planification/check": {
+            "post": {
+                "tags": ["Planification"], "summary": "Vérifier la disponibilité d'un créneau",
+                "requestBody": {"required": True, "content": {"application/json": {"schema": {
+                    "type": "object",
+                    "required": ["date_acq","heure_debut","duree_min"],
+                    "properties": {
+                        "date_acq":    {"type": "string", "format": "date"},
+                        "heure_debut": {"type": "string", "example": "10:30"},
+                        "duree_min":   {"type": "integer"},
+                        "exclude_id":  {"type": "integer"}}}}}},
+                "responses": {"200": {"description": "OK"}}
+            }
+        },
+        "/api/planification/conflicts": {"get": {"tags": ["Planification"],
+            "summary": "Liste de tous les conflits de créneaux en base",
+            "responses": {"200": {"description": "OK"}}}},
+        "/api/planification/serie/preview": {"post": {"tags": ["Planification"],
+            "summary": "Aperçu d'une série d'acquisitions récurrentes",
+            "requestBody": {"required": True, "content": {"application/json": {"schema": {
+                "type": "object",
+                "required": ["projet","animal_id","sequence","date_debut","heure_debut",
+                             "duree_min","frequence","nb_repetitions"],
+                "properties": {
+                    "projet":         {"type": "string"},
+                    "animal_id":      {"type": "string"},
+                    "sequence":       {"type": "string"},
+                    "date_debut":     {"type": "string", "format": "date"},
+                    "heure_debut":    {"type": "string"},
+                    "duree_min":      {"type": "integer"},
+                    "frequence":      {"type": "string",
+                                       "enum": ["24h","48h","72h","1sem","2sem","1mois","custom"]},
+                    "custom_days":    {"type": "integer"},
+                    "nb_repetitions": {"type": "integer", "minimum": 1, "maximum": 50},
+                }}}}},
+            "responses": {"200": {"description": "OK"}}}},
+        "/api/planification/serie/confirm": {"post": {"tags": ["Planification"],
+            "summary": "Confirme la création d'une série planifiée",
+            "responses": {"200": {"description": "Créé"}}}},
+
+        # ── Pipeline ─────────────────────────────────────────────────────────
+        "/api/pipeline/upload": {
+            "post": {
+                "tags": ["Pipeline"], "summary": "Upload DICOM/NIfTI vers la structure FAIR",
+                "requestBody": {"required": True, "content": {"multipart/form-data":
+                    {"schema": {"type": "object", "properties": {
+                        "files":         {"type": "array", "items": {
+                                            "type": "string", "format": "binary"}},
+                        "project":       {"type": "string"},
+                        "animal_id":     {"type": "string"},
+                        "sequence":      {"type": "string"},
+                        "date_acq":      {"type": "string", "format": "date"},
+                        "espece":        {"type": "string"},
+                        "poids_g":       {"type": "number"},
+                        "qualite":       {"type": "string"},
+                        "probleme_type": {"type": "string"},
+                        "probleme_desc": {"type": "string"},
+                    }}}}},
+                "responses": {"200": {"description": "Upload réussi"},
+                              "403": {"description": "Droits insuffisants sur le projet"}}
+            }
+        },
+
+        # ── Export ───────────────────────────────────────────────────────────
+        "/api/export/animaux.csv":               {"get": {"tags": ["Export"],
+            "summary": "CSV de tous les animaux", "responses": {"200": {"description": "CSV"}}}},
+        "/api/export/acquisitions.csv":          {"get": {"tags": ["Export"],
+            "summary": "CSV de toutes les acquisitions", "responses": {"200": {"description": "CSV"}}}},
+        "/api/export/projet/{nom}/rapport.csv":  {"get": {"tags": ["Export"],
+            "summary": "Rapport complet d'un projet en CSV",
+            "parameters": [{"name":"nom","in":"path","required":True,"schema":{"type":"string"}}],
+            "responses": {"200": {"description": "CSV"}}}},
+        "/api/export/bids/{nom}.zip":            {"get": {"tags": ["Export"],
+            "summary": "Export BIDS-like (ZIP) d'un projet",
+            "description": ("Dataset BIDS (extension préclinique non officielle) : "
+                            "dataset_description.json, participants.tsv, "
+                            "sub-X/ses-YYYYMMDD/<modality>/*.nii.gz + sidecars JSON."),
+            "parameters": [{"name":"nom","in":"path","required":True,"schema":{"type":"string"}}],
+            "responses": {"200": {"description": "Archive ZIP",
+                                  "content": {"application/zip": {}}}}}},
+
+        # ── Admin ────────────────────────────────────────────────────────────
+        "/api/users":      {"get": {"tags": ["Admin"], "summary": "Liste utilisateurs (admin)",
+                                    "responses": {"200": {"description": "OK"}}}},
+        "/api/connexions": {"get": {"tags": ["Admin"], "summary": "Journal de connexion (admin)",
+                                    "responses": {"200": {"description": "OK"}}}},
+        "/api/logs":       {"get": {"tags": ["Admin"], "summary": "Logs pipeline (admin/opérateur)",
+                                    "responses": {"200": {"description": "OK"}}}},
+    }
+}
+
+
+# ─────────────────────────────────────────────────
+#  MÉTRIQUES SYSTÈME — utilisation NAS (admin uniquement)
+# ─────────────────────────────────────────────────
+#
+# Lit /proc/stat, /proc/meminfo, /proc/uptime quand disponibles (Linux/Docker).
+# Sur macOS dev, ces fichiers n'existent pas → valeurs à 0 pour CPU/RAM.
+# shutil.disk_usage fonctionne partout pour l'espace disque du NAS_ROOT.
+# ─────────────────────────────────────────────────
+
+# Mémoire du dernier échantillon CPU (pour calculer le delta — CPU% n'a de sens qu'entre 2 mesures)
+_cpu_sample_prev: dict[str, float] = {"idle": 0.0, "total": 0.0}
+_cpu_sample_lock = threading.Lock()
+
+
+def _read_proc_stat_cpu() -> tuple[int, int] | None:
+    """Retourne (idle_total, total) ou None si /proc/stat indisponible."""
+    try:
+        with open("/proc/stat", "r") as f:
+            line = f.readline()
+        if not line.startswith("cpu "):
+            return None
+        cols = [int(x) for x in line.split()[1:]]
+        # user nice system idle iowait irq softirq steal guest guest_nice
+        idle = cols[3] + (cols[4] if len(cols) > 4 else 0)
+        total = sum(cols)
+        return (idle, total)
+    except (FileNotFoundError, OSError, ValueError):
+        return None
+
+
+def _read_proc_meminfo() -> dict[str, int] | None:
+    """Retourne un dict {clé: valeur en kB} depuis /proc/meminfo, ou None."""
+    try:
+        info: dict[str, int] = {}
+        with open("/proc/meminfo", "r") as f:
+            for line in f:
+                key, _, rest = line.partition(":")
+                try:
+                    info[key.strip()] = int(rest.strip().split()[0])
+                except (ValueError, IndexError):
+                    pass
+        return info
+    except (FileNotFoundError, OSError):
+        return None
+
+
+def _read_uptime_seconds() -> float | None:
+    try:
+        with open("/proc/uptime", "r") as f:
+            return float(f.read().split()[0])
+    except (FileNotFoundError, OSError, ValueError):
+        return None
+
+
+def compute_system_metrics() -> dict:
+    """
+    Métriques système courantes. Conçu pour fonctionner sur le NAS Synology
+    (Linux, container Docker) — fallback gracieux sur macOS dev.
+    """
+    metrics = {
+        "cpu_pct":          None,
+        "ram_used_mb":      None,
+        "ram_total_mb":     None,
+        "ram_pct":          None,
+        "disk_used_gb":     None,
+        "disk_free_gb":     None,
+        "disk_total_gb":    None,
+        "disk_pct":         None,
+        "uptime_hours":     None,
+        "nas_path":         str(NAS_ROOT),
+        "hostname":         socket.gethostname(),
+        "available":        True,
+    }
+
+    # ── CPU (Linux) ────────────────────────────────────────────────────────
+    sample = _read_proc_stat_cpu()
+    if sample is not None:
+        idle, total = sample
+        with _cpu_sample_lock:
+            prev_idle  = _cpu_sample_prev["idle"]
+            prev_total = _cpu_sample_prev["total"]
+            _cpu_sample_prev["idle"]  = idle
+            _cpu_sample_prev["total"] = total
+        d_total = total - prev_total
+        d_idle  = idle  - prev_idle
+        if prev_total > 0 and d_total > 0:
+            metrics["cpu_pct"] = round(100.0 * (1.0 - d_idle / d_total), 1)
+
+    # ── RAM (Linux) ────────────────────────────────────────────────────────
+    mem = _read_proc_meminfo()
+    if mem and mem.get("MemTotal", 0) > 0:
+        total_kb = mem["MemTotal"]
+        avail_kb = mem.get("MemAvailable", mem.get("MemFree", 0))
+        used_kb  = max(0, total_kb - avail_kb)
+        metrics["ram_total_mb"] = total_kb // 1024
+        metrics["ram_used_mb"]  = used_kb  // 1024
+        metrics["ram_pct"]      = round(100.0 * used_kb / total_kb, 1)
+
+    # ── Disque sur le NAS_ROOT (cross-platform) ────────────────────────────
+    try:
+        target = NAS_ROOT if NAS_ROOT.exists() else Path("/")
+        u = shutil.disk_usage(target)
+        gb = 1024 ** 3
+        metrics["disk_used_gb"]  = round(u.used  / gb, 2)
+        metrics["disk_free_gb"]  = round(u.free  / gb, 2)
+        metrics["disk_total_gb"] = round(u.total / gb, 2)
+        if u.total > 0:
+            metrics["disk_pct"] = round(100.0 * u.used / u.total, 1)
+    except OSError:
+        pass
+
+    # ── Uptime ─────────────────────────────────────────────────────────────
+    up = _read_uptime_seconds()
+    if up is not None:
+        metrics["uptime_hours"] = round(up / 3600.0, 1)
+
+    return metrics
+
+
+@app.route("/api/system/metrics")
+@login_required
+@role_required("admin")
+def api_system_metrics():
+    """Métriques système live (admin uniquement)."""
+    return jsonify(compute_system_metrics())
+
+
+@app.route("/api/openapi.json")
+@login_required
+@role_required("admin")
+def api_openapi():
+    """Spec OpenAPI 3.1 — réservée aux admins (la spec dévoile la surface API)."""
+    return jsonify(OPENAPI_SPEC)
+
+
+@app.route("/api/docs")
+@login_required
+@role_required("admin")
+def api_docs():
+    """Swagger UI servi depuis CDN — réservé aux admins."""
+    return """<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>IRM FAIR — Documentation API</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.17.14/swagger-ui.css">
+  <style>
+    body { margin: 0; }
+    .topbar { display: none; }
+    .swagger-ui .info { margin: 30px 0; }
+    .swagger-ui .info .title { font-family: 'IBM Plex Sans', sans-serif; }
+  </style>
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.17.14/swagger-ui-bundle.js"></script>
+  <script>
+    window.onload = () => {
+      SwaggerUIBundle({
+        url: '/api/openapi.json',
+        dom_id: '#swagger-ui',
+        deepLinking: true,
+        defaultModelsExpandDepth: 1,
+        docExpansion: 'list',
+        tagsSorter: 'alpha',
+        operationsSorter: 'alpha',
+        tryItOutEnabled: true,
+        persistAuthorization: true,
+      });
+    };
+  </script>
+</body>
+</html>"""
 
 
 @app.route("/api/logs")
@@ -2336,6 +3679,9 @@ def page_projet_detail(nom):
         if not projet:
             return "Projet introuvable", 404
 
+        if not user_can_view_projet(current_user, nom):
+            return render_template("403.html"), 403
+
         filtre_statut = request.args.get("statut", "")
         filtre_espece = request.args.get("espece", "")
         filtre_q      = request.args.get("q", "").strip()
@@ -2366,6 +3712,18 @@ def page_projet_detail(nom):
     pct     = round(total_acq / prevues * 100) if prevues else 0
     sm      = {r["statut"]: r["n"] for r in statuts}
 
+    # Droits par projet
+    membres        = [dict(m) for m in projet_membres(nom)]
+    is_restricted  = projet_is_restricted(nom)
+    can_manage     = user_can_manage_projet(current_user, nom)
+    my_role_projet = user_projet_role(current_user, nom)
+
+    # Liste des usernames pour l'autocomplete d'ajout membre
+    with get_db() as db:
+        all_users = [
+            r["username"] for r in db.execute("SELECT username FROM users ORDER BY username").fetchall()
+        ]
+
     return render_template("projet_detail.html",
         projet        = dict(projet),
         animaux       = [dict(a) for a in animaux],
@@ -2379,6 +3737,11 @@ def page_projet_detail(nom):
         filtre_statut = filtre_statut,
         filtre_espece = filtre_espece,
         filtre_q      = filtre_q,
+        membres        = membres,
+        is_restricted  = is_restricted,
+        can_manage     = can_manage,
+        my_role_projet = my_role_projet,
+        all_users      = all_users,
     )
 
 # ─────────────────────────────────────────────────
@@ -2388,6 +3751,8 @@ def page_projet_detail(nom):
 @app.route("/animal/<projet>/<animal_id>")
 @login_required
 def page_animal(projet, animal_id):
+    if not user_can_view_projet(current_user, projet):
+        return render_template("403.html"), 403
     with get_db() as db:
         animal  = db.execute(
             "SELECT * FROM animaux WHERE animal_id=? AND projet=?", (animal_id, projet)
@@ -2487,6 +3852,9 @@ def api_add_commentaire():
     if type_ not in ("note", "incident", "reprise"):
         type_ = "note"
 
+    if not user_can_edit_projet(current_user, projet):
+        return jsonify({"error": "Droits insuffisants sur ce projet"}), 403
+
     with get_db() as db:
         db.execute(
             "INSERT INTO commentaires (animal_id, projet, auteur, type, contenu, created_at) VALUES (?,?,?,?,?,?)",
@@ -2514,6 +3882,8 @@ def api_update_animal_statut(projet, animal_id):
     statut = data.get("statut", "")
     if statut not in ("ok", "en_attente", "en_cours", "a_refaire"):
         return jsonify({"error": "Statut invalide"}), 400
+    if not user_can_edit_projet(current_user, projet):
+        return jsonify({"error": "Droits insuffisants sur ce projet"}), 403
     with get_db() as db:
         updated = db.execute(
             "UPDATE animaux SET statut=? WHERE animal_id=? AND projet=?",
@@ -2536,10 +3906,75 @@ def api_update_statut(acq_id):
     if statut not in ("ok", "en_attente", "en_cours", "a_refaire"):
         return jsonify({"error": "Statut invalide"}), 400
     with get_db() as db:
+        acq = db.execute("SELECT projet FROM acquisitions WHERE id=?", (acq_id,)).fetchone()
+        if not acq:
+            return jsonify({"error": "Acquisition introuvable"}), 404
+        if not user_can_edit_projet(current_user, acq["projet"]):
+            return jsonify({"error": "Droits insuffisants sur ce projet"}), 403
         db.execute("UPDATE acquisitions SET statut=? WHERE id=?", (statut, acq_id))
         db.commit()
     emit_event("statut_acq", {"acq_id": acq_id, "statut": statut, "par": current_user.username})
     return jsonify({"ok": True})
+
+
+@app.route("/api/acquisitions/<int:acq_id>/metadata", methods=["PATCH"])
+@login_required
+def api_update_acq_metadata(acq_id):
+    """
+    Met à jour les métadonnées enrichies (poids, qualité, problème) d'une
+    acquisition. Exige le droit d'édition sur le projet correspondant.
+    """
+    with get_db() as db:
+        acq = db.execute("SELECT projet FROM acquisitions WHERE id=?", (acq_id,)).fetchone()
+    if not acq:
+        return jsonify({"error": "Acquisition introuvable"}), 404
+    if not user_can_edit_projet(current_user, acq["projet"]):
+        return jsonify({"error": "Droits insuffisants sur ce projet"}), 403
+
+    data = request.json or {}
+    fields = {}
+
+    if "poids_g" in data:
+        v = data["poids_g"]
+        if v in (None, ""):
+            fields["poids_g"] = None
+        else:
+            try:
+                v = float(v)
+                if v <= 0 or v > 5000:
+                    return jsonify({"error": "Poids invalide (0–5000 g)"}), 400
+                fields["poids_g"] = v
+            except (ValueError, TypeError):
+                return jsonify({"error": "Poids doit être un nombre"}), 400
+
+    if "qualite" in data:
+        v = data["qualite"] or None
+        if v not in (None, "excellente", "bonne", "degradee", "inutilisable"):
+            return jsonify({"error": "Qualité invalide"}), 400
+        fields["qualite"] = v
+
+    if "probleme_type" in data:
+        v = data["probleme_type"] or None
+        if v not in (None, "aucun", "positionnement", "artefact", "mouvement", "materiel", "autre"):
+            return jsonify({"error": "Type de problème invalide"}), 400
+        fields["probleme_type"] = v
+
+    if "probleme_desc" in data:
+        v = data["probleme_desc"] or None
+        if v and len(v) > 1000:
+            return jsonify({"error": "Description trop longue (max 1000)"}), 400
+        fields["probleme_desc"] = v
+
+    if not fields:
+        return jsonify({"error": "Aucun champ à mettre à jour"}), 400
+
+    set_clause = ", ".join(f"{k}=?" for k in fields)
+    params = list(fields.values()) + [acq_id]
+    with get_db() as db:
+        db.execute(f"UPDATE acquisitions SET {set_clause} WHERE id=?", params)
+        db.commit()
+    return jsonify({"ok": True, "updated": list(fields.keys())})
+
 
 # ─────────────────────────────────────────────────
 #  VOLUMÉTRIE — calcul K-means 3 classes
@@ -3044,6 +4479,7 @@ def api_2fa_status():
 
 @app.route("/nas-explorer")
 @login_required
+@role_required("admin", "operateur")
 def page_nas_explorer():
     return render_template("nas_explorer.html")
 
@@ -3255,6 +4691,7 @@ def reset_password(token):
 
 @app.route("/calendrier")
 @login_required
+@role_required("admin", "operateur")
 def page_calendrier():
     now    = datetime.now()
     year   = int(request.args.get("year",  now.year))

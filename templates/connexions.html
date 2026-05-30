@@ -10,29 +10,35 @@
   <div class="page-sub">{{ total }} entrée(s) · {{ nb_fail }} échec(s) de connexion</div>
 </div>
 
-<!-- Filtres -->
-<div class="card">
-  <div class="card-title">Filtres</div>
-  <form method="GET" action="/connexions" style="display:flex;gap:12px;align-items:flex-end;">
-    <div class="form-row">
-      <label class="form-label">Action</label>
-      <select class="form-select" name="action" style="width:180px;">
-        <option value="">Toutes</option>
-        <option value="login"        {% if filtre_action == "login" %}selected{% endif %}>Connexion réussie</option>
-        <option value="login_failed" {% if filtre_action == "login_failed" %}selected{% endif %}>Échec de connexion</option>
-        <option value="logout"       {% if filtre_action == "logout" %}selected{% endif %}>Déconnexion</option>
-      </select>
+<div class="page-grid">
+  <aside class="page-side">
+    <div class="card">
+      <div class="card-title">Filtres</div>
+      <form method="GET" action="/connexions" style="display:flex;flex-direction:column;gap:10px;">
+        <div class="form-row">
+          <label class="form-label">Action</label>
+          <select class="form-select" name="action">
+            <option value="">Toutes</option>
+            <option value="login"        {% if filtre_action == "login" %}selected{% endif %}>Connexion réussie</option>
+            <option value="login_failed" {% if filtre_action == "login_failed" %}selected{% endif %}>Échec connexion</option>
+            <option value="logout"       {% if filtre_action == "logout" %}selected{% endif %}>Déconnexion</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label class="form-label">Utilisateur</label>
+          <input class="form-input" type="text" name="username" value="{{ filtre_username }}" placeholder="nicolas…">
+        </div>
+        <div style="display:flex;gap:6px;margin-top:4px;">
+          <button class="btn-primary" type="submit" style="flex:1;">Filtrer</button>
+          {% if filtre_action or filtre_username %}
+            <a href="/connexions" class="btn-ghost">✕</a>
+          {% endif %}
+        </div>
+      </form>
     </div>
-    <div class="form-row">
-      <label class="form-label">Utilisateur</label>
-      <input class="form-input" type="text" name="username" value="{{ filtre_username }}" placeholder="nicolas…" style="width:160px;">
-    </div>
-    <button class="btn-primary" type="submit" style="height:38px;">Filtrer</button>
-    <a href="/connexions" class="btn-ghost" style="height:38px;line-height:20px;">Réinitialiser</a>
-  </form>
-</div>
+  </aside>
 
-<!-- Tableau -->
+  <section class="page-main">
 <div class="card">
   <div class="card-title">Événements récents (200 derniers)</div>
   {% if logs %}
@@ -74,5 +80,20 @@
   </div>
   {% endif %}
 </div>
+  </section>
+</div>
+
+<style>
+  .page-grid { display:grid; grid-template-columns: 260px 1fr; gap:16px; align-items:flex-start; }
+  .page-side { display:flex; flex-direction:column; gap:14px; position:sticky; top:8px; }
+  .page-side .card { padding:14px 16px; }
+  .page-side .card-title { margin-bottom:10px; padding-bottom:8px; }
+  .page-main { min-width:0; }
+  .page-main .data-table { font-size:12px; }
+  @media (max-width: 1100px) {
+    .page-grid { grid-template-columns: 1fr; }
+    .page-side { position:static; }
+  }
+</style>
 
 {% endblock %}

@@ -34,72 +34,106 @@
   </div>
 </div>
 
-<!-- Formulaire création -->
-<div class="card">
-  <div class="card-title">Créer un projet</div>
-  <div id="proj-error"   style="display:none;" class="msg-box msg-error"></div>
-  <div id="proj-success" style="display:none;" class="msg-box msg-success"></div>
-  <div style="display:grid;grid-template-columns:1fr 1fr 130px 120px 120px;gap:12px;align-items:flex-end;">
-    <div class="form-row">
-      <label class="form-label">Nom du projet</label>
-      <input class="form-input" type="text" id="proj-nom" placeholder="ex : cardiologie">
-    </div>
-    <div class="form-row">
-      <label class="form-label">Responsable</label>
-      <input class="form-input" type="text" id="proj-resp" placeholder="ex : Nicolas">
-    </div>
-    <div class="form-row">
-      <label class="form-label">Nb animaux prévus</label>
-      <input class="form-input" type="number" id="proj-nb" placeholder="20" min="0">
-    </div>
-    <div class="form-row">
-      <label class="form-label">Séq. / animal</label>
-      <input class="form-input" type="number" id="proj-seq" placeholder="3" min="1" max="10" value="3">
-    </div>
-    <button class="btn-primary" onclick="createProjet()" style="height:38px;">Créer →</button>
-  </div>
-  <div class="mono" style="margin-top:10px;color:var(--hint);font-size:10px;">
-    Le nom sera converti en minuscules sans espaces · Séq./animal = nombre de passages IRM prévus (défaut 3)
-  </div>
-</div>
+<!-- ─── Layout 2 colonnes : actions à gauche, projets à droite ──────────── -->
+<div class="dashboard-grid">
 
-<!-- Filtres -->
-<div class="card" style="padding:14px 20px;">
-  <form method="GET" action="/" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
-    <div class="form-row">
-      <label class="form-label">Projet</label>
-      <select class="form-select" name="projet" style="width:180px;">
-        <option value="">Tous</option>
-        {% for p in projets_all %}
-          <option value="{{ p }}" {% if f_projet == p %}selected{% endif %}>{{ p | replace("_"," ") | title }}</option>
-        {% endfor %}
-      </select>
+  <!-- ◀ Colonne gauche : actions compactes ─────────────────────────────── -->
+  <aside class="dashboard-side">
+
+    <!-- Filtres -->
+    <div class="card">
+      <div class="card-title">Filtrer</div>
+      <form method="GET" action="/" style="display:flex;flex-direction:column;gap:10px;">
+        <div class="form-row">
+          <label class="form-label">Projet</label>
+          <select class="form-select" name="projet">
+            <option value="">Tous</option>
+            {% for p in projets_all %}
+              <option value="{{ p }}" {% if f_projet == p %}selected{% endif %}>{{ p | replace("_"," ") | title }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-row">
+          <label class="form-label">Début après</label>
+          <input class="form-input date-narrow" type="date" name="date_debut" value="{{ f_date_debut }}">
+        </div>
+        <div class="form-row">
+          <label class="form-label">Fin avant</label>
+          <input class="form-input date-narrow" type="date" name="date_fin" value="{{ f_date_fin }}">
+        </div>
+        <div class="form-row">
+          <label class="form-label">Recherche</label>
+          <input class="form-input" type="text" id="search-proj"
+                 placeholder="Nom ou responsable…"
+                 oninput="applyClientFilters()">
+        </div>
+        <div style="display:flex;gap:6px;margin-top:4px;">
+          <button class="btn-primary" type="submit" style="flex:1;">Filtrer</button>
+          {% if f_projet or f_date_debut or f_date_fin %}
+            <a href="/" class="btn-ghost">✕</a>
+          {% endif %}
+        </div>
+      </form>
     </div>
-    <div class="form-row">
-      <label class="form-label">Début après le</label>
-      <input class="form-input" type="date" name="date_debut" value="{{ f_date_debut }}" style="width:150px;">
+
+    <!-- Créer un projet -->
+    {% if current_user.role in ['admin', 'operateur'] %}
+    <div class="card">
+      <div class="card-title">Créer un projet</div>
+      <div id="proj-error"   style="display:none;" class="msg-box msg-error"></div>
+      <div id="proj-success" style="display:none;" class="msg-box msg-success"></div>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div class="form-row">
+          <label class="form-label">Nom</label>
+          <input class="form-input" type="text" id="proj-nom" placeholder="ex : cardiologie">
+        </div>
+        <div class="form-row">
+          <label class="form-label">Responsable</label>
+          <input class="form-input" type="text" id="proj-resp" placeholder="ex : Nicolas">
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div class="form-row">
+            <label class="form-label">Animaux</label>
+            <input class="form-input" type="number" id="proj-nb" placeholder="20" min="0">
+          </div>
+          <div class="form-row">
+            <label class="form-label">Séq./animal</label>
+            <input class="form-input" type="number" id="proj-seq" placeholder="3" min="1" max="10" value="3">
+          </div>
+        </div>
+        <button class="btn-primary" onclick="createProjet()" style="margin-top:4px;">Créer →</button>
+      </div>
+      <div class="mono" style="margin-top:8px;color:var(--hint);font-size:9px;line-height:1.5;">
+        Nom converti en minuscules sans espaces · Séq./animal = passages IRM prévus
+      </div>
     </div>
-    <div class="form-row">
-      <label class="form-label">Fin avant le</label>
-      <input class="form-input" type="date" name="date_fin" value="{{ f_date_fin }}" style="width:150px;">
-    </div>
-    <div class="form-row">
-      <label class="form-label">Recherche</label>
-      <input class="form-input" type="text" id="search-proj"
-             placeholder="Nom ou responsable…"
-             oninput="applyClientFilters()"
-             style="width:200px;">
-    </div>
-    <button class="btn-primary" type="submit" style="height:38px;">Filtrer</button>
-    {% if f_projet or f_date_debut or f_date_fin %}
-      <a href="/" class="btn-ghost" style="height:38px;line-height:20px;">✕ Réinitialiser</a>
     {% endif %}
-  </form>
-</div>
 
-<!-- Tableau des projets en cours -->
+    <!-- Liens rapides -->
+    <div class="card">
+      <div class="card-title">Raccourcis</div>
+      <div style="display:flex;flex-direction:column;gap:6px;font-size:12px;">
+        {% if current_user.role in ['admin', 'operateur'] %}
+        <a href="/import" style="color:var(--text);text-decoration:none;padding:6px 8px;border-radius:4px;
+           background:var(--bg3);border:1px solid var(--border);">↑ Importer une acquisition</a>
+        <a href="/planification" style="color:var(--text);text-decoration:none;padding:6px 8px;border-radius:4px;
+           background:var(--bg3);border:1px solid var(--border);">→ Planifier un créneau</a>
+        <a href="/calendrier" style="color:var(--text);text-decoration:none;padding:6px 8px;border-radius:4px;
+           background:var(--bg3);border:1px solid var(--border);">◫ Calendrier acquisitions</a>
+        {% endif %}
+        <a href="/animaux" style="color:var(--text);text-decoration:none;padding:6px 8px;border-radius:4px;
+           background:var(--bg3);border:1px solid var(--border);">~ Liste des animaux</a>
+        <a href="/archive" style="color:var(--text);text-decoration:none;padding:6px 8px;border-radius:4px;
+           background:var(--bg3);border:1px solid var(--border);">⊡ Voir l'archive</a>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ▶ Colonne droite : projets en cours ──────────────────────────────── -->
+  <section class="dashboard-main">
 <div class="card">
   <div class="card-title">Projets en cours <span class="mono" style="color:var(--hint);font-weight:400;">— {{ projets | length }} projet(s)</span></div>
+  <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">
   <table class="data-table" id="projets-table">
     <thead>
       <tr>
@@ -202,15 +236,63 @@
     {% endfor %}
     </tbody>
   </table>
+  </div>
   <div id="no-results" style="display:none;text-align:center;padding:24px;color:var(--hint);font-family:var(--font-mono);font-size:12px;">
     Aucun projet ne correspond à la recherche.
   </div>
 </div>
+  </section>
+</div>
+<!-- ── fin dashboard-grid ──────────────────────────────────────────────── -->
 
 <style>
+  /* ── Layout 2 colonnes (desktop) / 1 colonne (mobile) ── */
+  .dashboard-grid {
+    display: grid;
+    grid-template-columns: 240px 1fr;
+    gap: 14px;
+    align-items: flex-start;
+  }
+  .dashboard-side {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    position: sticky;
+    top: 8px;
+  }
+  .dashboard-side .card { padding: 10px 12px; }
+  .dashboard-side .card-title {
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    font-size: 8.5px;
+  }
+  .dashboard-side .form-label { font-size: 8.5px; }
+  .dashboard-side .form-input,
+  .dashboard-side .form-select { padding: 6px 8px; font-size: 11px; }
+  .dashboard-side .btn-primary { padding: 7px 14px; font-size: 11px; }
+  .dashboard-side form,
+  .dashboard-side .form-row { gap: 5px; }
+  /* Champ date : laisser le contenu déterminer la largeur sans dépasser */
+  .dashboard-side .date-narrow {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+  /* Sur Webkit, le bouton calendrier prend de la place : on le rapproche */
+  .dashboard-side .date-narrow::-webkit-calendar-picker-indicator {
+    padding: 0; margin-left: 0;
+  }
+  .dashboard-main { min-width: 0; }  /* permet au tableau de scroller horizontalement */
+  .dashboard-main .data-table { font-size: 12px; }
+
+  @media (max-width: 1100px) {
+    .dashboard-grid { grid-template-columns: 1fr; }
+    .dashboard-side { position: static; }
+  }
+
   .msg-box { font-family:var(--font-mono);font-size:11px;border-radius:3px;padding:8px 12px;margin-bottom:4px;line-height:1.8; }
   .msg-error   { color:var(--red);  background:var(--red-bg);  border:1px solid rgba(220,38,38,0.2); }
-  .msg-success { color:var(--teal); background:var(--teal-bg); border:1px solid rgba(13,148,112,0.2); }
+  .msg-success { color:var(--teal); background:var(--teal-bg); border:1px solid rgba(234,124,28,0.22); }
   .btn-delete-proj, .btn-archive-proj {
     font-family:var(--font-mono);font-size:11px;background:transparent;
     border:1px solid var(--border);border-radius:3px;padding:3px 10px;cursor:pointer;
@@ -237,9 +319,16 @@ function applyClientFilters() {
   noRes.style.display = visible === 0 ? 'block' : 'none';
 }
 
+/* Utilitaire : YYYY-MM-DD du jour */
+function _todayISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
 /* ── Date fin prévue ── */
 function editDate(span) {
   const inp = span.nextElementSibling;
+  if (!inp.value) inp.value = _todayISO();   // pré-remplit avec aujourd'hui si vide
   span.style.display = 'none';
   inp.style.display = '';
   inp.focus();
@@ -286,6 +375,7 @@ async function saveDate(inp) {
 /* ── Date début (avec alerte de confirmation) ── */
 function editDateDebut(span) {
   const inp = span.nextElementSibling;
+  if (!inp.value) inp.value = _todayISO();   // pré-remplit avec aujourd'hui si vide
   span.style.display = 'none';
   inp.style.display = '';
   inp.focus();

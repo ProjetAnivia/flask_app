@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
   {% if recaptcha_site_key %}
-  <script src="https://www.google.com/recaptcha/api.js" async defer></script>
+  <script src="https://www.google.com/recaptcha/api.js?render={{ recaptcha_site_key }}"></script>
   {% endif %}
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -15,7 +15,7 @@
       --bg: #f4f5f7; --bg2: #ffffff; --bg3: #f0f2f5;
       --text: #111827; --muted: #4b5563; --hint: #9ca3af;
       --border: rgba(0,0,0,0.07); --border2: rgba(0,0,0,0.13);
-      --teal: #0d9470; --teal-dim: #0a7a5c; --teal-bg: rgba(13,148,112,0.09);
+      --teal: #ea7c1c; --teal-dim: #c8651a; --teal-bg: rgba(234,124,28,0.10);
       --red: #dc2626; --red-bg: rgba(220,38,38,0.08);
     }
     html, body {
@@ -106,7 +106,7 @@
     .btn-login {
       font-family: 'IBM Plex Mono', monospace;
       font-size: 13px;
-      background: var(--teal);
+      background: #ea7c1c;
       color: #ffffff;
       border: none;
       border-radius: 4px;
@@ -137,6 +137,58 @@
       text-align: center;
       font-family: 'IBM Plex Mono', monospace;
     }
+    .demo-accounts {
+      margin-top: 14px;
+      border: 1px solid var(--border2);
+      border-radius: 6px;
+      padding: 12px 14px;
+      background: var(--bg2);
+    }
+    .demo-accounts-title {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 9px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--hint);
+      margin-bottom: 8px;
+      text-align: center;
+    }
+    .demo-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 11px;
+    }
+    .demo-table td {
+      padding: 3px 6px;
+      border-bottom: 1px solid var(--border);
+    }
+    .demo-table tr:last-child td { border-bottom: none; }
+    .demo-table .demo-user { color: var(--text); font-weight: 500; }
+    .demo-table .demo-pw   { color: var(--muted); }
+    .demo-table .demo-role {
+      text-align: right;
+      font-size: 9px;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .demo-role.admin     { color: var(--red); }
+    .demo-role.operateur { color: var(--blue); }
+    .demo-role.chercheur { color: var(--hint); }
+    .demo-fill {
+      cursor: pointer;
+      transition: background 0.12s;
+    }
+    .demo-fill:hover {
+      background: var(--bg3);
+    }
+    .demo-tip {
+      text-align: center;
+      font-size: 9px;
+      color: var(--hint);
+      margin-top: 8px;
+      font-family: 'IBM Plex Mono', monospace;
+    }
     .forgot-link {
       display: block;
       text-align: center;
@@ -155,7 +207,7 @@
     }
     #captcha-row {
       background: var(--teal-bg);
-      border: 1px solid rgba(13,148,112,0.18);
+      border: 1px solid rgba(234,124,28,0.20);
       border-radius: 4px;
       padding: 10px 12px;
     }
@@ -216,8 +268,13 @@
           </div>
 
           {% if recaptcha_site_key %}
-          <div style="display:flex;justify-content:center;">
-            <div class="g-recaptcha" data-sitekey="{{ recaptcha_site_key }}"></div>
+          <input type="hidden" name="g-recaptcha-response" id="g-recaptcha-response">
+          <div style="font-size:10px;color:var(--hint);text-align:center;line-height:1.5;">
+            Ce site est protégé par reCAPTCHA — les
+            <a href="https://policies.google.com/privacy" style="color:var(--teal);" target="_blank">règles de confidentialité</a>
+            et
+            <a href="https://policies.google.com/terms"  style="color:var(--teal);" target="_blank">conditions d'utilisation</a>
+            de Google s'appliquent.
           </div>
           {% elif captcha_question %}
           <div class="form-row" id="captcha-row">
@@ -235,10 +292,53 @@
       </form>
     </div>
 
-    <div class="login-hint">Comptes démo : admin / admin123</div>
+    <div class="demo-accounts">
+      <div class="demo-accounts-title">Comptes de démonstration</div>
+      <table class="demo-table">
+        <tr class="demo-fill" onclick="fillLogin('admin','admin123')">
+          <td class="demo-user">admin</td>
+          <td class="demo-pw">admin123</td>
+          <td class="demo-role admin">admin sudo</td>
+        </tr>
+        <tr class="demo-fill" onclick="fillLogin('nicolas','nico123')">
+          <td class="demo-user">nicolas</td>
+          <td class="demo-pw">nico123</td>
+          <td class="demo-role admin">admin</td>
+        </tr>
+        <tr class="demo-fill" onclick="fillLogin('clemence','clem123')">
+          <td class="demo-user">clemence</td>
+          <td class="demo-pw">clem123</td>
+          <td class="demo-role admin">admin</td>
+        </tr>
+        <tr class="demo-fill" onclick="fillLogin('florent','flo123')">
+          <td class="demo-user">florent</td>
+          <td class="demo-pw">flo123</td>
+          <td class="demo-role admin">admin</td>
+        </tr>
+        <tr class="demo-fill" onclick="fillLogin('pauline','Pauline45')">
+          <td class="demo-user">pauline</td>
+          <td class="demo-pw">Pauline45</td>
+          <td class="demo-role operateur">opérateur</td>
+        </tr>
+        <tr class="demo-fill" onclick="fillLogin('chercheur','ch123')">
+          <td class="demo-user">chercheur</td>
+          <td class="demo-pw">ch123</td>
+          <td class="demo-role chercheur">chercheur</td>
+        </tr>
+      </table>
+      <div class="demo-tip">Cliquez sur une ligne pour pré-remplir le formulaire</div>
+    </div>
   </div>
 
 <script>
+function fillLogin(user, pw) {
+  const u = document.querySelector('input[name="username"]');
+  const p = document.querySelector('input[name="password"], #pw-input');
+  if (u) u.value = user;
+  if (p) p.value = pw;
+  if (u) u.focus();
+}
+
 function togglePw() {
   const inp     = document.getElementById('pw-input');
   const eyeOn   = document.getElementById('eye-icon');
@@ -248,6 +348,36 @@ function togglePw() {
   eyeOn.style.display  = showing ? '' : 'none';
   eyeOff.style.display = showing ? 'none' : '';
 }
+
+{% if recaptcha_site_key %}
+// reCAPTCHA v3 — génère un token au moment du submit
+(function() {
+  const SITE_KEY = "{{ recaptcha_site_key }}";
+  const form     = document.querySelector('form');
+  if (!form) return;
+
+  form.addEventListener('submit', function(e) {
+    const tokenField = document.getElementById('g-recaptcha-response');
+    if (tokenField && tokenField.value) return;   // déjà rempli, on laisse passer
+
+    e.preventDefault();
+    if (typeof grecaptcha === 'undefined') {
+      console.error('[reCAPTCHA] script non chargé');
+      form.submit();
+      return;
+    }
+    grecaptcha.ready(function() {
+      grecaptcha.execute(SITE_KEY, { action: 'login' }).then(function(token) {
+        tokenField.value = token;
+        form.submit();
+      }).catch(function(err) {
+        console.error('[reCAPTCHA] execute échoué', err);
+        form.submit();
+      });
+    });
+  });
+})();
+{% endif %}
 </script>
 </body>
 </html>

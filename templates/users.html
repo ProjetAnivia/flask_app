@@ -7,10 +7,15 @@
   <div class="page-sub">{{ total }} compte(s) enregistré(s)</div>
 </div>
 
-<!-- En-tête droits -->
-<div class="card" style="background:var(--bg3);border-color:var(--border);">
-  <div class="card-title">Droits par rôle</div>
-  <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:16px;font-size:13px;">
+<!-- En-tête droits — repliable -->
+<details class="card" style="background:var(--bg3);border-color:var(--border);">
+  <summary style="cursor:pointer;font-family:var(--font-mono);font-size:9px;
+                   letter-spacing:0.15em;text-transform:uppercase;color:var(--hint);
+                   list-style:none;">
+    ▸ Droits par rôle (cliquer pour déplier)
+  </summary>
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:16px;font-size:13px;
+              margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
     <div style="border:1px solid rgba(220,38,38,0.18);border-radius:5px;padding:12px;background:rgba(220,38,38,0.03);">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
         <span class="pill pill-admin">sudo</span>
@@ -70,42 +75,44 @@
       </ul>
     </div>
   </div>
-</div>
+</details>
 
-<!-- Formulaire création -->
-<div class="card">
-  <div class="card-title">Ajouter un compte</div>
-  <div id="form-error"   style="display:none;" class="msg-box msg-error"></div>
-  <div id="form-success" style="display:none;" class="msg-box msg-success"></div>
-  <div style="display:grid;grid-template-columns:1fr 1fr 160px 120px;gap:12px;align-items:flex-end;">
-    <div class="form-row">
-      <label class="form-label">Identifiant</label>
-      <input class="form-input" type="text" id="new-username" placeholder="florent">
-    </div>
-    <div class="form-row">
-      <label class="form-label">Mot de passe</label>
-      <div class="pw-wrap">
-        <input class="form-input" type="password" id="new-password"
-               placeholder="10 car. · majuscule · chiffre · spécial">
-        <button class="pw-toggle" type="button" onclick="togglePw('new-password', this)">afficher</button>
+<div class="page-grid">
+  <aside class="page-side">
+    <div class="card">
+      <div class="card-title">Ajouter un compte</div>
+      <div id="form-error"   style="display:none;" class="msg-box msg-error"></div>
+      <div id="form-success" style="display:none;" class="msg-box msg-success"></div>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div class="form-row">
+          <label class="form-label">Identifiant</label>
+          <input class="form-input" type="text" id="new-username" placeholder="florent">
+        </div>
+        <div class="form-row">
+          <label class="form-label">Mot de passe</label>
+          <div class="pw-wrap">
+            <input class="form-input" type="password" id="new-password"
+                   placeholder="10 car. min.">
+            <button class="pw-toggle" type="button" onclick="togglePw('new-password', this)">afficher</button>
+          </div>
+        </div>
+        <div class="form-row">
+          <label class="form-label">Rôle</label>
+          <select class="form-select" id="new-role">
+            <option value="chercheur">Observateur</option>
+            <option value="operateur">Opérateur</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+        <button class="btn-primary" onclick="addUser()">Ajouter →</button>
+      </div>
+      <div class="mono" style="margin-top:8px;color:var(--hint);font-size:9px;line-height:1.6;">
+        10 car. min · 1 majuscule · 1 chiffre · 1 caractère spécial
       </div>
     </div>
-    <div class="form-row">
-      <label class="form-label">Rôle</label>
-      <select class="form-select" id="new-role">
-        <option value="chercheur">Observateur</option>
-        <option value="operateur">Opérateur</option>
-        <option value="admin">Admin</option>
-      </select>
-    </div>
-    <button class="btn-primary" onclick="addUser()" style="height:38px;">Ajouter →</button>
-  </div>
-  <div class="mono" style="margin-top:8px;color:var(--hint);font-size:10px;">
-    Exigences : 10 caractères minimum · au moins une majuscule · au moins un chiffre · au moins un caractère spécial
-  </div>
-</div>
+  </aside>
 
-<!-- Liste comptes -->
+  <section class="page-main">
 <div class="card">
   <div class="card-title">Comptes actifs</div>
   <table class="data-table" id="users-table">
@@ -214,8 +221,20 @@
     </tbody>
   </table>
 </div>
+  </section>
+</div>
 
 <style>
+  .page-grid { display:grid; grid-template-columns: 260px 1fr; gap:16px; align-items:flex-start; }
+  .page-side { display:flex; flex-direction:column; gap:14px; position:sticky; top:8px; }
+  .page-side .card { padding:14px 16px; }
+  .page-side .card-title { margin-bottom:10px; padding-bottom:8px; }
+  .page-main { min-width:0; }
+  .page-main .data-table { font-size:12px; }
+  @media (max-width: 1100px) {
+    .page-grid { grid-template-columns: 1fr; }
+    .page-side { position:static; }
+  }
   .msg-box { font-family: var(--font-mono); font-size: 11px; border-radius: 3px; padding: 8px 12px; margin-bottom: 4px; }
   .msg-error   { color: var(--red);  background: var(--red-bg);  border: 1px solid rgba(240,68,56,0.2); }
   .msg-success { color: var(--teal); background: var(--teal-bg); border: 1px solid rgba(45,212,160,0.2); }

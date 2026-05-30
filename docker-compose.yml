@@ -14,10 +14,14 @@ services:
     ports:
       - "5001:5000"
 
+    # Charge les secrets depuis le fichier .env (git-ignoré)
+    # Voir .env.example pour la liste des variables disponibles
+    env_file:
+      - .env
+
     environment:
       - NAS_ROOT=/nas/structured
       - DB_DIR=/data
-      - SECRET_KEY=dev_secret_change_in_prod
 
     volumes:
       # ── LOCAL MAC ──────────────────────────────

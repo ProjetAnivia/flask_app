@@ -153,7 +153,7 @@
 <style>
   .msg-box { font-family:var(--font-mono);font-size:11px;border-radius:3px;padding:8px 12px;margin-bottom:4px;line-height:1.8; }
   .msg-error   { color:var(--red);  background:var(--red-bg);  border:1px solid rgba(220,38,38,0.2); }
-  .msg-success { color:var(--teal); background:var(--teal-bg); border:1px solid rgba(13,148,112,0.2); }
+  .msg-success { color:var(--teal); background:var(--teal-bg); border:1px solid rgba(234,124,28,0.22); }
   .btn-delete-proj, .btn-archive-proj {
     font-family:var(--font-mono);font-size:11px;background:transparent;
     border:1px solid var(--border);border-radius:3px;padding:3px 10px;cursor:pointer;
@@ -187,6 +187,10 @@ function applyFilters() {
 
 function editDate(span) {
   const inp = span.nextElementSibling;
+  if (!inp.value) {
+    const d = new Date();
+    inp.value = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  }
   span.style.display = 'none';
   inp.style.display = '';
   inp.focus();

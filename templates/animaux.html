@@ -11,42 +11,47 @@
   <div class="page-sub">{{ total }} animaux enregistrés</div>
 </div>
 
-<div class="card">
-  <div class="card-title">Filtres</div>
-  <form method="GET" action="/animaux" style="display:flex;gap:12px;align-items:flex-end;">
-    <div class="form-row">
-      <label class="form-label">Projet</label>
-      <select class="form-select" name="projet" style="width:180px;">
-        <option value="">Tous</option>
-        {% for p in projets %}
-          <option value="{{ p }}" {% if filtre_projet == p %}selected{% endif %}>{{ p | replace("_"," ") | title }}</option>
-        {% endfor %}
-      </select>
+<div class="page-grid">
+  <aside class="page-side">
+    <div class="card">
+      <div class="card-title">Filtres</div>
+      <form method="GET" action="/animaux" style="display:flex;flex-direction:column;gap:10px;">
+        <div class="form-row">
+          <label class="form-label">Recherche</label>
+          <input class="form-input" type="text" id="search-animaux"
+                 placeholder="ID, espèce, projet…"
+                 oninput="filterAnimaux(this.value)">
+        </div>
+        <div class="form-row">
+          <label class="form-label">Projet</label>
+          <select class="form-select" name="projet">
+            <option value="">Tous</option>
+            {% for p in projets %}
+              <option value="{{ p }}" {% if filtre_projet == p %}selected{% endif %}>{{ p | replace("_"," ") | title }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-row">
+          <label class="form-label">Statut</label>
+          <select class="form-select" name="statut">
+            <option value="">Tous</option>
+            <option value="ok"         {% if filtre_statut == "ok" %}selected{% endif %}>OK</option>
+            <option value="en_attente" {% if filtre_statut == "en_attente" %}selected{% endif %}>En attente</option>
+            <option value="en_cours"   {% if filtre_statut == "en_cours" %}selected{% endif %}>En cours</option>
+            <option value="a_refaire"  {% if filtre_statut == "a_refaire" %}selected{% endif %}>À refaire</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:6px;margin-top:4px;">
+          <button type="submit" class="btn-primary" style="flex:1;">Filtrer</button>
+          {% if filtre_projet or filtre_statut %}
+            <a href="/animaux" class="btn-ghost">✕</a>
+          {% endif %}
+        </div>
+      </form>
     </div>
-    <div class="form-row">
-      <label class="form-label">Statut</label>
-      <select class="form-select" name="statut" style="width:160px;">
-        <option value="">Tous</option>
-        <option value="ok"         {% if filtre_statut == "ok" %}selected{% endif %}>OK</option>
-        <option value="en_attente" {% if filtre_statut == "en_attente" %}selected{% endif %}>En attente</option>
-        <option value="en_cours"   {% if filtre_statut == "en_cours" %}selected{% endif %}>En cours</option>
-        <option value="a_refaire"  {% if filtre_statut == "a_refaire" %}selected{% endif %}>À refaire</option>
-      </select>
-    </div>
-    <button type="submit" class="btn-primary">Filtrer</button>
-    {% if filtre_projet or filtre_statut %}
-      <a href="/animaux" class="btn-ghost" style="text-decoration:none;padding:9px 16px;">Réinitialiser</a>
-    {% endif %}
-  </form>
-</div>
+  </aside>
 
-<div class="card" style="padding:14px 20px;">
-  <input class="form-input" type="text" id="search-animaux"
-         placeholder="Rechercher par ID, espèce, projet, statut…"
-         oninput="filterAnimaux(this.value)"
-         style="max-width:420px;">
-</div>
-
+  <section class="page-main">
 <div class="card">
   <div class="card-title" id="registre-title">Registre — {{ animaux | length }} résultat(s)</div>
   {% if animaux %}
@@ -84,6 +89,21 @@
     <div class="mono" style="color:var(--hint);">Aucun animal ne correspond aux filtres.</div>
   {% endif %}
 </div>
+  </section>
+</div>
+
+<style>
+  .page-grid { display:grid; grid-template-columns: 260px 1fr; gap:16px; align-items:flex-start; }
+  .page-side { display:flex; flex-direction:column; gap:14px; position:sticky; top:8px; }
+  .page-side .card { padding:14px 16px; }
+  .page-side .card-title { margin-bottom:10px; padding-bottom:8px; }
+  .page-main { min-width:0; }
+  .page-main .data-table { font-size:12px; }
+  @media (max-width: 1100px) {
+    .page-grid { grid-template-columns: 1fr; }
+    .page-side { position:static; }
+  }
+</style>
 
 <script>
 function filterAnimaux(q) {

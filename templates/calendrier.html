@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}Historique des acquisitions{% endblock %}
+{% block title %}Planning acquisitions{% endblock %}
 {% block content %}
 
 <div class="page-header">
   <div style="display:flex;align-items:center;gap:16px;">
-    <div class="page-title">Historique des acquisitions</div>
+    <div class="page-title">Planning acquisitions</div>
   </div>
   <div class="page-sub">{{ month_name }} {{ year }} — acquisitions enregistrées · cliquez sur un jour pour le détail</div>
 </div>
@@ -91,7 +91,7 @@
               {% for a in day_acqs[:4] %}
               <div style="font-family:var(--font-mono);font-size:9px;padding:1px 5px;border-radius:2px;
                           overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-                          background:{% if color_map.get(a.projet,'teal') == 'teal' %}rgba(13,148,112,0.12)
+                          background:{% if color_map.get(a.projet,'teal') == 'teal' %}rgba(234,124,28,0.14)
                                      {% elif color_map.get(a.projet,'teal') == 'blue' %}rgba(29,78,216,0.1)
                                      {% elif color_map.get(a.projet,'teal') == 'amber' %}rgba(180,83,9,0.1)
                                      {% else %}rgba(220,38,38,0.1){% endif %};
@@ -190,7 +190,7 @@ const acqsByDay = {{ acqs_by_day | tojson }};
 const colorMap  = {{ color_map | tojson }};
 
 const colorStyle = {
-  teal:  { bg: 'rgba(13,148,112,0.1)',  text: '#0d9470' },
+  teal:  { bg: 'rgba(234,124,28,0.12)',  text: 'var(--teal)' },
   blue:  { bg: 'rgba(29,78,216,0.1)',   text: '#1d4ed8' },
   amber: { bg: 'rgba(180,83,9,0.1)',    text: '#b45309' },
   red:   { bg: 'rgba(220,38,38,0.1)',   text: '#dc2626' },

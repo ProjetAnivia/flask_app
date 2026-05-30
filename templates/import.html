@@ -7,6 +7,8 @@
   <div class="page-sub">DICOM (fichier unique, série multi-coupes ou archive .zip) · NIfTI</div>
 </div>
 
+<div class="page-grid page-grid-import">
+  <section class="page-main">
 <!-- Formulaire -->
 <div class="card">
   <div class="card-title">Paramètres de l'acquisition</div>
@@ -38,14 +40,56 @@
       </div>
     </div>
 
-    <div class="form-row" style="max-width:260px;">
-      <label class="form-label">Espèce</label>
-      <select class="form-select" id="inp-espece">
-        <option value="Rat">Rat</option>
-        <option value="Souris">Souris</option>
-        <option value="Lapin">Lapin</option>
-        <option value="Autre">Autre</option>
-      </select>
+    <div class="form-grid">
+      <div class="form-row">
+        <label class="form-label">Espèce</label>
+        <select class="form-select" id="inp-espece">
+          <option value="Rat">Rat</option>
+          <option value="Souris">Souris</option>
+          <option value="Lapin">Lapin</option>
+          <option value="Autre">Autre</option>
+        </select>
+      </div>
+
+      <div class="form-row">
+        <label class="form-label">Poids (g) <span style="color:var(--hint);">— optionnel</span></label>
+        <input class="form-input" type="number" id="inp-poids" step="0.1" min="0.1" max="5000"
+               placeholder="ex : 280.5">
+      </div>
+    </div>
+
+    <!-- ── Suivi expérimental (cahier des charges) ─────────────────────── -->
+    <div class="form-grid">
+      <div class="form-row">
+        <label class="form-label">Qualité de l'image</label>
+        <select class="form-select" id="inp-qualite">
+          <option value="">— non évaluée —</option>
+          <option value="excellente">Excellente</option>
+          <option value="bonne">Bonne</option>
+          <option value="degradee">Dégradée</option>
+          <option value="inutilisable">Inutilisable</option>
+        </select>
+      </div>
+
+      <div class="form-row">
+        <label class="form-label">Problème rencontré</label>
+        <select class="form-select" id="inp-probleme-type" onchange="toggleProblemeDesc()">
+          <option value="">— aucun signalé —</option>
+          <option value="aucun">Aucun (RAS)</option>
+          <option value="positionnement">Positionnement</option>
+          <option value="artefact">Artéfact</option>
+          <option value="mouvement">Mouvement de l'animal</option>
+          <option value="materiel">Matériel (antenne, IRM…)</option>
+          <option value="autre">Autre</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="form-row" id="row-probleme-desc" style="display:none;">
+      <label class="form-label">Description du problème</label>
+      <textarea class="form-input" id="inp-probleme-desc" rows="2" maxlength="1000"
+                placeholder="Détaille le problème (optionnel mais utile pour la traçabilité)"
+                style="font-family:var(--font-sans);resize:vertical;"></textarea>
     </div>
 
     <!-- Zone de dépôt -->
@@ -70,7 +114,7 @@
     </div>
 
     <!-- Bandeau métadonnées DICOM détectées -->
-    <div id="dicom-meta-banner" style="display:none;background:var(--teal-bg);border:1px solid rgba(13,148,112,0.2);
+    <div id="dicom-meta-banner" style="display:none;background:var(--teal-bg);border:1px solid rgba(234,124,28,0.22);
          border-radius:4px;padding:10px 14px;font-family:var(--font-mono);font-size:11px;color:var(--teal);">
       <strong>Métadonnées DICOM détectées</strong> — champs pré-remplis ci-dessus (modifiables)
       <span id="meta-detail" style="color:var(--muted);margin-left:8px;"></span>
@@ -97,6 +141,10 @@
     </div>
   </div>
 </div>
+
+  </section>
+
+  <aside class="page-side">
 
 <!-- Scanner NAS Paravision -->
 <div class="card">
@@ -128,40 +176,59 @@
 <!-- Stats dernière session -->
 <div class="card">
   <div class="card-title">Dernière session — {{ last_ts }}</div>
-  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
-    <div style="background:var(--bg3);border:1px solid var(--border);border-radius:3px;padding:14px;">
-      <div class="mono" style="color:var(--teal);font-size:9px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px;">Importés</div>
-      <div style="font-family:var(--font-mono);font-size:22px;color:var(--teal);">{{ nb_importes }}</div>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;">
+    <div style="background:var(--bg3);border:1px solid var(--border);border-radius:3px;padding:10px;">
+      <div class="mono" style="color:var(--teal);font-size:8px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;">Importés</div>
+      <div style="font-family:var(--font-mono);font-size:18px;color:var(--teal);">{{ nb_importes }}</div>
     </div>
-    <div style="background:var(--bg3);border:1px solid var(--border);border-radius:3px;padding:14px;">
-      <div class="mono" style="color:var(--amber);font-size:9px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px;">Doublons</div>
-      <div style="font-family:var(--font-mono);font-size:22px;color:var(--amber);">{{ nb_doublons }}</div>
+    <div style="background:var(--bg3);border:1px solid var(--border);border-radius:3px;padding:10px;">
+      <div class="mono" style="color:var(--amber);font-size:8px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;">Doublons</div>
+      <div style="font-family:var(--font-mono);font-size:18px;color:var(--amber);">{{ nb_doublons }}</div>
     </div>
-    <div style="background:var(--bg3);border:1px solid var(--border);border-radius:3px;padding:14px;">
-      <div class="mono" style="color:var(--red);font-size:9px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px;">Erreurs</div>
-      <div style="font-family:var(--font-mono);font-size:22px;color:var(--red);">{{ nb_erreurs }}</div>
+    <div style="background:var(--bg3);border:1px solid var(--border);border-radius:3px;padding:10px;">
+      <div class="mono" style="color:var(--red);font-size:8px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;">Erreurs</div>
+      <div style="font-family:var(--font-mono);font-size:18px;color:var(--red);">{{ nb_erreurs }}</div>
     </div>
   </div>
 </div>
 
-<!-- Guide rapide -->
-<div class="card" style="background:var(--bg3);border-color:var(--border);">
-  <div class="card-title">Formats acceptés</div>
-  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;font-size:13px;">
+<!-- Guide rapide — repliable -->
+<details class="card" style="background:var(--bg3);border-color:var(--border);">
+  <summary style="cursor:pointer;font-family:var(--font-mono);font-size:9px;
+                   letter-spacing:0.15em;text-transform:uppercase;color:var(--hint);list-style:none;">
+    ▸ Formats acceptés
+  </summary>
+  <div style="display:flex;flex-direction:column;gap:10px;font-size:12px;margin-top:10px;
+              padding-top:10px;border-top:1px solid var(--border);">
     <div>
-      <div style="font-weight:500;margin-bottom:6px;font-family:var(--font-mono);font-size:11px;">Fichier DICOM unique</div>
-      <div style="color:var(--muted);font-size:12px;">Un seul fichier <code>.dcm</code> ou <code>.ima</code>. Converti en NIfTI 2D ou 3D selon les frames.</div>
+      <div style="font-weight:500;margin-bottom:3px;font-family:var(--font-mono);font-size:10px;">DICOM unique</div>
+      <div style="color:var(--muted);font-size:11px;">Un fichier <code>.dcm</code>/<code>.ima</code>. Converti en NIfTI.</div>
     </div>
     <div>
-      <div style="font-weight:500;margin-bottom:6px;font-family:var(--font-mono);font-size:11px;">Série multi-coupes</div>
-      <div style="color:var(--muted);font-size:12px;">Sélectionnez plusieurs <code>.dcm</code> en même temps (Ctrl+clic). Les coupes sont triées et empilées en un volume 3D.</div>
+      <div style="font-weight:500;margin-bottom:3px;font-family:var(--font-mono);font-size:10px;">Série multi-coupes</div>
+      <div style="color:var(--muted);font-size:11px;">Plusieurs <code>.dcm</code> (Ctrl+clic) → empilées en 3D.</div>
     </div>
     <div>
-      <div style="font-weight:500;margin-bottom:6px;font-family:var(--font-mono);font-size:11px;">Archive ZIP</div>
-      <div style="color:var(--muted);font-size:12px;">Un <code>.zip</code> contenant tous les <code>.dcm</code> d'une série. Extraction et conversion automatiques.</div>
+      <div style="font-weight:500;margin-bottom:3px;font-family:var(--font-mono);font-size:10px;">Archive ZIP</div>
+      <div style="color:var(--muted);font-size:11px;">Un <code>.zip</code> de <code>.dcm</code> — extraction auto.</div>
     </div>
   </div>
+</details>
+
+  </aside>
 </div>
+
+<style>
+  .page-grid-import { display:grid; grid-template-columns: 1fr 320px; gap:16px; align-items:flex-start; }
+  .page-grid-import .page-side { display:flex; flex-direction:column; gap:14px; position:sticky; top:8px; }
+  .page-grid-import .page-side .card { padding:14px 16px; }
+  .page-grid-import .page-side .card-title { margin-bottom:10px; padding-bottom:8px; font-size:9px; }
+  .page-grid-import .page-main { min-width:0; }
+  @media (max-width: 1100px) {
+    .page-grid-import { grid-template-columns: 1fr; }
+    .page-grid-import .page-side { position:static; }
+  }
+</style>
 
 <style>
   #drop-zone {
@@ -409,6 +476,16 @@ async function launchImport() {
   fd.append('date_acq',  document.getElementById('inp-date').value);
   fd.append('espece',    document.getElementById('inp-espece').value);
 
+  // ── Champs enrichis (cahier des charges) ──────────────────────────
+  const poids   = document.getElementById('inp-poids').value.trim();
+  const qualite = document.getElementById('inp-qualite').value;
+  const probT   = document.getElementById('inp-probleme-type').value;
+  const probD   = document.getElementById('inp-probleme-desc').value.trim();
+  if (poids)   fd.append('poids_g',       poids);
+  if (qualite) fd.append('qualite',       qualite);
+  if (probT)   fd.append('probleme_type', probT);
+  if (probD)   fd.append('probleme_desc', probD);
+
   try {
     const res  = await fetch('/api/pipeline/upload', { method: 'POST', body: fd });
     const data = await res.json();
@@ -436,6 +513,13 @@ async function launchImport() {
     btn.disabled = false;
     spin.style.display = 'none';
   }
+}
+
+// Affiche le textarea description seulement si un problème est sélectionné (sauf "aucun")
+function toggleProblemeDesc() {
+  const sel = document.getElementById('inp-probleme-type').value;
+  const row = document.getElementById('row-probleme-desc');
+  row.style.display = (sel && sel !== 'aucun') ? '' : 'none';
 }
 </script>
 

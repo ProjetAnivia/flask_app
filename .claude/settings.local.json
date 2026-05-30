@@ -11,7 +11,25 @@
       "Bash(pip3 install *)",
       "Bash(chmod +x /Users/nolan/Documents/flask_app/setup.sh /Users/nolan/Documents/flask_app/backup.sh)",
       "Bash(curl -fsSL \"https://cdn.jsdelivr.net/npm/@niivue/niivue/dist/niivue.umd.js\" -o /Users/nolan/Documents/flask_app/static/js/niivue.umd.js)",
-      "Bash(python3 -c \"from app import app; print\\('OK'\\)\")"
+      "Bash(python3 -c \"from app import app; print\\('OK'\\)\")",
+      "Bash(brew install *)",
+      "Skill(anthropic-skills:docx)",
+      "Skill(anthropic-skills:docx:*)",
+      "Bash(npm list *)",
+      "Bash(npm install *)",
+      "Bash(export PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\")",
+      "Read(//opt/homebrew/bin/**)",
+      "Read(//usr/local/bin/**)",
+      "Read(//Users/nolan/.nvm/versions/**)",
+      "Read(//opt/homebrew/**)",
+      "Bash(./node_modules/.bin/tsc --noEmit)",
+      "Read(//Users/nolan/.volta/**)",
+      "Read(//usr/local/**)",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('app.py'\\).read\\(\\)\\); print\\('OK syntaxe'\\)\")",
+      "Bash(awk '/^def page_projet_detail/,/^@app.route|^def [a-z]/' /Users/nolan/Documents/flask_app/app.py)",
+      "Bash(sed -i.bak 's/#0d9470/#ea7c1c/g; s/#0a7a5c/#c8651a/g; s/rgba\\(13,148,112,0.09\\)/rgba\\(234,124,28,0.10\\)/g' /Users/nolan/Documents/flask_app/templates/__TRACKED_VAR__)",
+      "Bash(rm /Users/nolan/Documents/flask_app/templates/__TRACKED_VAR__.bak)",
+      "Bash(grep -c 'class=\"card\"' /Users/nolan/Documents/flask_app/templates/__TRACKED_VAR__)"
     ]
   }
 }

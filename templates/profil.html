@@ -7,8 +7,12 @@
   <div class="page-sub">{{ current_user.username }} · {{ current_user.role }}</div>
 </div>
 
+<!-- ─── Grille 2 colonnes : identité+contact à gauche, sécurité à droite ── -->
+<div class="profil-grid">
+  <div class="profil-col">
+
 <!-- Informations -->
-<div class="card" style="max-width:520px;">
+<div class="card">
   <div class="card-title">Informations</div>
   <div style="display:flex;flex-direction:column;gap:0;">
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);">
@@ -26,7 +30,7 @@
 </div>
 
 <!-- Adresse email -->
-<div class="card" style="max-width:520px;">
+<div class="card">
   <div class="card-title">Adresse email</div>
   <div id="email-msg" style="display:none;margin-bottom:8px;" class="msg-box"></div>
 
@@ -73,8 +77,38 @@
   </div>
 </div>
 
+<!-- Verrouillage automatique (rangé avec identité+contact) -->
+<div class="card">
+  <div class="card-title">Verrouillage automatique</div>
+  <p style="font-size:12px;color:var(--muted);margin-bottom:12px;line-height:1.6;">
+    Verrouille votre session après une période d'inactivité.
+  </p>
+  <div id="lock-msg" style="display:none;" class="msg-box"></div>
+  <div style="display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;">
+    <div class="form-row" style="flex:1;min-width:160px;">
+      <label class="form-label">Délai d'inactivité</label>
+      <select class="form-select" id="lock-timeout">
+        <option value="0"   {% if inactivity_timeout == 0   %}selected{% endif %}>Désactivé</option>
+        <option value="1"   {% if inactivity_timeout == 1   %}selected{% endif %}>1 minute</option>
+        <option value="2"   {% if inactivity_timeout == 2   %}selected{% endif %}>2 minutes</option>
+        <option value="5"   {% if inactivity_timeout == 5   %}selected{% endif %}>5 minutes</option>
+        <option value="10"  {% if inactivity_timeout == 10  %}selected{% endif %}>10 minutes</option>
+        <option value="15"  {% if inactivity_timeout == 15  %}selected{% endif %}>15 minutes</option>
+        <option value="30"  {% if inactivity_timeout == 30  %}selected{% endif %}>30 minutes</option>
+        <option value="60"  {% if inactivity_timeout == 60  %}selected{% endif %}>1 heure</option>
+        <option value="120" {% if inactivity_timeout == 120 %}selected{% endif %}>2 heures</option>
+      </select>
+    </div>
+    <button class="btn-primary" onclick="saveLockTimeout()">Enregistrer →</button>
+  </div>
+</div>
+
+  </div><!-- /profil-col gauche -->
+
+  <div class="profil-col">
+
 <!-- Changer mot de passe -->
-<div class="card" style="max-width:520px;">
+<div class="card">
   <div class="card-title">Changer mon mot de passe</div>
 
   <div id="pw-error"   style="display:none;" class="msg-box msg-error"></div>
@@ -121,34 +155,8 @@
   </div>
 </div>
 
-<!-- Verrouillage automatique -->
-<div class="card" style="max-width:520px;">
-  <div class="card-title">Verrouillage automatique</div>
-  <p style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.6;">
-    Verrouille votre session après une période d'inactivité. Vous devrez retaper votre mot de passe pour reprendre.
-  </p>
-  <div id="lock-msg" style="display:none;" class="msg-box"></div>
-  <div style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;">
-    <div class="form-row" style="flex:1;min-width:200px;">
-      <label class="form-label">Délai d'inactivité</label>
-      <select class="form-select" id="lock-timeout">
-        <option value="0"   {% if inactivity_timeout == 0   %}selected{% endif %}>Désactivé</option>
-        <option value="1"   {% if inactivity_timeout == 1   %}selected{% endif %}>1 minute</option>
-        <option value="2"   {% if inactivity_timeout == 2   %}selected{% endif %}>2 minutes</option>
-        <option value="5"   {% if inactivity_timeout == 5   %}selected{% endif %}>5 minutes</option>
-        <option value="10"  {% if inactivity_timeout == 10  %}selected{% endif %}>10 minutes</option>
-        <option value="15"  {% if inactivity_timeout == 15  %}selected{% endif %}>15 minutes</option>
-        <option value="30"  {% if inactivity_timeout == 30  %}selected{% endif %}>30 minutes</option>
-        <option value="60"  {% if inactivity_timeout == 60  %}selected{% endif %}>1 heure</option>
-        <option value="120" {% if inactivity_timeout == 120 %}selected{% endif %}>2 heures</option>
-      </select>
-    </div>
-    <button class="btn-primary" onclick="saveLockTimeout()" style="height:38px;">Enregistrer →</button>
-  </div>
-</div>
-
 <!-- Double authentification (2FA) -->
-<div class="card" style="max-width:520px;" id="card-2fa">
+<div class="card" id="card-2fa">
   <div class="card-title">Double authentification (2FA)</div>
 
   <div id="tfa-status-line" style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
@@ -227,10 +235,30 @@
   </div>
 </div>
 
+  </div><!-- /profil-col droite -->
+</div><!-- /profil-grid -->
+
 <style>
+  /* Layout 2 colonnes du profil */
+  .profil-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    align-items: flex-start;
+  }
+  .profil-col {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-width: 0;
+  }
+  @media (max-width: 1000px) {
+    .profil-grid { grid-template-columns: 1fr; }
+  }
+
   .msg-box { font-family:var(--font-mono);font-size:11px;border-radius:3px;padding:8px 12px;margin-bottom:12px; }
   .msg-error   { color:var(--red);  background:var(--red-bg);  border:1px solid rgba(220,38,38,0.2); }
-  .msg-success { color:var(--teal); background:var(--teal-bg); border:1px solid rgba(13,148,112,0.2); }
+  .msg-success { color:var(--teal); background:var(--teal-bg); border:1px solid rgba(234,124,28,0.22); }
   .alias-row {
     display:flex; align-items:center; gap:10px; padding:8px 0;
     border-bottom:1px solid var(--border); font-size:12px; flex-wrap:wrap;
