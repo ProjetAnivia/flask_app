@@ -57,6 +57,138 @@
   </div>
 </div>
 
+<!-- ─── Mes créneaux à venir (remonté en haut pour visibilité) ─────────── -->
+<div id="mes-creneaux-card"
+     style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;
+            box-shadow:0 1px 3px rgba(0,0,0,0.04);overflow:hidden;margin-bottom:14px;
+            flex-shrink:0;flex-grow:0;flex-basis:auto;">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+              padding:12px 20px;border-bottom:1px solid var(--border);">
+    <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+      <span style="width:32px;height:32px;border-radius:8px;background:var(--teal-bg);color:var(--teal);
+                   display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      </span>
+      <div style="min-width:0;">
+        <div style="font-size:14px;font-weight:600;color:var(--text);">Mes créneaux à venir</div>
+        <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-top:2px;"
+             id="mes-creneaux-sub-top">prochaines acquisitions planifiées</div>
+      </div>
+    </div>
+    {% if current_user.role in ['admin', 'operateur'] %}
+    <a href="/planification"
+       style="font-family:var(--font-mono);font-size:11px;color:var(--hint);text-decoration:none;flex-shrink:0;">
+      ouvrir la planification →
+    </a>
+    {% endif %}
+  </div>
+  <div id="mes-creneaux-body-top" style="padding:12px;">
+    <div class="ui-skeleton" style="height:48px;margin-bottom:6px;"></div>
+    <div class="ui-skeleton" style="height:48px;margin-bottom:6px;opacity:0.7;"></div>
+    <div class="ui-skeleton" style="height:48px;opacity:0.4;"></div>
+  </div>
+</div>
+
+<style>
+  .creneau-item:hover {
+    background: var(--bg3);
+    border-color: var(--border) !important;
+  }
+</style>
+
+<script>
+(function loadMesCreneauxTop() {
+  const $body = document.getElementById('mes-creneaux-body-top');
+  const $sub  = document.getElementById('mes-creneaux-sub-top');
+  if (!$body) return;
+
+  function relDay(iso) {
+    const d = new Date(iso + 'T00:00:00');
+    const today = new Date(); today.setHours(0,0,0,0);
+    const diff = Math.round((d - today) / 86400000);
+    if (diff === 0) return "Aujourd'hui";
+    if (diff === 1) return "Demain";
+    if (diff < 7) return d.toLocaleDateString('fr-FR', { weekday: 'short' });
+    return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+  }
+  function statutPill(statut) {
+    const colors = {
+      en_attente: { bg:'var(--amber-bg)', col:'var(--amber)' },
+      en_cours:   { bg:'var(--blue-bg)',  col:'var(--blue)' },
+    };
+    const c = colors[statut] || { bg:'var(--bg3)', col:'var(--muted)' };
+    return `<span style="display:inline-block;font-family:var(--font-mono);font-size:10px;
+                         padding:2px 8px;border-radius:4px;background:${c.bg};color:${c.col};
+                         border:1px solid ${c.col};">${statut.replace('_',' ')}</span>`;
+  }
+  function escHtml(s) {
+    return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  fetch('/api/planification/mes-creneaux?limit=12')
+    .then(r => r.json())
+    .then(d => {
+      if (d.count === 0) {
+        $body.innerHTML = `
+          <div style="display:flex;flex-direction:column;align-items:center;text-align:center;padding:24px;">
+            <div style="width:48px;height:48px;border-radius:50%;background:var(--bg3);color:var(--hint);
+                        display:flex;align-items:center;justify-content:center;margin-bottom:12px;">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                   stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            </div>
+            <div style="font-size:14px;font-weight:500;color:var(--text);">Aucun créneau à venir</div>
+            <div style="font-family:var(--font-mono);font-size:11px;color:var(--hint);margin-top:4px;">
+              Aucune acquisition planifiée pour le moment.
+            </div>
+          </div>`;
+        $sub.textContent = '0 créneau';
+        return;
+      }
+      $sub.textContent = `${d.count} créneau(x) à venir`;
+      $body.innerHTML = d.creneaux.map(c => {
+        const heure  = c.heure_debut || '—';
+        const day    = relDay(c.date_acq);
+        const animal = escHtml(c.animal_id);
+        const seq    = escHtml(c.sequence || '—');
+        const proj   = escHtml(c.projet || '');
+        const aut    = escHtml(c.importé_par || '—');
+        const dur    = c.duree_min ? ` · ${c.duree_min} min` : '';
+        return `
+        <a href="/animal/${encodeURIComponent(c.projet)}/${encodeURIComponent(c.animal_id)}"
+           class="creneau-item"
+           style="display:flex;align-items:center;gap:12px;padding:8px 12px;border-radius:8px;
+                  text-decoration:none;color:inherit;border:1px solid transparent;
+                  margin-bottom:4px;transition:background 0.12s,border 0.12s;">
+          <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
+                      flex-shrink:0;background:var(--teal-bg);color:var(--teal);
+                      border-radius:6px;padding:6px 8px;min-width:64px;">
+            <div style="font-family:var(--font-mono);font-size:9px;text-transform:uppercase;
+                        letter-spacing:0.1em;opacity:0.7;white-space:nowrap;">${day}</div>
+            <div style="font-family:var(--font-mono);font-size:12px;font-weight:600;
+                        line-height:1.1;margin-top:2px;">${heure}</div>
+          </div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:13px;font-weight:500;color:var(--text);
+                        overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+              ${animal}<span style="color:var(--hint);font-weight:400;"> · ${seq}</span>
+            </div>
+            <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-top:2px;
+                        overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+              ${proj} · ${aut}${dur}
+            </div>
+          </div>
+          <div style="flex-shrink:0;">${statutPill(c.statut)}</div>
+        </a>`;
+      }).join('');
+    })
+    .catch(err => {
+      console.error('[mes-creneaux-top]', err);
+      $body.innerHTML = `<div style="padding:14px;color:var(--red);font-family:var(--font-mono);font-size:12px;">Erreur de chargement</div>`;
+    });
+})();
+</script>
+
 <!-- Grille calendrier -->
 <div class="card" style="padding:16px;">
   <!-- Jours de la semaine -->
@@ -228,5 +360,6 @@ function showDay(day) {
   panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 </script>
+
 
 {% endblock %}

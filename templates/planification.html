@@ -2,82 +2,128 @@
 {% block title %}Planification{% endblock %}
 {% block content %}
 
-<div class="page-header">
-  <div style="display:flex;align-items:center;gap:12px;">
-    <div class="page-title">Planification expérimentale</div>
-    {% if nb_alertes > 0 %}
-      <span style="font-family:var(--font-mono);font-size:11px;padding:3px 10px;border-radius:2px;
-                   background:var(--red-bg);color:var(--red);border:1px solid rgba(220,38,38,0.2);">
-        {{ nb_alertes }} alerte(s)
-      </span>
-    {% endif %}
-  </div>
-  <div class="page-sub">Suivi des séries restantes · statuts modifiables directement dans le tableau</div>
-</div>
-
-<!-- ─── Créneaux IRM (en haut, mise en avant) ───────────────────────────── -->
-<div class="card">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
-    <div class="card-title" style="margin:0;padding:0;border:none;">
-      Créneaux IRM
-      {% if nb_conflits > 0 %}
-        <span style="margin-left:8px;font-family:var(--font-mono);font-size:10px;
-                     padding:2px 8px;border-radius:2px;background:var(--red-bg);
-                     color:var(--red);border:1px solid rgba(220,38,38,0.25);">
-          {{ nb_conflits }} conflit(s) détecté(s)
+<!-- ─── En-tête + actions principales ────────────────────────────────────── -->
+<div style="display:flex;align-items:center;justify-content:space-between;
+            gap:16px;flex-wrap:wrap;margin-bottom:14px;">
+  <div>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <h1 style="font-size:24px;font-weight:600;letter-spacing:-0.01em;color:var(--text);margin:0;">
+        Planification
+      </h1>
+      {% if nb_alertes > 0 %}
+        <span style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;
+                     border-radius:6px;font-family:var(--font-mono);font-size:10px;
+                     background:var(--red-bg);color:var(--red);border:1px solid var(--red);">
+          ⚠ {{ nb_alertes }} alerte(s)
         </span>
       {% endif %}
     </div>
-    <div style="display:flex;gap:8px;">
-      <button class="btn-ghost" type="button" onclick="openSerieModal()">
-        ↻ Planifier une série
-      </button>
-      <button class="btn-primary" type="button" onclick="openCreneauModal()">
-        + Réserver un créneau
-      </button>
+    <p style="font-size:12px;color:var(--hint);font-family:var(--font-mono);margin:6px 0 0;">
+      Réservation des créneaux IRM · suivi des séries restantes
+    </p>
+  </div>
+
+  <!-- ★ BOUTONS D'ACTION EN HAUT À DROITE ★ -->
+  <div style="display:flex;gap:10px;flex-wrap:wrap;">
+    <button type="button" onclick="openSerieModal()"
+            style="display:inline-flex;align-items:center;gap:8px;
+                   font-family:var(--font-mono);font-size:13px;font-weight:500;
+                   padding:10px 16px;border-radius:8px;
+                   background:transparent;color:var(--text);
+                   border:1.5px solid var(--border2);cursor:pointer;
+                   transition:all 0.15s;white-space:nowrap;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+      ↻ Planifier une série
+    </button>
+    <button type="button" onclick="openCreneauModal()"
+            style="display:inline-flex;align-items:center;gap:8px;
+                   font-family:var(--font-mono);font-size:13px;font-weight:600;
+                   padding:10px 18px;border-radius:8px;
+                   background:#ea7c1c;color:#ffffff;
+                   border:1.5px solid #ea7c1c;cursor:pointer;
+                   box-shadow:0 2px 8px rgba(234,124,28,0.35);
+                   transition:all 0.15s;white-space:nowrap;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+           stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      + Réserver un créneau
+    </button>
+  </div>
+</div>
+
+<!-- ─── Créneaux IRM (hero card) ─────────────────────────────────────────── -->
+<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;
+            box-shadow:0 4px 12px rgba(0,0,0,0.06);overflow:hidden;">
+  <!-- Header avec actions -->
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+              padding:14px 20px;border-bottom:1px solid var(--border);background:var(--bg3);">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <div style="width:36px;height:36px;border-radius:8px;background:var(--teal-bg);color:var(--teal);
+                  display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+      </div>
+      <div>
+        <div style="font-size:14px;font-weight:600;color:var(--text);">Créneaux IRM</div>
+        <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-top:2px;">
+          {% if nb_conflits > 0 %}
+            <span style="color:var(--red);font-weight:500;">⚠ {{ nb_conflits }} conflit(s) détecté(s)</span>
+          {% else %}
+            Aucun conflit détecté
+          {% endif %}
+        </div>
+      </div>
     </div>
   </div>
 
-  {% if conflits %}
-    <div style="display:flex;flex-direction:column;gap:8px;">
-      {% for c in conflits %}
-      <div style="display:grid;grid-template-columns:110px 1fr 1fr;gap:12px;align-items:center;
-                  padding:10px 12px;border-radius:4px;
-                  background:var(--red-bg);border:1px solid rgba(220,38,38,0.25);">
-        <div>
-          <div style="font-family:var(--font-mono);font-size:10px;color:var(--red);font-weight:500;">
-            CONFLIT
+  <!-- Body : conflits ou empty state -->
+  <div style="padding:18px;">
+    {% if conflits %}
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        {% for c in conflits %}
+        <div style="display:grid;grid-template-columns:110px 1fr 1fr;gap:12px;align-items:center;
+                    padding:10px 12px;border-radius:8px;
+                    background:var(--red-bg);border:1px solid var(--red);">
+          <div>
+            <div style="display:inline-flex;align-items:center;padding:2px 6px;border-radius:3px;
+                        font-family:var(--font-mono);font-size:9px;font-weight:600;letter-spacing:0.05em;
+                        background:var(--red);color:#fff;">CONFLIT</div>
+            <div style="font-family:var(--font-mono);font-size:11px;color:var(--muted);margin-top:4px;">{{ c.date_acq }}</div>
           </div>
-          <div style="font-family:var(--font-mono);font-size:11px;color:var(--muted);">
-            {{ c.date_acq }}
+          <div style="font-size:12px;">
+            <a href="/animal/{{ c.a_projet }}/{{ c.a_animal }}"
+               style="font-weight:500;color:var(--text);text-decoration:none;">{{ c.a_animal }}</a>
+            <span style="color:var(--muted);"> · {{ c.a_seq }}</span>
+            <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-top:2px;">
+              {{ c.a_heure }} → {{ c.a_fin }} · {{ c.a_user or '—' }}
+            </div>
+          </div>
+          <div style="font-size:12px;">
+            <a href="/animal/{{ c.b_projet }}/{{ c.b_animal }}"
+               style="font-weight:500;color:var(--text);text-decoration:none;">{{ c.b_animal }}</a>
+            <span style="color:var(--muted);"> · {{ c.b_seq }}</span>
+            <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-top:2px;">
+              {{ c.b_heure }} → {{ c.b_fin }} · {{ c.b_user or '—' }}
+            </div>
           </div>
         </div>
-
-        <div style="font-size:12px;">
-          <a href="/animal/{{ c.a_projet }}/{{ c.a_animal }}"
-             style="font-weight:500;color:var(--text);text-decoration:none;">{{ c.a_animal }}</a>
-          <span style="color:var(--muted);"> · {{ c.a_seq }}</span>
-          <div style="font-family:var(--font-mono);font-size:10px;color:var(--muted);margin-top:2px;">
-            {{ c.a_heure }} → {{ c.a_fin }} · {{ c.a_user or '—' }}
-          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <!-- Empty state -->
+      <div style="display:flex;flex-direction:column;align-items:center;text-align:center;padding:24px 0;">
+        <div style="width:48px;height:48px;border-radius:50%;background:var(--teal-bg);color:var(--teal);
+                    display:flex;align-items:center;justify-content:center;margin-bottom:12px;">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
         </div>
-
-        <div style="font-size:12px;">
-          <a href="/animal/{{ c.b_projet }}/{{ c.b_animal }}"
-             style="font-weight:500;color:var(--text);text-decoration:none;">{{ c.b_animal }}</a>
-          <span style="color:var(--muted);"> · {{ c.b_seq }}</span>
-          <div style="font-family:var(--font-mono);font-size:10px;color:var(--muted);margin-top:2px;">
-            {{ c.b_heure }} → {{ c.b_fin }} · {{ c.b_user or '—' }}
-          </div>
+        <div style="font-size:14px;font-weight:500;color:var(--text);">Aucun conflit de créneau</div>
+        <div style="font-family:var(--font-mono);font-size:11px;color:var(--hint);margin-top:4px;">
+          Tous les créneaux planifiés sont disponibles.
         </div>
       </div>
-      {% endfor %}
-    </div>
-  {% else %}
-    <div style="text-align:center;padding:6px 0;font-size:12px;color:var(--muted);">
-      Aucun conflit de créneau détecté.
-    </div>
-  {% endif %}
+    {% endif %}
+  </div>
 </div>
 
 <!-- ─── Légende (avec doc des 2 boutons) ────────────────────────────────── -->
@@ -158,28 +204,39 @@
   </div>
 </details>
 
-<!-- Alertes actives -->
+<!-- ─── Alertes actives ──────────────────────────────────────────────────── -->
 {% if alertes %}
-<div class="card">
-  <div class="card-title" style="color:var(--red);">Alertes actives ({{ nb_alertes }})</div>
-  <div style="display:flex;flex-direction:column;gap:6px;">
+<div class="rounded-xl border border-border bg-card shadow-card overflow-hidden">
+  <div class="flex items-center gap-2 px-5 py-3 border-b border-border">
+    <svg class="text-danger" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+      <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+    <div class="text-sm font-semibold text-foreground">Alertes actives</div>
+    <span class="text-[10px] font-mono text-hint">{{ nb_alertes }} entrée(s)</span>
+  </div>
+  <div class="p-3 flex flex-col gap-1.5">
     {% for a in alertes %}
-    <div style="display:flex;align-items:center;gap:12px;padding:8px 12px;border-radius:4px;
-                background:{% if a.type == 'reprise' %}var(--red-bg){% elif a.type == 'manquant' %}var(--amber-bg){% else %}var(--blue-bg){% endif %};
-                border:1px solid {% if a.type == 'reprise' %}rgba(220,38,38,0.2){% elif a.type == 'manquant' %}rgba(180,83,9,0.2){% else %}rgba(29,78,216,0.2){% endif %};">
-      <span style="font-family:var(--font-mono);font-size:10px;font-weight:500;min-width:64px;
-                   color:{% if a.type == 'reprise' %}var(--red){% elif a.type == 'manquant' %}var(--amber){% else %}var(--blue){% endif %};">
+    <div class="flex items-center gap-3 px-3 py-2 rounded-lg transition-colors
+                {% if a.type == 'reprise' %}bg-danger-bg border border-danger hover:border-danger
+                {% elif a.type == 'manquant' %}bg-warning-bg border border-warning hover:border-warning
+                {% else %}bg-info-bg border border-info hover:border-info{% endif %}">
+      <span class="px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold tracking-wider text-white
+                   {% if a.type == 'reprise' %}bg-danger
+                   {% elif a.type == 'manquant' %}bg-warning
+                   {% else %}bg-info{% endif %}"
+            style="min-width:64px;text-align:center;">
         {{ a.type | upper }}
       </span>
-      <span style="font-size:13px;flex:1;color:var(--text);">{{ a.msg }}</span>
+      <span class="flex-1 text-xs text-foreground">{{ a.msg }}</span>
       {% if a.animal_id %}
         <a href="/animal/{{ a.projet }}/{{ a.animal_id }}"
-           style="font-family:var(--font-mono);font-size:11px;color:var(--muted);text-decoration:none;white-space:nowrap;">
+           class="font-mono text-[11px] text-muted-fg hover:text-foreground no-underline whitespace-nowrap transition-colors">
           voir fiche →
         </a>
       {% else %}
         <a href="/projet/{{ a.projet }}"
-           style="font-family:var(--font-mono);font-size:11px;color:var(--muted);text-decoration:none;white-space:nowrap;">
+           class="font-mono text-[11px] text-muted-fg hover:text-foreground no-underline whitespace-nowrap transition-colors">
           voir projet →
         </a>
       {% endif %}
@@ -188,10 +245,11 @@
   </div>
 </div>
 {% else %}
-<div class="card" style="border-color:rgba(234,124,28,0.22);background:var(--teal-bg);">
-  <div style="text-align:center;padding:8px 0;font-size:13px;color:var(--teal);">
-    Aucune alerte — tous les projets sont dans les temps.
-  </div>
+<div class="rounded-xl border border-accent bg-accent-bg p-4 flex items-center justify-center gap-2">
+  <svg class="text-accent" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+  <span class="text-xs text-accent font-medium">Aucune alerte — tous les projets sont dans les temps.</span>
 </div>
 {% endif %}
 

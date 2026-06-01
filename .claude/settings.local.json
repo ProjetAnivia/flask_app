@@ -29,7 +29,11 @@
       "Bash(awk '/^def page_projet_detail/,/^@app.route|^def [a-z]/' /Users/nolan/Documents/flask_app/app.py)",
       "Bash(sed -i.bak 's/#0d9470/#ea7c1c/g; s/#0a7a5c/#c8651a/g; s/rgba\\(13,148,112,0.09\\)/rgba\\(234,124,28,0.10\\)/g' /Users/nolan/Documents/flask_app/templates/__TRACKED_VAR__)",
       "Bash(rm /Users/nolan/Documents/flask_app/templates/__TRACKED_VAR__.bak)",
-      "Bash(grep -c 'class=\"card\"' /Users/nolan/Documents/flask_app/templates/__TRACKED_VAR__)"
+      "Bash(grep -c 'class=\"card\"' /Users/nolan/Documents/flask_app/templates/__TRACKED_VAR__)",
+      "Bash(grep -n \"id=\\\\\"no-results\\\\\"\\\\|^</div>$\\\\|^</section>\\\\|^</style>\" /Users/nolan/Documents/flask_app/templates/dashboard.html)",
+      "Bash(grep -n \"^}\\)\\(\\);$\\\\|loadMesCreneaux\\\\|fin Mes\\\\|^</script>\" /Users/nolan/Documents/flask_app/templates/dashboard.html)",
+      "Bash(grep -n \"loadMesCreneaux\\\\|^}\\)\\(\\);$\\\\|^</script>\" /Users/nolan/Documents/flask_app/templates/dashboard.html)",
+      "Bash(awk 'NR>=363 && NR<=489' /Users/nolan/Documents/flask_app/templates/calendrier.html)"
     ]
   }
 }

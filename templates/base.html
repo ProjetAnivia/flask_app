@@ -22,6 +22,56 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
   <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Chart.js v4 — graphes vanilla pour les pages qui en ont besoin -->
+  <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <!-- driver.js — tour guidé pour le 1er onboarding -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/driver.js@1.3.1/dist/driver.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/driver.js@1.3.1/dist/driver.js.iife.js"></script>
+  <script>
+    // Map des variables CSS thème vers les couleurs Tailwind
+    // Permet d'écrire bg-card, text-foreground, border, accent, etc.
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            background:    'var(--bg)',
+            card:          'var(--bg2)',
+            muted:         'var(--bg3)',
+            'muted-strong':'var(--bg4)',
+            foreground:    'var(--text)',
+            'muted-fg':    'var(--muted)',
+            hint:          'var(--hint)',
+            border:        'var(--border)',
+            'border-strong':'var(--border2)',
+            accent:        'var(--teal)',
+            'accent-dim':  'var(--teal-dim)',
+            'accent-bg':   'var(--teal-bg)',
+            danger:        'var(--red)',
+            'danger-bg':   'var(--red-bg)',
+            warning:       'var(--amber)',
+            'warning-bg':  'var(--amber-bg)',
+            info:          'var(--blue)',
+            'info-bg':     'var(--blue-bg)',
+            primary:       'var(--btn-primary)',
+            'primary-dim': 'var(--btn-primary-dim)',
+            'primary-fg':  'var(--btn-primary-text)',
+          },
+          fontFamily: {
+            sans: ['IBM Plex Sans', 'sans-serif'],
+            mono: ['IBM Plex Mono', 'monospace'],
+          },
+          boxShadow: {
+            'card':    '0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.03)',
+            'card-md': '0 4px 12px rgba(0,0,0,0.06), 0 2px 4px rgba(0,0,0,0.04)',
+            'glow':    '0 0 0 3px var(--btn-primary-shadow)',
+          },
+        }
+      },
+      corePlugins: {
+        preflight: false,   // ne pas reset les styles existants
+      }
+    }
+  </script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -541,6 +591,12 @@
       border-radius: 10px;
       padding: 22px;
       box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+      flex-shrink: 0;   /* ne pas se faire écraser par un parent flex column */
+    }
+    /* Les cards/widgets avec style inline peuvent aussi être protégés */
+    .main > div[style*="border-radius"],
+    .main > details {
+      flex-shrink: 0;
     }
     .card-title {
       font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.15em;
@@ -667,6 +723,18 @@
       z-index: 40;
     }
 
+    /* ── Adapter le dropdown notifications sur mobile ── */
+    @media (max-width: 640px) {
+      #notifDropdown {
+        position: fixed !important;
+        top: var(--topbar-h) !important;
+        right: 8px !important;
+        left: 8px !important;
+        width: auto !important;
+        max-width: none !important;
+      }
+    }
+
     /* ── RESPONSIVE MOBILE (≤ 700px) ── */
     @media (max-width: 700px) {
       .shell {
@@ -724,6 +792,33 @@
 
       /* Boutons plus grands (touch) */
       .btn-primary, .btn-ghost { padding: 11px 18px; }
+      .ui-btn { padding: 9px 14px; }
+      .ui-btn-sm { padding: 7px 12px; }
+
+      /* Modals : pleine largeur sur mobile */
+      #cmdkModal, #noteModal, #creneauModal, #serieModal {
+        padding-top: 10px !important;
+        padding-left: 8px !important;
+        padding-right: 8px !important;
+      }
+      #cmdkModal > div, #noteModal > div, #creneauModal > div, #serieModal > div {
+        max-width: 100% !important;
+      }
+
+      /* Topbar : masque le logo IRM.FAIR sur très petits écrans pour gagner place */
+      .topbar-logo { font-size: 11px; }
+
+      /* Header pages : titre plus petit + sub passe en dessous */
+      h1.text-2xl { font-size: 18px !important; }
+
+      /* Tables : font plus petite + wrapping permis sur les cellules longues */
+      .data-table { font-size: 11px; }
+      .data-table th, .data-table td { padding: 6px 8px; }
+    }
+
+    /* Topbar : cacher la 2e ligne de page sur très petit écran */
+    @media (max-width: 480px) {
+      .page-sub { font-size: 10px; }
     }
 
     /* ── RESPONSIVE TABLETTE (701–1024px) ── */
@@ -744,8 +839,75 @@
     </button>
     <a href="/" class="topbar-logo">IRM<em>.</em>FAIR</a>
     <div class="topbar-sep"></div>
+
     {% if current_user.is_authenticated %}
-      <div class="topbar-user-wrap" id="userMenuWrap">
+    <!-- Hint Cmd+K (cliquable pour ouvrir la recherche) -->
+    <!-- Bouton recherche — version desktop (badge avec texte) -->
+    <button type="button"
+            data-tour="search"
+            onclick="document.dispatchEvent(new KeyboardEvent('keydown',{key:'k',metaKey:true}))"
+            class="hidden md:inline-flex items-center gap-2 px-3 py-1.5 rounded-md
+                   border border-border-strong bg-card text-hint
+                   hover:text-foreground hover:border-accent transition-colors
+                   text-[11px] font-mono cursor-pointer">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <span>Rechercher</span>
+      <span class="flex items-center gap-0.5 ml-2">
+        <kbd class="ui-kbd" style="padding:1px 5px;font-size:9px;">⌘</kbd>
+        <kbd class="ui-kbd" style="padding:1px 5px;font-size:9px;">K</kbd>
+      </span>
+    </button>
+
+    <!-- Bouton recherche — version mobile (icône seule) -->
+    <button type="button" aria-label="Rechercher"
+            onclick="document.dispatchEvent(new KeyboardEvent('keydown',{key:'k',metaKey:true}))"
+            class="md:hidden inline-flex p-2 rounded-md text-muted-fg
+                   hover:text-foreground hover:bg-muted transition-colors">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    </button>
+
+    <!-- Bell icon : notifications ────────────────────────────────────────── -->
+    <div class="relative" id="notifWrap" data-tour="notifs">
+      <button type="button" id="notifBtn"
+              class="relative p-1.5 text-muted-fg hover:text-accent transition-colors"
+              style="background:transparent;border:none;"
+              aria-label="Notifications">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+          <path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+        <span id="notifBadge"
+              class="hidden absolute top-1 right-1 min-w-[16px] h-4 px-1 rounded-full
+                     bg-danger text-white text-[9px] font-mono font-semibold
+                     flex items-center justify-center leading-none">0</span>
+      </button>
+
+      <div id="notifDropdown"
+           class="hidden absolute right-0 top-full mt-2 w-[360px] rounded-xl border border-border
+                  bg-card shadow-card-md overflow-hidden z-50">
+        <div class="flex items-center justify-between px-4 py-3 border-b border-border">
+          <div class="text-sm font-semibold text-foreground">Notifications</div>
+          <button type="button" id="notifMarkAll"
+                  class="text-[10px] font-mono text-hint hover:text-accent transition-colors">
+            tout marquer lu
+          </button>
+        </div>
+        <div id="notifList" class="max-h-[400px] overflow-y-auto">
+          <div class="px-3 py-3 flex flex-col gap-2">
+            <div class="ui-skeleton" style="height:48px;"></div>
+            <div class="ui-skeleton" style="height:48px;opacity:0.7;"></div>
+            <div class="ui-skeleton" style="height:48px;opacity:0.4;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+    {% if current_user.is_authenticated %}
+      <div class="topbar-user-wrap" id="userMenuWrap" data-tour="profile">
         <button class="topbar-user-btn" onclick="toggleUserMenu(event)">
           <span class="topbar-tag"
             {% if current_user.username == 'admin' %}style="background:rgba(220,38,38,0.08);color:var(--red);border-color:rgba(220,38,38,0.25);"
@@ -787,6 +949,7 @@
           </div>
 
           <div class="user-dropdown-sep"></div>
+          <a href="#" onclick="event.preventDefault();startTour(true);" class="user-dropdown-item">🎓 Refaire le tour</a>
           {% if current_user.role == 'admin' %}
           <a href="/api/docs" target="_blank" class="user-dropdown-item">📖 Documentation API</a>
           {% endif %}
@@ -800,7 +963,40 @@
   <!-- Overlay pour fermer la sidebar sur mobile -->
   <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeMobileSidebar()"></div>
 
-  <nav class="sidebar" id="sidebar">
+  <!-- ─── Modal de recherche globale (⌘+K / Ctrl+K) ─────────────────────── -->
+  <div id="cmdkModal" class="fixed inset-0 bg-black/50 z-[1000] hidden items-start justify-center pt-24 px-4">
+    <div class="w-full max-w-xl rounded-xl border border-border bg-card shadow-card-md overflow-hidden">
+      <!-- Search input -->
+      <div class="flex items-center gap-3 px-4 py-3 border-b border-border">
+        <svg class="text-hint flex-shrink-0" width="16" height="16" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input id="cmdkInput" type="text"
+               placeholder="Rechercher projets, animaux, acquisitions…"
+               class="flex-1 bg-transparent outline-none text-sm font-mono text-foreground placeholder-hint"
+               autocomplete="off">
+        <kbd class="ui-kbd">esc</kbd>
+      </div>
+      <!-- Results -->
+      <div id="cmdkResults" class="max-h-[60vh] overflow-y-auto px-2 py-2">
+        <div class="text-center py-8 text-xs font-mono text-hint">
+          Tape au moins 2 caractères pour rechercher
+        </div>
+      </div>
+      <!-- Footer -->
+      <div class="px-4 py-2 border-t border-border bg-muted flex items-center justify-between text-[10px] font-mono text-hint">
+        <div class="flex items-center gap-3">
+          <span class="flex items-center gap-1"><kbd class="ui-kbd">↑</kbd><kbd class="ui-kbd">↓</kbd> naviguer</span>
+          <span class="flex items-center gap-1"><kbd class="ui-kbd">↵</kbd> ouvrir</span>
+        </div>
+        <span class="flex items-center gap-1">
+          <kbd class="ui-kbd">⌘</kbd><kbd class="ui-kbd">K</kbd>
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <nav class="sidebar" id="sidebar" data-tour="sidebar">
     <div class="nav-section">Vue générale</div>
     <a href="/" class="nav-item {% if request.path == '/' %}active{% endif %}">
       <span class="nav-icon">#</span><span class="nav-label"> Dashboard : projets</span>
@@ -842,13 +1038,15 @@
     </a>
 
     <!-- Utilisation du NAS — admin uniquement, en bas de la nav -->
-    <div id="nav-nas-widget" class="nav-nas-widget">
+    <div id="nav-nas-widget" class="nav-nas-widget" data-tour="nas-widget">
       <div class="nav-section nav-nas-title">
         <span>Utilisation NAS</span>
         <span id="nav-nas-host"></span>
       </div>
       <div id="nav-nas-body">
-        <div class="nav-nas-loading">chargement…</div>
+        <div class="ui-skeleton" style="height:18px;margin-bottom:8px;background:rgba(255,255,255,0.05);"></div>
+        <div class="ui-skeleton" style="height:18px;margin-bottom:8px;opacity:0.7;background:rgba(255,255,255,0.05);"></div>
+        <div class="ui-skeleton" style="height:18px;opacity:0.5;background:rgba(255,255,255,0.05);"></div>
       </div>
     </div>
     {% endif %}
@@ -1000,8 +1198,12 @@ function showToast(msg, type = 'info', duration = 5000) {
     projet_updated:   '⊡ projet archivé',
   };
 
-  let lastId = 0;
+  // Persiste lastId entre rechargements pour ne pas rejouer d'anciens événements
+  const SSE_KEY = 'sse-last-id';
+  let lastId = parseInt(localStorage.getItem(SSE_KEY) || '0', 10) || 0;
   let src;
+  // Timestamp d'ouverture de la page — ignore tout événement créé avant
+  const pageOpenedAt = Date.now();
 
   function connect() {
     src = new EventSource(`/api/events?lastEventId=${lastId}`);
@@ -1010,7 +1212,20 @@ function showToast(msg, type = 'info', duration = 5000) {
       try {
         const ev = JSON.parse(e.data);
         if (ev.type === 'connected') return;      // silencieux
-        if (e.lastEventId) lastId = parseInt(e.lastEventId);
+        if (e.lastEventId) {
+          lastId = parseInt(e.lastEventId);
+          localStorage.setItem(SSE_KEY, String(lastId));
+        }
+
+        // Ne PAS afficher d'événements créés avant l'ouverture de la page
+        // (évite les replay au reload). On utilise created_at envoyé par le serveur.
+        if (ev.created_at) {
+          const evTime = new Date(ev.created_at).getTime();
+          if (!isNaN(evTime) && evTime < pageOpenedAt - 5000) {
+            // > 5s avant l'ouverture → ignoré
+            return;
+          }
+        }
 
         const label = labels[ev.type] || ev.type;
         const p     = ev.payload || {};
@@ -1064,6 +1279,440 @@ async function refreshDashboardMetrics() {
       if (k in map) el.textContent = map[k];
     });
   } catch(e) {}
+}
+
+// ── Notifications (bell icon + dropdown) ─────────────────────────────────────
+(function initNotifs() {
+  const wrap     = document.getElementById('notifWrap');
+  const btn      = document.getElementById('notifBtn');
+  const badge    = document.getElementById('notifBadge');
+  const dropdown = document.getElementById('notifDropdown');
+  const list     = document.getElementById('notifList');
+  const markAll  = document.getElementById('notifMarkAll');
+  if (!wrap) return;
+
+  function timeAgo(iso) {
+    const d = new Date(iso);
+    const diff = Math.floor((Date.now() - d.getTime()) / 1000);
+    if (diff < 60) return "à l'instant";
+    if (diff < 3600)  return Math.floor(diff/60) + ' min';
+    if (diff < 86400) return Math.floor(diff/3600) + ' h';
+    if (diff < 7*86400) return Math.floor(diff/86400) + ' j';
+    return d.toLocaleDateString('fr-FR', { day:'numeric', month:'short' });
+  }
+
+  function iconFor(type) {
+    const icons = {
+      membre_ajoute:  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>',
+      note_projet:    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
+      reminder_j1:    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+      conflit:        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+    };
+    return icons[type] || '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
+  }
+
+  function render(data) {
+    const n = data.nb_unread || 0;
+    if (n > 0) { badge.textContent = n > 99 ? '99+' : n; badge.classList.remove('hidden'); badge.classList.add('flex'); }
+    else { badge.classList.add('hidden'); badge.classList.remove('flex'); }
+
+    if (!data.items.length) {
+      list.innerHTML = `<div class="px-4 py-10 text-center">
+        <div class="w-10 h-10 rounded-full bg-muted flex items-center justify-center text-hint mx-auto mb-2">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/></svg>
+        </div>
+        <div class="text-xs font-mono text-hint">Aucune notification</div>
+      </div>`;
+      return;
+    }
+
+    list.innerHTML = data.items.map(it => `
+      <a href="${it.url || '#'}"
+         data-nid="${it.id}"
+         class="flex items-start gap-3 px-4 py-3 no-underline border-b border-border last:border-0
+                hover:bg-muted transition-colors ${it.lue ? '' : 'bg-accent-bg/30'}">
+        <div class="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0
+                    ${it.lue ? 'bg-muted text-hint' : 'bg-accent-bg text-accent'}">
+          ${iconFor(it.type)}
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="text-xs font-medium text-foreground truncate">${it.titre}</div>
+          ${it.corps ? `<div class="text-[11px] text-muted-fg mt-0.5 leading-snug line-clamp-2"
+                              style="overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;">${it.corps}</div>` : ''}
+          <div class="text-[10px] font-mono text-hint mt-1">${timeAgo(it.created_at)}</div>
+        </div>
+        ${it.lue ? '' : '<div class="w-2 h-2 rounded-full bg-accent flex-shrink-0 mt-1.5"></div>'}
+      </a>
+    `).join('');
+
+    // Mark as read on click
+    list.querySelectorAll('[data-nid]').forEach(el => {
+      el.addEventListener('click', () => {
+        fetch(`/api/notifications/${el.dataset.nid}/read`, { method: 'POST' });
+      });
+    });
+  }
+
+  async function refresh() {
+    try {
+      const res = await fetch('/api/notifications');
+      if (!res.ok) return;
+      render(await res.json());
+    } catch (e) {}
+  }
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    dropdown.classList.toggle('hidden');
+    if (!dropdown.classList.contains('hidden')) refresh();
+  });
+  document.addEventListener('click', (e) => {
+    if (!wrap.contains(e.target)) dropdown.classList.add('hidden');
+  });
+  markAll.addEventListener('click', async (e) => {
+    e.preventDefault(); e.stopPropagation();
+    await fetch('/api/notifications/mark-all-read', { method: 'POST' });
+    refresh();
+  });
+
+  refresh();
+  setInterval(refresh, 30000);  // poll toutes les 30 s
+})();
+
+// ── Recherche globale ⌘+K / Ctrl+K ───────────────────────────────────────────
+(function initCmdK() {
+  const modal   = document.getElementById('cmdkModal');
+  const input   = document.getElementById('cmdkInput');
+  const results = document.getElementById('cmdkResults');
+  if (!modal) return;
+
+  let activeIndex = -1;
+  let flatLinks   = [];   // toutes les <a> de résultats pour la nav clavier
+  let debounceT;
+
+  function open() {
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    input.value = '';
+    activeIndex = -1;
+    flatLinks   = [];
+    results.innerHTML = '<div class="text-center py-8 text-xs font-mono text-hint">Tape au moins 2 caractères pour rechercher</div>';
+    setTimeout(() => input.focus(), 30);
+  }
+  function close() {
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+  }
+  function isOpen() { return !modal.classList.contains('hidden'); }
+
+  // Raccourci global ⌘+K / Ctrl+K
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      isOpen() ? close() : open();
+      return;
+    }
+    if (isOpen() && e.key === 'Escape') { e.preventDefault(); close(); return; }
+    if (isOpen() && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      e.preventDefault();
+      if (!flatLinks.length) return;
+      const dir = e.key === 'ArrowDown' ? 1 : -1;
+      activeIndex = (activeIndex + dir + flatLinks.length) % flatLinks.length;
+      highlight();
+    }
+    if (isOpen() && e.key === 'Enter' && activeIndex >= 0 && flatLinks[activeIndex]) {
+      e.preventDefault();
+      flatLinks[activeIndex].click();
+    }
+  });
+
+  modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+
+  function highlight() {
+    flatLinks.forEach((a, i) => {
+      if (i === activeIndex) {
+        a.classList.add('bg-accent-bg', 'text-accent');
+        a.scrollIntoView({ block: 'nearest' });
+      } else {
+        a.classList.remove('bg-accent-bg', 'text-accent');
+      }
+    });
+  }
+
+  function badgeFor(statut) {
+    const map = {
+      ok: 'ui-badge-success', en_cours: 'ui-badge-info',
+      en_attente: 'ui-badge-warning', a_refaire: 'ui-badge-danger',
+      actif: 'ui-badge-success', terminé: 'ui-badge-default', archive: 'ui-badge-outline',
+      admin: 'ui-badge-danger', operateur: 'ui-badge-info', chercheur: 'ui-badge-default',
+    };
+    const cls = map[statut] || 'ui-badge-default';
+    return `<span class="ui-badge ${cls}">${(statut || '').replace('_',' ') || '—'}</span>`;
+  }
+
+  function renderResults(data) {
+    const sections = [
+      { key: 'projets',      title: 'Projets',
+        icon: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
+        fmt:  r => `<span class="font-medium">${r.nom}</span>
+                    <span class="text-hint text-[11px] font-normal">· ${r.resp || '—'}</span>` },
+      { key: 'animaux',      title: 'Animaux',
+        icon: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>',
+        fmt:  r => `<span class="font-medium">${r.animal_id}</span>
+                    <span class="text-hint text-[11px] font-normal">· ${r.espece} · ${r.projet}</span>` },
+      { key: 'acquisitions', title: 'Acquisitions',
+        icon: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="3"/></svg>',
+        fmt:  r => `<span class="font-medium">${r.animal_id}</span> ·
+                    <span class="text-muted-fg">${r.sequence}</span>
+                    <span class="text-hint text-[11px] font-normal">· ${r.date_acq || '—'} · ${r.projet}</span>` },
+      { key: 'users',        title: 'Utilisateurs',
+        icon: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
+        fmt:  r => `<span class="font-medium">${r.username}</span>` },
+    ];
+
+    flatLinks = [];
+    let html = '';
+    let hasResults = false;
+
+    for (const sec of sections) {
+      const items = data[sec.key] || [];
+      if (!items.length) continue;
+      hasResults = true;
+      html += `<div class="px-2 pt-2 pb-1 flex items-center gap-1.5 text-[9px] font-mono uppercase tracking-wider text-hint">
+                 ${sec.icon}<span>${sec.title}</span>
+               </div>`;
+      for (const r of items) {
+        const status = r.statut || r.role;
+        html += `<a href="${r.url}" data-cmdk-item
+                    class="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-foreground no-underline
+                           hover:bg-accent-bg hover:text-accent transition-colors">
+                   <div class="flex-1 min-w-0 truncate">${sec.fmt(r)}</div>
+                   ${status ? badgeFor(status) : ''}
+                 </a>`;
+      }
+    }
+
+    if (!hasResults) {
+      html = `<div class="text-center py-8 text-xs font-mono text-hint">Aucun résultat</div>`;
+    }
+    results.innerHTML = html;
+    flatLinks = Array.from(results.querySelectorAll('[data-cmdk-item]'));
+    activeIndex = flatLinks.length ? 0 : -1;
+    highlight();
+  }
+
+  async function search(q) {
+    if (q.length < 2) {
+      results.innerHTML = '<div class="text-center py-8 text-xs font-mono text-hint">Tape au moins 2 caractères pour rechercher</div>';
+      flatLinks = []; activeIndex = -1;
+      return;
+    }
+    try {
+      const res = await fetch('/api/search?q=' + encodeURIComponent(q));
+      if (!res.ok) {
+        results.innerHTML = '<div class="text-center py-8 text-xs font-mono text-danger">Erreur</div>';
+        return;
+      }
+      const data = await res.json();
+      renderResults(data);
+    } catch (e) {
+      results.innerHTML = '<div class="text-center py-8 text-xs font-mono text-danger">Erreur réseau</div>';
+    }
+  }
+
+  input.addEventListener('input', (e) => {
+    clearTimeout(debounceT);
+    debounceT = setTimeout(() => search(e.target.value.trim()), 180);
+  });
+})();
+
+// ── Onboarding : tour guidé driver.js ────────────────────────────────────────
+function startTour(forced) {
+  const KEY  = 'tour-completed';
+  if (!forced && localStorage.getItem(KEY) === '1') return;
+  if (typeof window.driver === 'undefined' || typeof window.driver.js === 'undefined') {
+    // pas encore chargé → réessaie dans 200ms
+    return setTimeout(() => startTour(forced), 200);
+  }
+
+  const role = "{{ current_user.role }}";
+  const username = "{{ current_user.username }}";
+
+  // Étapes communes à tous
+  const commonSteps = [
+    {
+      element: '[data-tour="sidebar"]',
+      popover: {
+        title: `Bienvenue ${username} 👋`,
+        description: `<p>Voici un mini-tour pour t'aider à prendre en main IRM FAIR (3 min).</p>
+                      <p style="color:var(--hint);font-size:11px;margin-top:8px;">
+                        Tu pourras le relancer à tout moment depuis ton profil → « Refaire le tour ».</p>`,
+        side: 'right',
+      }
+    },
+    {
+      element: '[data-tour="sidebar"] a[href="/"]',
+      popover: {
+        title: '📊 Dashboard',
+        description: `Vue d'ensemble : projets en cours, statistiques globales (repliées par défaut).`,
+        side: 'right',
+      }
+    },
+    {
+      element: '[data-tour="sidebar"] a[href="/animaux"]',
+      popover: {
+        title: '🐭 Animaux',
+        description: `Liste complète des animaux des projets auxquels tu as accès. Filtre par projet et statut.`,
+        side: 'right',
+      }
+    },
+  ];
+
+  // Étapes uniquement chercheur (pédagogiques sur leurs droits/accès)
+  const chercheurSteps = [
+    {
+      element: '[data-tour="sidebar"] a[href="/calendrier"]',
+      popover: {
+        title: '📅 Planning acquisitions',
+        description: `Visualise les acquisitions planifiées sur tes projets, et consulte la liste « Mes créneaux à venir » en bas.`,
+        side: 'right',
+      }
+    },
+    {
+      element: '[data-tour="sidebar"] a[href="/archive"]',
+      popover: {
+        title: '📦 Archive',
+        description: `Retrouve les projets terminés et leurs données pour analyse rétrospective.`,
+        side: 'right',
+      }
+    },
+    {
+      popover: {
+        title: '🔑 Accès aux projets',
+        description: `<p>En tant que <strong>chercheur</strong>, tu accèdes uniquement aux projets dans lesquels un admin t'a ajouté comme membre.</p>
+                      <p style="margin-top:8px;">Tu peux y consulter les animaux, ajouter des commentaires et lire les notes du journal — mais pas modifier les acquisitions.</p>`,
+      }
+    },
+  ];
+
+  // Suite commune (après les étapes spécifiques au rôle)
+  const commonStepsEnd = [
+    {
+      element: '[data-tour="search"]',
+      popover: {
+        title: '🔍 Recherche globale',
+        description: `Cherche projets, animaux ou acquisitions en quelques touches.<br>
+                      Raccourci clavier : <kbd class="ui-kbd">⌘</kbd> + <kbd class="ui-kbd">K</kbd> (ou <kbd class="ui-kbd">Ctrl</kbd> + <kbd class="ui-kbd">K</kbd>).`,
+        side: 'bottom',
+      }
+    },
+    {
+      element: '[data-tour="notifs"]',
+      popover: {
+        title: '🔔 Notifications',
+        description: `Tu seras notifié quand on t'ajoute à un projet, qu'une note est créée, ou qu'une acquisition est planifiée pour demain.`,
+        side: 'bottom',
+      }
+    },
+    {
+      element: '[data-tour="profile"]',
+      popover: {
+        title: '👤 Profil & thèmes',
+        description: `Change ton mot de passe, active le 2FA, choisis ton thème (clair, sombre, sépia, contraste).`,
+        side: 'bottom',
+      }
+    },
+  ];
+
+  // Étapes spécifiques admin/operateur
+  const advancedSteps = [
+    {
+      element: '[data-tour="sidebar"] a[href="/planification"]',
+      popover: {
+        title: '📅 Planification',
+        description: `Réserve un créneau IRM ou planifie une série récurrente (toutes les 24 h, hebdo, mensuelle). Le système détecte les conflits.`,
+        side: 'right',
+      }
+    },
+    {
+      element: '[data-tour="sidebar"] a[href="/import"]',
+      popover: {
+        title: '⬆ Import',
+        description: `Importe tes fichiers DICOM ou NIfTI. La structure FAIR est appliquée automatiquement sur le NAS.`,
+        side: 'right',
+      }
+    },
+  ];
+
+  // Étapes admin uniquement
+  const adminSteps = [
+    {
+      element: '[data-tour="sidebar"] a[href="/users"]',
+      popover: {
+        title: '👥 Utilisateurs',
+        description: `Crée des comptes, attribue les rôles. Les chercheurs doivent ensuite être ajoutés explicitement aux projets pour y accéder.`,
+        side: 'right',
+      }
+    },
+  ];
+
+  // NAS widget admin only
+  const nasStep = [
+    {
+      element: '[data-tour="nas-widget"]',
+      popover: {
+        title: '🖥 Utilisation du NAS',
+        description: `Surveille CPU, RAM, stockage et uptime du NAS en temps réel. Visible seulement par les admins.`,
+        side: 'right',
+      }
+    },
+  ];
+
+  let steps = commonSteps.slice();
+  if (role === 'admin' || role === 'operateur') {
+    // Étapes avancées (Planification, Import) après Animaux + suite commune
+    steps.push(...advancedSteps);
+    steps.push(...commonStepsEnd);
+  } else {
+    // Parcours chercheur (limited access) : étapes pédagogiques + suite commune
+    steps.push(...chercheurSteps);
+    steps.push(...commonStepsEnd);
+  }
+  if (role === 'admin') {
+    steps.push(...adminSteps);
+    if (document.querySelector('[data-tour="nas-widget"]')) steps.push(...nasStep);
+  }
+
+  // Étape finale : récap
+  steps.push({
+    popover: {
+      title: '🎉 Tu es prêt !',
+      description: `<p>Tu sais maintenant l'essentiel.</p>
+                    <p style="margin-top:6px;">Bon usage de la plateforme FAIR — n'hésite pas à explorer chaque section.</p>`,
+    }
+  });
+
+  // Filtre les étapes dont l'élément n'existe pas (selon la page courante)
+  steps = steps.filter(s => !s.element || document.querySelector(s.element));
+
+  const drv = window.driver.js.driver({
+    showProgress:        true,
+    progressText:        '{% raw %}{{current}} / {{total}}{% endraw %}',
+    nextBtnText:         'Suivant →',
+    prevBtnText:         '← Précédent',
+    doneBtnText:         'Terminer',
+    overlayColor:        'rgba(0,0,0,0.6)',
+    smoothScroll:        true,
+    allowClose:          true,
+    onDestroyed:         () => { localStorage.setItem(KEY, '1'); },
+    steps,
+  });
+  drv.drive();
+}
+
+// Auto-démarre le tour au 1er chargement (uniquement sur le dashboard, après chargement)
+if (window.location.pathname === '/') {
+  window.addEventListener('load', () => setTimeout(() => startTour(false), 800));
 }
 
 // ── Widget NAS dans la sidebar (admin uniquement) ────────────────────────────
@@ -1152,6 +1801,200 @@ async function refreshDashboardMetrics() {
 
 <style>
 @keyframes toastIn { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:none} }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Composants shadcn-like — utilisables partout via class="ui-..."
+   Toutes les couleurs viennent des variables CSS du thème (orange auto).
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* ── Card ── */
+.ui-card {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.03);
+  overflow: hidden;
+}
+.ui-card-header { padding: 16px 20px; border-bottom: 1px solid var(--border); }
+.ui-card-title  { font-size: 14px; font-weight: 600; color: var(--text); letter-spacing: -0.005em; }
+.ui-card-desc   { font-family: var(--font-mono); font-size: 10px; color: var(--hint); margin-top: 2px; }
+.ui-card-body   { padding: 16px 20px; }
+.ui-card-footer { padding: 12px 20px; border-top: 1px solid var(--border); background: var(--bg); }
+
+/* ── Button (5 variantes) ── */
+.ui-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--font-mono); font-size: 12px; font-weight: 500;
+  padding: 8px 14px; border-radius: 6px; border: 1px solid transparent;
+  cursor: pointer; text-decoration: none; transition: all 0.15s;
+  white-space: nowrap; user-select: none;
+}
+.ui-btn:disabled, .ui-btn[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; pointer-events: none; }
+.ui-btn-primary {
+  background: var(--btn-primary); color: var(--btn-primary-text);
+  box-shadow: 0 1px 4px var(--btn-primary-shadow);
+}
+.ui-btn-primary:hover { background: var(--btn-primary-dim); box-shadow: 0 2px 10px var(--btn-primary-shadow); }
+.ui-btn-secondary {
+  background: var(--bg3); color: var(--text); border-color: var(--border2);
+}
+.ui-btn-secondary:hover { background: var(--bg4); border-color: var(--muted); }
+.ui-btn-ghost {
+  background: transparent; color: var(--muted-fg, var(--muted));
+}
+.ui-btn-ghost:hover { background: var(--bg3); color: var(--text); }
+.ui-btn-outline {
+  background: transparent; color: var(--text); border-color: var(--border2);
+}
+.ui-btn-outline:hover { border-color: var(--teal); color: var(--teal); background: var(--teal-bg); }
+.ui-btn-danger {
+  background: transparent; color: var(--red); border-color: rgba(220,38,38,0.3);
+}
+.ui-btn-danger:hover { background: var(--red-bg); border-color: var(--red); }
+.ui-btn-sm { padding: 5px 10px; font-size: 11px; }
+.ui-btn-xs { padding: 3px 8px;  font-size: 10px; }
+
+/* ── Badge ── */
+.ui-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-family: var(--font-mono); font-size: 10px; font-weight: 500;
+  padding: 2px 8px; border-radius: 4px;
+  border: 1px solid; line-height: 1.4;
+}
+.ui-badge-default { background: var(--bg3); color: var(--text); border-color: var(--border2); }
+.ui-badge-accent  { background: var(--teal-bg);   color: var(--teal);  border-color: var(--teal); }
+.ui-badge-success { background: rgba(16,185,129,0.1); color: #10b981; border-color: rgba(16,185,129,0.3); }
+.ui-badge-warning { background: var(--amber-bg);  color: var(--amber); border-color: var(--amber); }
+.ui-badge-danger  { background: var(--red-bg);    color: var(--red);   border-color: var(--red); }
+.ui-badge-info    { background: var(--blue-bg);   color: var(--blue);  border-color: var(--blue); }
+.ui-badge-outline { background: transparent;      color: var(--muted); border-color: var(--border2); }
+.ui-badge-solid {
+  background: var(--text); color: var(--bg2); border-color: var(--text);
+  text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;
+}
+
+/* ── Alert ── */
+.ui-alert {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 12px 14px; border-radius: 8px; border: 1px solid; font-size: 12px;
+}
+.ui-alert-icon { flex-shrink: 0; margin-top: 1px; }
+.ui-alert-title { font-weight: 600; font-size: 13px; margin-bottom: 2px; }
+.ui-alert-desc  { font-size: 12px; line-height: 1.6; }
+.ui-alert-info    { background: var(--blue-bg);  border-color: var(--blue);  color: var(--blue); }
+.ui-alert-success { background: var(--teal-bg);  border-color: var(--teal);  color: var(--teal); }
+.ui-alert-warning { background: var(--amber-bg); border-color: var(--amber); color: var(--amber); }
+.ui-alert-danger  { background: var(--red-bg);   border-color: var(--red);   color: var(--red); }
+.ui-alert-info .ui-alert-desc,
+.ui-alert-success .ui-alert-desc,
+.ui-alert-warning .ui-alert-desc,
+.ui-alert-danger  .ui-alert-desc { color: var(--text); }
+
+/* ── Avatar (initiales en rond) ── */
+.ui-avatar {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; border-radius: 50%;
+  background: var(--teal); color: var(--btn-primary-text, #fff);
+  font-family: var(--font-mono); font-size: 12px; font-weight: 600;
+  letter-spacing: -0.02em; flex-shrink: 0;
+}
+.ui-avatar-sm { width: 24px; height: 24px; font-size: 10px; }
+.ui-avatar-lg { width: 48px; height: 48px; font-size: 16px; }
+.ui-avatar-muted { background: var(--bg4); color: var(--text); }
+
+/* ── KBD (touche clavier) ── */
+.ui-kbd {
+  display: inline-flex; align-items: center; padding: 2px 6px;
+  font-family: var(--font-mono); font-size: 10px; font-weight: 500;
+  background: var(--bg3); border: 1px solid var(--border2);
+  border-bottom-width: 2px; border-radius: 4px;
+  color: var(--muted); min-width: 18px; justify-content: center;
+}
+
+/* ── Separator ── */
+.ui-separator { height: 1px; background: var(--border); margin: 12px 0; }
+.ui-separator-vertical { width: 1px; height: auto; align-self: stretch; margin: 0 8px; }
+
+/* ── Skeleton (loading) ── */
+.ui-skeleton {
+  background: linear-gradient(90deg, var(--bg3) 0%, var(--bg4) 50%, var(--bg3) 100%);
+  background-size: 200% 100%; border-radius: 4px;
+  animation: ui-skeleton 1.4s ease-in-out infinite;
+}
+@keyframes ui-skeleton {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ── Tooltip (CSS-only sur [data-tooltip]) ── */
+[data-tooltip] { position: relative; }
+[data-tooltip]:hover::after {
+  content: attr(data-tooltip);
+  position: absolute; bottom: calc(100% + 6px); left: 50%;
+  transform: translateX(-50%);
+  background: var(--text); color: var(--bg2);
+  font-family: var(--font-mono); font-size: 10px;
+  padding: 4px 8px; border-radius: 4px; white-space: nowrap;
+  z-index: 1000; pointer-events: none;
+  animation: ui-tooltip-in 0.15s ease;
+}
+@keyframes ui-tooltip-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(2px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+/* ── Input shadcn-like ── */
+.ui-input, .ui-select, .ui-textarea {
+  font-family: var(--font-mono); font-size: 12px;
+  background: var(--bg2); border: 1px solid var(--border2);
+  border-radius: 6px; padding: 8px 10px; color: var(--text);
+  width: 100%; outline: none; transition: border-color 0.15s, box-shadow 0.15s;
+}
+.ui-input:focus, .ui-select:focus, .ui-textarea:focus {
+  border-color: var(--teal); box-shadow: 0 0 0 3px var(--teal-bg);
+}
+.ui-textarea { resize: vertical; min-height: 60px; font-family: var(--font-sans); }
+.ui-label {
+  display: block; font-family: var(--font-mono); font-size: 9px;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--hint); margin-bottom: 5px;
+}
+
+/* ── Progress bar shadcn-like (variantes) ── */
+.ui-progress { height: 6px; background: var(--bg4); border-radius: 3px; overflow: hidden; }
+.ui-progress > div { height: 100%; background: var(--teal); border-radius: 3px; transition: width 0.6s ease; }
+.ui-progress.amber > div { background: var(--amber); }
+.ui-progress.red   > div { background: var(--red); }
+
+/* ── Empty state shadcn-like ── */
+.ui-empty {
+  display: flex; flex-direction: column; align-items: center;
+  text-align: center; padding: 32px 16px;
+}
+.ui-empty-icon {
+  width: 48px; height: 48px; border-radius: 50%;
+  background: var(--bg3); color: var(--hint);
+  display: flex; align-items: center; justify-content: center;
+  margin-bottom: 12px;
+}
+.ui-empty-icon.accent { background: var(--teal-bg); color: var(--teal); }
+.ui-empty-title {
+  font-size: 14px; font-weight: 500; color: var(--text); margin-bottom: 4px;
+}
+.ui-empty-desc {
+  font-family: var(--font-mono); font-size: 11px; color: var(--hint);
+  line-height: 1.6; max-width: 320px;
+}
+.ui-empty-action { margin-top: 14px; }
+
+/* ── Stat (KPI compact) ── */
+.ui-stat { display: flex; flex-direction: column; gap: 2px; }
+.ui-stat-label { font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.1em;
+                 text-transform: uppercase; color: var(--hint); }
+.ui-stat-value { font-family: var(--font-mono); font-size: 22px; font-weight: 500;
+                 color: var(--text); line-height: 1.1; }
+.ui-stat-value.accent { color: var(--teal); }
+.ui-stat-trend { font-family: var(--font-mono); font-size: 10px; color: var(--hint); }
+.ui-stat-trend.up   { color: var(--teal); }
+.ui-stat-trend.down { color: var(--red); }
 </style>
 </body>
 </html>

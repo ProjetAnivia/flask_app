@@ -2,37 +2,300 @@
 {% block title %}Dashboard : projets{% endblock %}
 {% block content %}
 
-<div class="page-header">
-  <div style="display:flex;align-items:center;gap:16px;">
-    <div class="page-title">Dashboard : projets</div>
-    <a href="/api/export/acquisitions.csv" class="btn-ghost" style="font-size:11px;padding:5px 14px;">↓ CSV</a>
+<style>
+  .stats-toggle-btn {
+    width: 100%; display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; padding: 12px 20px;
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    cursor: pointer; transition: background 0.15s;
+    font-family: inherit; color: inherit; text-align: left;
+    margin-bottom: 12px;
+  }
+  .stats-toggle-btn:hover { background: var(--bg3); }
+  .stats-toggle-btn.open { border-radius: 12px 12px 0 0; border-bottom: 0; margin-bottom: 0; }
+  .stats-toggle-btn.open .stats-chevron { transform: rotate(180deg); }
+  .stats-content {
+    display: none; background: var(--bg2);
+    border: 1px solid var(--border); border-top: 0;
+    border-radius: 0 0 12px 12px;
+    padding: 16px; flex-direction: column; gap: 12px;
+    margin-bottom: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  }
+  .stats-content.open { display: flex; }
+</style>
+
+<!-- ─── En-tête shadcn-like ──────────────────────────────────────────────── -->
+<div class="flex items-end justify-between gap-4 mb-1">
+  <div>
+    <h1 class="text-2xl font-semibold tracking-tight text-foreground">Dashboard</h1>
+    <p class="text-xs text-hint font-mono mt-1">
+      Mise à jour : {{ updated_at }}
+      <span class="text-border-strong"> · </span>
+      <a href="/archive" class="text-hint hover:text-accent transition-colors no-underline">voir l'archive →</a>
+    </p>
   </div>
-  <div class="page-sub">Mise à jour : {{ updated_at }} · <a href="/archive" style="color:var(--hint);text-decoration:none;">voir l'archive →</a></div>
+  <a href="/api/export/acquisitions.csv"
+     class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono rounded-md
+            border border-border-strong text-muted-fg
+            hover:text-foreground hover:border-accent hover:bg-accent-bg
+            transition-all no-underline">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+    Exporter CSV
+  </a>
 </div>
 
-<!-- Métriques -->
-<div class="metrics-row">
-  <div class="metric-card">
-    <div class="metric-label">Animaux</div>
-    <div class="metric-value accent" data-metric="nb-animaux">{{ nb_animaux }}</div>
-    <div class="metric-sub">enregistrés</div>
+<!-- ─── Statistiques globales (bouton + div repliable) ───────────────────── -->
+<button type="button" class="stats-toggle-btn" id="statsToggleBtn">
+  <span style="display:flex;align-items:center;gap:12px;">
+    <span style="width:32px;height:32px;border-radius:8px;background:var(--teal-bg);color:var(--teal);
+                 display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+    </span>
+    <span>
+      <span style="display:block;font-size:14px;font-weight:600;color:var(--text);">📊 Statistiques globales</span>
+      <span style="display:block;font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-top:2px;">
+        KPI · graphiques 12 mois · statuts — cliquer pour déplier
+      </span>
+    </span>
+  </span>
+  <span class="stats-chevron" style="color:var(--hint);transition:transform 0.2s;display:inline-flex;">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+  </span>
+</button>
+
+<div class="stats-content" id="statsContent">
+<!-- ─── Métriques (KPI cards refined) ────────────────────────────────────── -->
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+  <!-- Animaux -->
+  <div class="rounded-xl border border-border bg-card p-4 shadow-card hover:shadow-card-md transition-shadow">
+    <div class="flex items-start justify-between mb-2">
+      <span class="text-[9px] font-mono uppercase tracking-wider text-hint">Animaux</span>
+      <span class="text-accent">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
+      </span>
+    </div>
+    <div class="font-mono text-3xl font-medium text-accent leading-none" data-metric="nb-animaux">{{ nb_animaux }}</div>
+    <div class="text-[10px] text-hint font-mono mt-2">enregistrés</div>
   </div>
-  <div class="metric-card">
-    <div class="metric-label">Acquisitions</div>
-    <div class="metric-value" data-metric="nb-acq">{{ nb_acq }}</div>
-    <div class="metric-sub">importées au total</div>
+
+  <!-- Acquisitions -->
+  <div class="rounded-xl border border-border bg-card p-4 shadow-card hover:shadow-card-md transition-shadow">
+    <div class="flex items-start justify-between mb-2">
+      <span class="text-[9px] font-mono uppercase tracking-wider text-hint">Acquisitions</span>
+      <span class="text-info">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="3"/></svg>
+      </span>
+    </div>
+    <div class="font-mono text-3xl font-medium text-foreground leading-none" data-metric="nb-acq">{{ nb_acq }}</div>
+    <div class="text-[10px] text-hint font-mono mt-2">importées au total</div>
   </div>
-  <div class="metric-card">
-    <div class="metric-label">Stockage NAS</div>
-    <div class="metric-value">{{ nas_to }}</div>
-    <div class="metric-sub">To / {{ nas_max }} To utilisés</div>
+
+  <!-- Stockage NAS -->
+  <div class="rounded-xl border border-border bg-card p-4 shadow-card hover:shadow-card-md transition-shadow">
+    <div class="flex items-start justify-between mb-2">
+      <span class="text-[9px] font-mono uppercase tracking-wider text-hint">Stockage NAS</span>
+      <span class="text-warning">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
+      </span>
+    </div>
+    <div class="font-mono text-3xl font-medium text-foreground leading-none">
+      {{ nas_to }}<span class="text-base text-hint"> To</span>
+    </div>
+    <div class="text-[10px] text-hint font-mono mt-2">/ {{ nas_max }} To utilisés</div>
   </div>
-  <div class="metric-card">
-    <div class="metric-label">Doublons</div>
-    <div class="metric-value" data-metric="nb-doublons">{{ nb_doublons }}</div>
-    <div class="metric-sub">ignorés automatiquement</div>
+
+  <!-- Doublons -->
+  <div class="rounded-xl border border-border bg-card p-4 shadow-card hover:shadow-card-md transition-shadow">
+    <div class="flex items-start justify-between mb-2">
+      <span class="text-[9px] font-mono uppercase tracking-wider text-hint">Doublons</span>
+      <span class="text-danger">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+      </span>
+    </div>
+    <div class="font-mono text-3xl font-medium text-foreground leading-none" data-metric="nb-doublons">{{ nb_doublons }}</div>
+    <div class="text-[10px] text-hint font-mono mt-2">ignorés automatiquement</div>
   </div>
 </div>
+
+<!-- ─── Graphiques (Chart.js) ───────────────────────────────────────────── -->
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
+  <!-- Acquisitions par mois — 2/3 width -->
+  <div class="lg:col-span-2 rounded-xl border border-border bg-card shadow-card p-4">
+    <div class="flex items-center justify-between mb-3">
+      <div>
+        <div class="text-sm font-semibold text-foreground">Acquisitions par mois</div>
+        <div class="text-[10px] font-mono text-hint mt-0.5">12 derniers mois — projets accessibles</div>
+      </div>
+      <span class="text-accent">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round"><polyline points="3 17 9 11 13 15 21 7"/><polyline points="14 7 21 7 21 14"/></svg>
+      </span>
+    </div>
+    <div class="relative" style="height:200px;">
+      <canvas id="chart-acq-mois"></canvas>
+    </div>
+  </div>
+
+  <!-- Statuts animaux — 1/3 width -->
+  <div class="rounded-xl border border-border bg-card shadow-card p-4">
+    <div class="flex items-center justify-between mb-3">
+      <div>
+        <div class="text-sm font-semibold text-foreground">Statuts animaux</div>
+        <div class="text-[10px] font-mono text-hint mt-0.5">vue d'ensemble</div>
+      </div>
+      <span class="text-accent">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg>
+      </span>
+    </div>
+    <div class="relative" style="height:200px;">
+      <canvas id="chart-statuts"></canvas>
+    </div>
+  </div>
+</div>
+
+<script>
+// Init des graphes une fois Chart.js chargé (et après injection du DOM)
+(function initDashboardCharts() {
+  function init() {
+    if (typeof Chart === 'undefined') {
+      return setTimeout(init, 100);   // Chart.js pas encore chargé
+    }
+
+    // Couleurs depuis les CSS variables du thème courant
+    const css = getComputedStyle(document.documentElement);
+    const colors = {
+      accent:  css.getPropertyValue('--teal').trim()    || '#ea7c1c',
+      bg:      css.getPropertyValue('--bg2').trim()     || '#fff',
+      text:    css.getPropertyValue('--text').trim()    || '#111',
+      muted:   css.getPropertyValue('--muted').trim()   || '#666',
+      hint:    css.getPropertyValue('--hint').trim()    || '#999',
+      border:  css.getPropertyValue('--border').trim()  || 'rgba(0,0,0,0.07)',
+      blue:    css.getPropertyValue('--blue').trim()    || '#1d4ed8',
+      amber:   css.getPropertyValue('--amber').trim()   || '#b45309',
+      red:     css.getPropertyValue('--red').trim()     || '#dc2626',
+    };
+
+    // Defaults Chart.js
+    Chart.defaults.font.family = 'IBM Plex Mono, monospace';
+    Chart.defaults.font.size   = 10;
+    Chart.defaults.color       = colors.muted;
+    Chart.defaults.borderColor = colors.border;
+
+    fetch('/api/charts/dashboard')
+      .then(r => r.json())
+      .then(d => {
+        // ── Graphe 1 : acquisitions par mois (line) ──
+        new Chart(document.getElementById('chart-acq-mois'), {
+          type: 'line',
+          data: {
+            labels: d.acq_par_mois.labels,
+            datasets: [{
+              label: 'Acquisitions',
+              data: d.acq_par_mois.data,
+              borderColor: colors.accent,
+              backgroundColor: colors.accent + '22',  // 22 = ~13% alpha hex
+              borderWidth: 2,
+              tension: 0.3,
+              fill: true,
+              pointRadius: 3,
+              pointHoverRadius: 5,
+              pointBackgroundColor: colors.accent,
+            }],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                backgroundColor: colors.bg,
+                titleColor: colors.text,
+                bodyColor: colors.text,
+                borderColor: colors.border,
+                borderWidth: 1,
+                padding: 10,
+                cornerRadius: 6,
+                titleFont: { size: 11, weight: '600' },
+                bodyFont:  { size: 11 },
+              },
+            },
+            scales: {
+              x: { grid: { display: false }, ticks: { color: colors.hint } },
+              y: {
+                beginAtZero: true, ticks: { color: colors.hint, stepSize: 1 },
+                grid: { color: colors.border, drawBorder: false },
+              },
+            },
+          },
+        });
+
+        // ── Graphe 2 : statuts animaux (doughnut) ──
+        new Chart(document.getElementById('chart-statuts'), {
+          type: 'doughnut',
+          data: {
+            labels: d.statuts_animaux.labels,
+            datasets: [{
+              data: d.statuts_animaux.data,
+              backgroundColor: [colors.accent, colors.blue, colors.amber, colors.red],
+              borderColor: colors.bg,
+              borderWidth: 3,
+              hoverOffset: 6,
+            }],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: '62%',
+            plugins: {
+              legend: {
+                position: 'bottom',
+                labels: { padding: 8, boxWidth: 8, boxHeight: 8, font: { size: 10 } },
+              },
+              tooltip: {
+                backgroundColor: colors.bg,
+                titleColor: colors.text,
+                bodyColor: colors.text,
+                borderColor: colors.border,
+                borderWidth: 1,
+                padding: 10,
+                cornerRadius: 6,
+                callbacks: {
+                  label: ctx => `${ctx.label} — ${ctx.parsed} animaux`,
+                },
+              },
+            },
+          },
+        });
+      })
+      .catch(err => console.error('[charts]', err));
+  }
+  init();
+})();
+
+// Toggle Statistiques globales (bouton + div) avec persistance localStorage
+(function setupStatsToggle() {
+  const btn = document.getElementById('statsToggleBtn');
+  const box = document.getElementById('statsContent');
+  if (!btn || !box) return;
+  const KEY = 'dashboard-stats-open';
+
+  function setOpen(open) {
+    btn.classList.toggle('open', open);
+    box.classList.toggle('open', open);
+    localStorage.setItem(KEY, open ? '1' : '0');
+  }
+  setOpen(localStorage.getItem(KEY) === '1');
+  btn.addEventListener('click', () => setOpen(!btn.classList.contains('open')));
+})();
+</script>
+  </div>
+<!-- ── fin Statistiques globales ──────────────────────────────────────── -->
 
 <!-- ─── Layout 2 colonnes : actions à gauche, projets à droite ──────────── -->
 <div class="dashboard-grid">
@@ -109,31 +372,52 @@
     </div>
     {% endif %}
 
-    <!-- Liens rapides -->
+    <!-- Liens rapides — shadcn-like list -->
     <div class="card">
       <div class="card-title">Raccourcis</div>
-      <div style="display:flex;flex-direction:column;gap:6px;font-size:12px;">
+      <div class="flex flex-col gap-0.5">
         {% if current_user.role in ['admin', 'operateur'] %}
-        <a href="/import" style="color:var(--text);text-decoration:none;padding:6px 8px;border-radius:4px;
-           background:var(--bg3);border:1px solid var(--border);">↑ Importer une acquisition</a>
-        <a href="/planification" style="color:var(--text);text-decoration:none;padding:6px 8px;border-radius:4px;
-           background:var(--bg3);border:1px solid var(--border);">→ Planifier un créneau</a>
-        <a href="/calendrier" style="color:var(--text);text-decoration:none;padding:6px 8px;border-radius:4px;
-           background:var(--bg3);border:1px solid var(--border);">◫ Calendrier acquisitions</a>
+        <a href="/import" class="group flex items-center gap-2 px-2 py-1.5 rounded-md text-xs text-foreground no-underline hover:bg-accent-bg hover:text-accent transition-colors">
+          <span class="text-hint group-hover:text-accent transition-colors">↑</span>
+          <span>Importer une acquisition</span>
+        </a>
+        <a href="/planification" class="group flex items-center gap-2 px-2 py-1.5 rounded-md text-xs text-foreground no-underline hover:bg-accent-bg hover:text-accent transition-colors">
+          <span class="text-hint group-hover:text-accent transition-colors">→</span>
+          <span>Planifier un créneau</span>
+        </a>
+        <a href="/calendrier" class="group flex items-center gap-2 px-2 py-1.5 rounded-md text-xs text-foreground no-underline hover:bg-accent-bg hover:text-accent transition-colors">
+          <span class="text-hint group-hover:text-accent transition-colors">◫</span>
+          <span>Calendrier acquisitions</span>
+        </a>
         {% endif %}
-        <a href="/animaux" style="color:var(--text);text-decoration:none;padding:6px 8px;border-radius:4px;
-           background:var(--bg3);border:1px solid var(--border);">~ Liste des animaux</a>
-        <a href="/archive" style="color:var(--text);text-decoration:none;padding:6px 8px;border-radius:4px;
-           background:var(--bg3);border:1px solid var(--border);">⊡ Voir l'archive</a>
+        <a href="/animaux" class="group flex items-center gap-2 px-2 py-1.5 rounded-md text-xs text-foreground no-underline hover:bg-accent-bg hover:text-accent transition-colors">
+          <span class="text-hint group-hover:text-accent transition-colors">~</span>
+          <span>Liste des animaux</span>
+        </a>
+        <a href="/archive" class="group flex items-center gap-2 px-2 py-1.5 rounded-md text-xs text-foreground no-underline hover:bg-accent-bg hover:text-accent transition-colors">
+          <span class="text-hint group-hover:text-accent transition-colors">⊡</span>
+          <span>Voir l'archive</span>
+        </a>
       </div>
     </div>
   </aside>
 
-  <!-- ▶ Colonne droite : projets en cours ──────────────────────────────── -->
+  <!-- ▶ Colonne droite : projets ────────────────────────────────────────── -->
   <section class="dashboard-main">
-<div class="card">
-  <div class="card-title">Projets en cours <span class="mono" style="color:var(--hint);font-weight:400;">— {{ projets | length }} projet(s)</span></div>
-  <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">
+
+<div class="rounded-xl border border-border bg-card shadow-card overflow-hidden">
+  <div class="flex items-center justify-between px-5 py-4 border-b border-border">
+    <div>
+      <div class="text-sm font-semibold text-foreground">Projets en cours</div>
+      <div class="text-[10px] font-mono text-hint mt-0.5">{{ projets | length }} projet(s)</div>
+    </div>
+    {% if current_user.role == 'admin' %}
+    <span class="text-[9px] font-mono uppercase tracking-wider text-hint">
+      Cliquer une cellule pour éditer
+    </span>
+    {% endif %}
+  </div>
+  <div class="overflow-x-auto" style="-webkit-overflow-scrolling:touch;">
   <table class="data-table" id="projets-table">
     <thead>
       <tr>

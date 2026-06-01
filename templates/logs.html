@@ -1,25 +1,112 @@
 {% extends "base.html" %}
-{% block title %}Logs{% endblock %}
+{% block title %}Logs pipeline{% endblock %}
 {% block content %}
 
-<div class="page-header">
-  <div class="page-title">Journal du pipeline</div>
-  <div class="page-sub">3 erreurs détectées — dernière mise à jour 2025-03-12 14:32</div>
+<!-- En-tête shadcn-like -->
+<div class="flex items-end justify-between gap-4 mb-1">
+  <div>
+    <h1 class="text-2xl font-semibold tracking-tight text-foreground">Journal du pipeline</h1>
+    <p class="text-xs text-hint font-mono mt-1">
+      {{ total }} entrée(s) au total
+      {% if nb_erreurs > 0 %}
+        · <span class="text-danger">{{ nb_erreurs }} erreur(s)</span>
+      {% endif %}
+      {% if last_ts and last_ts != "—" %}
+        · dernière mise à jour {{ last_ts }}
+      {% endif %}
+    </p>
+  </div>
 </div>
 
-<div class="card">
-  <div class="card-title">Entrées récentes</div>
-  <div style="display:flex;flex-direction:column;">
-    <div class="log-line"><span class="log-ts">2025-03-12 14:32:01</span><span class="log-ok">IMPORTED</span><span class="log-msg">B3_0001.dcm → B3_20250312/DTI_2/</span></div>
-    <div class="log-line"><span class="log-ts">2025-03-12 14:32:03</span><span class="log-ok">IMPORTED</span><span class="log-msg">B3_0002.dcm → B3_20250312/DTI_2/</span></div>
-    <div class="log-line"><span class="log-ts">2025-03-12 14:32:05</span><span class="log-dup">DUPLICATE</span><span class="log-msg">B3_0001.dcm — MD5 identique, ignoré</span></div>
-    <div class="log-line"><span class="log-ts">2025-03-12 14:31:58</span><span class="log-ok">IMPORTED</span><span class="log-msg">B5_0001.nii.gz → B5_20250312/fMRI_3/</span></div>
-    <div class="log-line"><span class="log-ts">2025-03-11 09:14:22</span><span class="log-err">ERROR</span><span class="log-msg">R12_0003.dcm — métadonnées manquantes (PatientID vide)</span></div>
-    <div class="log-line"><span class="log-ts">2025-03-11 09:14:20</span><span class="log-ok">IMPORTED</span><span class="log-msg">R12_0001.dcm → R12_20250311/Anatomique_1/</span></div>
-    <div class="log-line"><span class="log-ts">2025-03-10 16:05:11</span><span class="log-err">ERROR</span><span class="log-msg">S07_0002.dcm — fichier corrompu, copie échouée</span></div>
-    <div class="log-line"><span class="log-ts">2025-03-10 16:05:08</span><span class="log-ok">IMPORTED</span><span class="log-msg">S07_0001.dcm → S07_20250310/T1_1/</span></div>
-    <div class="log-line"><span class="log-ts">2025-03-10 09:00:01</span><span class="log-ok">IMPORTED</span><span class="log-msg">R09_0001.dcm → R09_20250310/DTI_2/</span></div>
+<div class="rounded-xl border border-border bg-card shadow-card overflow-hidden">
+  <div class="px-5 py-3 border-b border-border flex items-center justify-between">
+    <div class="text-sm font-semibold text-foreground">Entrées</div>
+    <div class="text-[10px] font-mono text-hint">
+      Page {{ page }} / {{ nb_pages }}
+    </div>
   </div>
+
+  {% if logs %}
+  <div class="overflow-x-auto">
+    <table class="w-full text-xs">
+      <thead>
+        <tr class="text-left text-[9px] font-mono uppercase tracking-wider text-hint border-b border-border">
+          <th class="px-5 py-3 font-medium">Timestamp</th>
+          <th class="px-3 py-3 font-medium">Statut</th>
+          <th class="px-3 py-3 font-medium">Animal</th>
+          <th class="px-3 py-3 font-medium">Séquence</th>
+          <th class="px-3 py-3 font-medium">Source → destination</th>
+          <th class="px-3 py-3 font-medium">MD5</th>
+          <th class="px-5 py-3 font-medium">Erreur</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-border">
+      {% for l in logs %}
+        <tr class="hover:bg-muted transition-colors">
+          <td class="px-5 py-2 font-mono text-[11px] text-hint whitespace-nowrap">
+            {% if l.timestamp %}{{ l.timestamp[:19] | replace("T", " ") }}{% else %}—{% endif %}
+          </td>
+          <td class="px-3 py-2">
+            {% if l.statut == 'IMPORTED' %}
+              <span class="ui-badge ui-badge-success">{{ l.statut }}</span>
+            {% elif l.statut == 'DUPLICATE_SKIPPED' or l.statut == 'DUPLICATE' %}
+              <span class="ui-badge ui-badge-warning">{{ l.statut }}</span>
+            {% elif l.statut == 'ERROR' %}
+              <span class="ui-badge ui-badge-danger">{{ l.statut }}</span>
+            {% else %}
+              <span class="ui-badge ui-badge-default">{{ l.statut or '—' }}</span>
+            {% endif %}
+          </td>
+          <td class="px-3 py-2 font-mono text-foreground">{{ l.animal_id or '—' }}</td>
+          <td class="px-3 py-2 font-mono text-muted-fg">{{ l.sequence or '—' }}</td>
+          <td class="px-3 py-2 font-mono text-[10px] text-hint max-w-md truncate"
+              title="{{ l.source }} → {{ l.dest }}">
+            {% if l.source and l.dest %}{{ l.source }} → {{ l.dest }}
+            {% elif l.dest %}{{ l.dest }}
+            {% else %}—{% endif %}
+          </td>
+          <td class="px-3 py-2 font-mono text-[10px] text-hint">{{ (l.md5 or '')[:10] or '—' }}</td>
+          <td class="px-5 py-2 font-mono text-[10px] text-danger max-w-xs truncate"
+              title="{{ l.erreur or '' }}">{{ l.erreur or '—' }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="flex flex-col items-center justify-center text-center py-10">
+    <div class="w-12 h-12 rounded-full bg-muted flex items-center justify-center text-hint mb-3">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round"><polyline points="14 2 14 8 20 8"/><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+    </div>
+    <div class="text-sm font-medium text-foreground">Aucune entrée</div>
+    <div class="text-[11px] font-mono text-hint mt-1">
+      Le journal du pipeline est vide pour le moment.
+    </div>
+  </div>
+  {% endif %}
+
+  {% if nb_pages > 1 %}
+  <div class="flex items-center justify-between px-4 py-3 border-t border-border bg-muted">
+    <div class="text-[10px] font-mono text-hint">
+      Page {{ page }} / {{ nb_pages }} ·
+      {{ (page - 1) * per_page + 1 }}–{{ [page * per_page, total] | min }} sur {{ total }}
+    </div>
+    <div class="flex gap-1.5">
+      {% if page > 1 %}
+      <a href="?page={{ page - 1 }}" class="ui-btn ui-btn-outline ui-btn-sm">← Précédent</a>
+      {% else %}
+      <span class="ui-btn ui-btn-outline ui-btn-sm" aria-disabled="true">← Précédent</span>
+      {% endif %}
+
+      {% if page < nb_pages %}
+      <a href="?page={{ page + 1 }}" class="ui-btn ui-btn-outline ui-btn-sm">Suivant →</a>
+      {% else %}
+      <span class="ui-btn ui-btn-outline ui-btn-sm" aria-disabled="true">Suivant →</span>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
 </div>
 
 {% endblock %}

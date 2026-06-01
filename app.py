@@ -326,6 +326,41 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_projet_membres_projet  ON projet_membres(projet);
         CREATE INDEX IF NOT EXISTS idx_projet_membres_userid  ON projet_membres(user_id);
+
+        CREATE TABLE IF NOT EXISTS projet_notes (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            projet     TEXT NOT NULL,
+            auteur     TEXT NOT NULL,
+            titre      TEXT,
+            contenu    TEXT NOT NULL,
+            type       TEXT DEFAULT 'note',
+            epinglee   INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_projet_notes_projet ON projet_notes(projet);
+
+        CREATE TABLE IF NOT EXISTS notifications (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    INTEGER NOT NULL,
+            type       TEXT NOT NULL,
+            titre      TEXT NOT NULL,
+            corps      TEXT,
+            url        TEXT,
+            projet     TEXT,
+            lue        INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, lue);
+
+        CREATE TABLE IF NOT EXISTS notifications_sent (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id      INTEGER NOT NULL,
+            kind         TEXT NOT NULL,
+            ref_date     TEXT NOT NULL,
+            sent_at      TEXT NOT NULL,
+            UNIQUE(user_id, kind, ref_date)
+        );
         """)
 
         # Migration douce — ajoute les colonnes si absentes (SQLite ne supporte pas IF NOT EXISTS sur ALTER)
@@ -836,6 +871,222 @@ def projet_require_view(projet: str):
 
 
 # ─────────────────────────────────────────────────
+#  NOTIFICATIONS — inbox in-app + emails optionnels
+# ─────────────────────────────────────────────────
+#
+# Toutes les notifications sont stockées en base (inbox visible dans l'app).
+# Si l'utilisateur a un email et que SMTP est configuré, un email est aussi envoyé.
+# ─────────────────────────────────────────────────
+
+def notify(user_id: int, type_: str, titre: str, corps: str = "",
+           url: str | None = None, projet: str | None = None,
+           send_email: bool = True) -> int:
+    """
+    Crée une notification pour `user_id`. Retourne l'ID créé.
+    Si send_email=True et l'utilisateur a un email vérifié + SMTP configuré, envoie un mail.
+    """
+    now_iso = datetime.now().isoformat()
+    with get_db() as db:
+        cur = db.execute(
+            """INSERT INTO notifications (user_id, type, titre, corps, url, projet, lue, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, 0, ?)""",
+            (user_id, type_, titre, corps, url, projet, now_iso)
+        )
+        notif_id = cur.lastrowid
+
+        if send_email and EMAIL_CONFIGURED:
+            row = db.execute(
+                "SELECT username, email FROM users WHERE id=?", (user_id,)
+            ).fetchone()
+        else:
+            row = None
+        db.commit()
+
+    if row and row["email"]:
+        link = f"{APP_URL}{url}" if url else APP_URL
+        body = (
+            f"<p>Bonjour {row['username']},</p>"
+            f"<p>{corps or titre}</p>"
+            + (f'<p><a href="{link}">Ouvrir dans IRM FAIR</a></p>' if url else '')
+            + "<p style='color:#999;font-size:12px;'>Notification automatique IRM FAIR.</p>"
+        )
+        try:
+            _send_email(row["email"], f"[IRM FAIR] {titre}", body)
+        except Exception as exc:
+            print(f"[notify] email échoué : {exc}", flush=True)
+
+    return notif_id
+
+
+def notify_projet_members(projet: str, type_: str, titre: str, corps: str = "",
+                          url: str | None = None, exclude_user_id: int | None = None) -> int:
+    """Notifie tous les membres d'un projet + les admins globaux. Retourne le nb envoyé."""
+    with get_db() as db:
+        members = db.execute(
+            "SELECT user_id FROM projet_membres WHERE projet=?", (projet,)
+        ).fetchall()
+        admins  = db.execute(
+            "SELECT id FROM users WHERE role='admin'"
+        ).fetchall()
+
+    targets = {m["user_id"] for m in members} | {a["id"] for a in admins}
+    if exclude_user_id is not None:
+        targets.discard(exclude_user_id)
+
+    for uid in targets:
+        notify(uid, type_, titre, corps, url, projet, send_email=True)
+    return len(targets)
+
+
+# ── Scheduler quotidien (rappel J-1 à 8h) ────────────────────────────────────
+def _send_tomorrow_reminders():
+    """Pour chaque utilisateur, envoie un récap des acquisitions planifiées demain."""
+    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    today_iso = datetime.now().strftime("%Y-%m-%d")
+
+    with get_db() as db:
+        rows = db.execute(
+            """SELECT animal_id, projet, sequence, heure_debut, duree_min, importé_par
+               FROM acquisitions
+               WHERE date_acq = ? AND statut IN ('en_attente', 'en_cours')
+               ORDER BY projet, heure_debut""",
+            (tomorrow,)
+        ).fetchall()
+        if not rows:
+            return
+
+        # Groupe par utilisateur destinataire (membres des projets concernés + admins)
+        users = db.execute(
+            "SELECT id, username, email FROM users WHERE COALESCE(email,'') != ''"
+        ).fetchall()
+        sent_already = {
+            (r["user_id"], r["ref_date"]) for r in
+            db.execute(
+                "SELECT user_id, ref_date FROM notifications_sent WHERE kind='reminder_j1'"
+            ).fetchall()
+        }
+
+    by_projet: dict[str, list] = {}
+    for r in rows:
+        by_projet.setdefault(r["projet"], []).append(dict(r))
+
+    sent = 0
+    for u in users:
+        if (u["id"], tomorrow) in sent_already:
+            continue
+        # Récupère les projets accessibles
+        user_obj = type("U", (), {"id": u["id"], "username": u["username"], "role": None,
+                                  "is_authenticated": True})()
+        # Recharge le rôle global
+        with get_db() as db2:
+            urow = db2.execute("SELECT role FROM users WHERE id=?", (u["id"],)).fetchone()
+            user_obj.role = urow["role"] if urow else None
+
+        accessible = [p for p in by_projet if user_can_view_projet(user_obj, p)]
+        if not accessible:
+            continue
+        nb_acqs = sum(len(by_projet[p]) for p in accessible)
+
+        lines = []
+        for p in accessible:
+            for a in by_projet[p]:
+                heure = a["heure_debut"] or "—"
+                duree = f" ({a['duree_min']} min)" if a["duree_min"] else ""
+                lines.append(f"• {heure}{duree} — {a['animal_id']} · {a['sequence'] or '—'} ({p})")
+
+        titre = f"{nb_acqs} acquisition(s) prévues demain ({tomorrow})"
+        corps = "<br>".join(lines)
+        notify(u["id"], "reminder_j1", titre, corps, url="/calendrier")
+
+        # Mémorise l'envoi pour éviter les doublons
+        with get_db() as db2:
+            db2.execute(
+                "INSERT OR IGNORE INTO notifications_sent (user_id, kind, ref_date, sent_at) "
+                "VALUES (?, 'reminder_j1', ?, ?)",
+                (u["id"], tomorrow, datetime.now().isoformat())
+            )
+            db2.commit()
+        sent += 1
+    print(f"[reminder_j1] {sent} email(s)/notification(s) pour {tomorrow}", flush=True)
+
+
+def _scheduler_loop():
+    """Boucle légère : check toutes les 10 min si on doit envoyer les rappels du lendemain."""
+    last_run = None
+    while True:
+        try:
+            time.sleep(60 * 10)
+            now = datetime.now()
+            if now.hour == 8 and last_run != now.date():
+                _send_tomorrow_reminders()
+                last_run = now.date()
+        except Exception as exc:
+            print(f"[scheduler] erreur : {exc}", flush=True)
+            time.sleep(60)
+
+
+# Lance le scheduler en daemon une seule fois
+_scheduler_started = False
+def _ensure_scheduler():
+    global _scheduler_started
+    if _scheduler_started:
+        return
+    _scheduler_started = True
+    t = threading.Thread(target=_scheduler_loop, daemon=True, name="notif-scheduler")
+    t.start()
+    print("[scheduler] démarré", flush=True)
+
+
+# ── API notifications ────────────────────────────────────────────────────────
+
+@app.route("/api/notifications")
+@login_required
+def api_notifications():
+    """Liste les notifications de l'utilisateur courant (50 dernières)."""
+    with get_db() as db:
+        rows = db.execute(
+            """SELECT id, type, titre, corps, url, projet, lue, created_at
+               FROM notifications
+               WHERE user_id = ?
+               ORDER BY created_at DESC LIMIT 50""",
+            (current_user.id,)
+        ).fetchall()
+        nb_unread = db.execute(
+            "SELECT COUNT(*) FROM notifications WHERE user_id=? AND lue=0",
+            (current_user.id,)
+        ).fetchone()[0]
+
+    return jsonify({
+        "items":     [dict(r) for r in rows],
+        "nb_unread": nb_unread,
+    })
+
+
+@app.route("/api/notifications/<int:nid>/read", methods=["POST"])
+@login_required
+def api_notification_mark_read(nid):
+    with get_db() as db:
+        db.execute(
+            "UPDATE notifications SET lue=1 WHERE id=? AND user_id=?",
+            (nid, current_user.id)
+        )
+        db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/notifications/mark-all-read", methods=["POST"])
+@login_required
+def api_notifications_mark_all_read():
+    with get_db() as db:
+        db.execute(
+            "UPDATE notifications SET lue=1 WHERE user_id=? AND lue=0",
+            (current_user.id,)
+        )
+        db.commit()
+    return jsonify({"ok": True})
+
+
+# ─────────────────────────────────────────────────
 #  SERVER-SENT EVENTS — temps réel multi-utilisateurs
 # ─────────────────────────────────────────────────
 
@@ -865,14 +1116,15 @@ def api_sse():
             try:
                 with get_db() as db:
                     rows = db.execute(
-                        "SELECT id, type, payload FROM events WHERE id > ? ORDER BY id LIMIT 20",
+                        "SELECT id, type, payload, created_at FROM events WHERE id > ? ORDER BY id LIMIT 20",
                         (last_id,)
                     ).fetchall()
                 for row in rows:
                     last_id = row["id"]
                     data = json.dumps({
-                        "type":    row["type"],
-                        "payload": json.loads(row["payload"])
+                        "type":       row["type"],
+                        "payload":    json.loads(row["payload"]),
+                        "created_at": row["created_at"],
                     })
                     yield f"id: {row['id']}\ndata: {data}\n\n"
             except Exception:
@@ -1422,13 +1674,25 @@ def page_import():
 @login_required
 @role_required("admin", "operateur")
 def page_logs():
+    try: page = max(1, int(request.args.get("page", 1)))
+    except ValueError: page = 1
+    per_page = 50
+    offset   = (page - 1) * per_page
+
     with get_db() as db:
-        logs       = db.execute("SELECT * FROM pipeline_logs ORDER BY timestamp DESC LIMIT 100").fetchall()
+        total      = db.execute("SELECT COUNT(*) FROM pipeline_logs").fetchone()[0]
+        logs       = db.execute(
+            "SELECT * FROM pipeline_logs ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+            (per_page, offset)
+        ).fetchall()
         nb_erreurs = db.execute("SELECT COUNT(*) FROM pipeline_logs WHERE statut='ERROR'").fetchone()[0]
         last_ts    = db.execute("SELECT timestamp FROM pipeline_logs ORDER BY timestamp DESC LIMIT 1").fetchone()
+
+    nb_pages = max(1, (total + per_page - 1) // per_page)
     return render_template("logs.html",
         logs=[dict(l) for l in logs], nb_erreurs=nb_erreurs,
-        last_ts=last_ts["timestamp"][:16] if last_ts else "—")
+        last_ts=last_ts["timestamp"][:16] if last_ts else "—",
+        page=page, nb_pages=nb_pages, per_page=per_page, total=total)
 
 @app.route("/users")
 @login_required
@@ -1472,6 +1736,93 @@ def api_stats():
             }
             for p in projets
         ]
+    })
+
+
+@app.route("/api/charts/dashboard")
+@login_required
+def api_charts_dashboard():
+    """
+    Données agrégées pour les graphes du dashboard :
+      - acquisitions par mois (12 derniers mois)
+      - acquisitions par projet (visibles seulement)
+      - répartition statuts animaux
+    """
+    today      = datetime.now().date()
+    months: list[tuple[str, str]] = []
+    # Génère les 12 derniers mois (yyyy-mm) + label court
+    for i in range(11, -1, -1):
+        y = today.year
+        m = today.month - i
+        while m <= 0:
+            m += 12
+            y -= 1
+        ym       = f"{y:04d}-{m:02d}"
+        label_fr = ["Jan","Fév","Mar","Avr","Mai","Jun","Jul","Aoû","Sep","Oct","Nov","Déc"][m-1]
+        if i >= 9:
+            label_fr = f"{label_fr} {str(y)[-2:]}"
+        months.append((ym, label_fr))
+
+    with get_db() as db:
+        rows_mois = db.execute(
+            """SELECT substr(date_acq, 1, 7) AS ym, projet, COUNT(*) AS n
+               FROM acquisitions
+               WHERE date_acq >= ?
+               GROUP BY ym, projet""",
+            (months[0][0] + "-01",)
+        ).fetchall()
+
+        statuts_rows = db.execute(
+            "SELECT projet, statut, COUNT(*) AS n FROM animaux GROUP BY projet, statut"
+        ).fetchall()
+
+        projets_rows = db.execute("SELECT nom FROM projets ORDER BY nom").fetchall()
+
+    # ── Filtrage selon droits par projet ───────────────────────────────────
+    projets_visibles = [
+        p["nom"] for p in projets_rows
+        if user_can_view_projet(current_user, p["nom"])
+    ]
+
+    # ── 1) Acquisitions par mois (somme tous projets visibles) ─────────────
+    by_month = {ym: 0 for ym, _ in months}
+    for r in rows_mois:
+        if r["projet"] in projets_visibles:
+            by_month[r["ym"]] = by_month.get(r["ym"], 0) + r["n"]
+    acq_par_mois = {
+        "labels": [lbl for _, lbl in months],
+        "data":   [by_month[ym] for ym, _ in months],
+    }
+
+    # ── 2) Acquisitions par projet (total) ─────────────────────────────────
+    by_projet: dict[str, int] = {p: 0 for p in projets_visibles}
+    for r in rows_mois:
+        if r["projet"] in projets_visibles:
+            by_projet[r["projet"]] += r["n"]
+    # Top 8, le reste dans "autres"
+    sorted_projets = sorted(by_projet.items(), key=lambda x: -x[1])
+    top = sorted_projets[:8]
+    rest_sum = sum(n for _, n in sorted_projets[8:])
+    acq_par_projet = {
+        "labels": [n for n, _ in top] + (["autres"] if rest_sum else []),
+        "data":   [n for _, n in top] + ([rest_sum]  if rest_sum else []),
+    }
+
+    # ── 3) Répartition statuts animaux ─────────────────────────────────────
+    statuts_total: dict[str, int] = {"ok": 0, "en_cours": 0, "en_attente": 0, "a_refaire": 0}
+    for r in statuts_rows:
+        if r["projet"] in projets_visibles and r["statut"] in statuts_total:
+            statuts_total[r["statut"]] += r["n"]
+    statuts_animaux = {
+        "labels": ["OK", "En cours", "En attente", "À refaire"],
+        "data":   [statuts_total["ok"], statuts_total["en_cours"],
+                   statuts_total["en_attente"], statuts_total["a_refaire"]],
+    }
+
+    return jsonify({
+        "acq_par_mois":    acq_par_mois,
+        "acq_par_projet":  acq_par_projet,
+        "statuts_animaux": statuts_animaux,
     })
 
 
@@ -1570,6 +1921,21 @@ def api_projet_add_membre(nom):
             db.commit()
         except sqlite3.IntegrityError:
             return jsonify({"error": "Cet utilisateur est déjà membre"}), 409
+
+    # Notification au membre ajouté
+    try:
+        notify(
+            user_id = user["id"],
+            type_   = "membre_ajoute",
+            titre   = f"Ajouté au projet « {nom} »",
+            corps   = (f"Vous avez été ajouté comme <strong>{role_projet}</strong> "
+                       f"au projet « {nom} » par {current_user.username}."),
+            url     = f"/projet/{nom}",
+            projet  = nom,
+        )
+    except Exception as exc:
+        print(f"[notify] échec notification ajout membre : {exc}", flush=True)
+
     return jsonify({"ok": True})
 
 
@@ -1587,6 +1953,137 @@ def api_projet_update_membre(nom, user_id):
             "UPDATE projet_membres SET role_projet=? WHERE projet=? AND user_id=?",
             (role_projet, nom, user_id)
         )
+        db.commit()
+    return jsonify({"ok": True})
+
+
+# ─────────────────────────────────────────────────
+#  API — JOURNAL DE PROJET (CR de réunions, notes)
+# ─────────────────────────────────────────────────
+
+@app.route("/api/projets/<nom>/notes")
+@login_required
+def api_projet_notes_list(nom):
+    if not user_can_view_projet(current_user, nom):
+        return jsonify({"error": "Accès refusé à ce projet"}), 403
+    with get_db() as db:
+        rows = db.execute(
+            """SELECT * FROM projet_notes WHERE projet=?
+               ORDER BY epinglee DESC, created_at DESC""",
+            (nom,)
+        ).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route("/api/projets/<nom>/notes", methods=["POST"])
+@login_required
+def api_projet_notes_create(nom):
+    if not user_can_edit_projet(current_user, nom):
+        return jsonify({"error": "Droits insuffisants sur ce projet"}), 403
+    d = request.json or {}
+    titre   = (d.get("titre") or "").strip()
+    contenu = (d.get("contenu") or "").strip()
+    type_   = (d.get("type") or "note").strip()
+    if not contenu:
+        return jsonify({"error": "Contenu requis"}), 400
+    if type_ not in ("note", "reunion", "compte_rendu", "decision"):
+        type_ = "note"
+    if len(contenu) > 10000:
+        return jsonify({"error": "Contenu trop long (max 10 000 caractères)"}), 400
+    if titre and len(titre) > 200:
+        return jsonify({"error": "Titre trop long (max 200 caractères)"}), 400
+
+    now_iso = datetime.now().isoformat()
+    with get_db() as db:
+        cur = db.execute(
+            """INSERT INTO projet_notes (projet, auteur, titre, contenu, type, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (nom, current_user.username, titre or None, contenu, type_, now_iso)
+        )
+        new_id = cur.lastrowid
+        db.commit()
+
+    # Notifie les autres membres de la nouvelle note
+    try:
+        type_labels = {"note":"Note","reunion":"Réunion","compte_rendu":"Compte-rendu","decision":"Décision"}
+        notify_projet_members(
+            projet = nom,
+            type_  = "note_projet",
+            titre  = f"Nouvelle {type_labels.get(type_, 'note').lower()} sur « {nom} »",
+            corps  = (titre or contenu[:120] + ('…' if len(contenu) > 120 else '')) +
+                     f"<br><small style='color:#999'>par {current_user.username}</small>",
+            url    = f"/projet/{nom}",
+            exclude_user_id = current_user.id,
+        )
+    except Exception as exc:
+        print(f"[notify] échec notif nouvelle note : {exc}", flush=True)
+
+    return jsonify({"ok": True, "id": new_id}), 201
+
+
+@app.route("/api/projets/<nom>/notes/<int:note_id>", methods=["PATCH"])
+@login_required
+def api_projet_notes_update(nom, note_id):
+    with get_db() as db:
+        note = db.execute(
+            "SELECT * FROM projet_notes WHERE id=? AND projet=?", (note_id, nom)
+        ).fetchone()
+    if not note:
+        return jsonify({"error": "Note introuvable"}), 404
+
+    is_author = note["auteur"] == current_user.username
+    can_pin   = user_can_manage_projet(current_user, nom)
+    can_edit  = is_author or current_user.role == "admin"
+
+    d = request.json or {}
+    updates: dict = {}
+
+    if "titre" in d and can_edit:
+        v = (d["titre"] or "").strip() or None
+        if v and len(v) > 200:
+            return jsonify({"error": "Titre trop long"}), 400
+        updates["titre"] = v
+    if "contenu" in d and can_edit:
+        v = (d["contenu"] or "").strip()
+        if not v: return jsonify({"error": "Contenu requis"}), 400
+        if len(v) > 10000: return jsonify({"error": "Contenu trop long"}), 400
+        updates["contenu"] = v
+    if "type" in d and can_edit:
+        v = (d["type"] or "note").strip()
+        if v not in ("note", "reunion", "compte_rendu", "decision"):
+            return jsonify({"error": "Type invalide"}), 400
+        updates["type"] = v
+    if "epinglee" in d and can_pin:
+        updates["epinglee"] = 1 if d["epinglee"] else 0
+
+    if not updates:
+        return jsonify({"error": "Aucun champ à modifier ou droits insuffisants"}), 403
+
+    set_clause = ", ".join(f"{k}=?" for k in updates)
+    params     = list(updates.values()) + [datetime.now().isoformat(), note_id, nom]
+    with get_db() as db:
+        db.execute(
+            f"UPDATE projet_notes SET {set_clause}, updated_at=? WHERE id=? AND projet=?",
+            params
+        )
+        db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/projets/<nom>/notes/<int:note_id>", methods=["DELETE"])
+@login_required
+def api_projet_notes_delete(nom, note_id):
+    with get_db() as db:
+        note = db.execute(
+            "SELECT auteur FROM projet_notes WHERE id=? AND projet=?", (note_id, nom)
+        ).fetchone()
+    if not note:
+        return jsonify({"error": "Note introuvable"}), 404
+    if note["auteur"] != current_user.username and current_user.role != "admin" \
+       and not user_can_manage_projet(current_user, nom):
+        return jsonify({"error": "Droits insuffisants"}), 403
+    with get_db() as db:
+        db.execute("DELETE FROM projet_notes WHERE id=? AND projet=?", (note_id, nom))
         db.commit()
     return jsonify({"ok": True})
 
@@ -1909,6 +2406,138 @@ def api_planification_conflicts():
                         "a": a, "b": b,
                     })
     return jsonify({"count": len(conflicts), "conflicts": conflicts})
+
+
+@app.route("/api/search")
+@login_required
+def api_search():
+    """
+    Recherche globale (Cmd+K). Retourne jusqu'à 5 résultats par catégorie :
+      - projets (par nom, responsable)
+      - animaux (par animal_id, espèce)
+      - acquisitions (par sequence, animal_id, projet — filtré par droits)
+      - users (admin uniquement)
+    Filtre selon les droits par projet.
+    """
+    q = (request.args.get("q") or "").strip()
+    if len(q) < 2:
+        return jsonify({"projets": [], "animaux": [], "acquisitions": [], "users": []})
+
+    like = f"%{q.lower()}%"
+    out  = {"projets": [], "animaux": [], "acquisitions": [], "users": []}
+
+    with get_db() as db:
+        # ── Projets ────────────────────────────────────────────────────────
+        rows = db.execute(
+            """SELECT nom, resp, statut FROM projets
+               WHERE lower(nom) LIKE ? OR lower(COALESCE(resp,'')) LIKE ?
+               ORDER BY nom LIMIT 20""",
+            (like, like)
+        ).fetchall()
+        for r in rows:
+            if not user_can_view_projet(current_user, r["nom"]):
+                continue
+            out["projets"].append({
+                "nom":   r["nom"], "resp": r["resp"] or "",
+                "statut": r["statut"] or "actif",
+                "url":   f"/projet/{r['nom']}",
+            })
+            if len(out["projets"]) >= 5:
+                break
+
+        # ── Animaux ────────────────────────────────────────────────────────
+        rows = db.execute(
+            """SELECT animal_id, espece, projet, statut FROM animaux
+               WHERE lower(animal_id) LIKE ? OR lower(COALESCE(espece,'')) LIKE ?
+               ORDER BY animal_id LIMIT 30""",
+            (like, like)
+        ).fetchall()
+        for r in rows:
+            if not user_can_view_projet(current_user, r["projet"]):
+                continue
+            out["animaux"].append({
+                "animal_id": r["animal_id"], "espece": r["espece"] or "—",
+                "projet": r["projet"], "statut": r["statut"],
+                "url":    f"/animal/{r['projet']}/{r['animal_id']}",
+            })
+            if len(out["animaux"]) >= 5:
+                break
+
+        # ── Acquisitions ───────────────────────────────────────────────────
+        rows = db.execute(
+            """SELECT id, animal_id, projet, sequence, date_acq, statut FROM acquisitions
+               WHERE lower(COALESCE(sequence,'')) LIKE ?
+                  OR lower(animal_id) LIKE ?
+                  OR lower(projet) LIKE ?
+               ORDER BY date_acq DESC LIMIT 30""",
+            (like, like, like)
+        ).fetchall()
+        for r in rows:
+            if not user_can_view_projet(current_user, r["projet"]):
+                continue
+            out["acquisitions"].append({
+                "id": r["id"], "animal_id": r["animal_id"], "projet": r["projet"],
+                "sequence": r["sequence"] or "—", "date_acq": r["date_acq"] or "",
+                "statut": r["statut"],
+                "url":    f"/animal/{r['projet']}/{r['animal_id']}",
+            })
+            if len(out["acquisitions"]) >= 5:
+                break
+
+        # ── Users (admin uniquement) ──────────────────────────────────────
+        if current_user.role == "admin":
+            rows = db.execute(
+                "SELECT id, username, role FROM users WHERE lower(username) LIKE ? "
+                "ORDER BY username LIMIT 5",
+                (like,)
+            ).fetchall()
+            for r in rows:
+                out["users"].append({
+                    "id": r["id"], "username": r["username"], "role": r["role"],
+                    "url": "/users",
+                })
+
+    return jsonify(out)
+
+
+@app.route("/api/planification/mes-creneaux")
+@login_required
+def api_mes_creneaux():
+    """
+    Prochaines acquisitions accessibles à l'utilisateur courant.
+    - Admin : toutes les acquisitions planifiées (en_attente ou en_cours)
+    - Autres : seulement celles des projets dont ils sont membres
+    - Aujourd'hui et futur uniquement, ordonné par date+heure
+    """
+    today_iso = datetime.now().strftime("%Y-%m-%d")
+    limit     = max(1, min(20, int(request.args.get("limit", 8))))
+
+    with get_db() as db:
+        rows = db.execute(
+            """SELECT id, animal_id, projet, sequence, date_acq, heure_debut,
+                      duree_min, statut, importé_par, poids_g, qualite
+               FROM acquisitions
+               WHERE date_acq >= ?
+                 AND statut IN ('en_attente', 'en_cours')
+               ORDER BY date_acq ASC, COALESCE(heure_debut, '99:99') ASC
+               LIMIT 200""",
+            (today_iso,)
+        ).fetchall()
+
+    # Filtrage par droits projet
+    creneaux = []
+    for r in rows:
+        if not user_can_view_projet(current_user, r["projet"]):
+            continue
+        creneaux.append(dict(r))
+        if len(creneaux) >= limit:
+            break
+
+    return jsonify({
+        "today":     today_iso,
+        "creneaux":  creneaux,
+        "count":     len(creneaux),
+    })
 
 
 # ─────────────────────────────────────────────────
@@ -2621,22 +3250,40 @@ def page_planification():
 def page_connexions():
     filtre_action   = request.args.get("action", "")
     filtre_username = request.args.get("username", "").strip()
-    q      = "SELECT * FROM connexions_log WHERE 1=1"
+
+    # Pagination — 50 entrées par page
+    try: page = max(1, int(request.args.get("page", 1)))
+    except ValueError: page = 1
+    per_page = 50
+    offset   = (page - 1) * per_page
+
+    where  = "WHERE 1=1"
     params = []
     if filtre_action:
-        q += " AND action=?"; params.append(filtre_action)
+        where += " AND action=?"; params.append(filtre_action)
     if filtre_username:
-        q += " AND username LIKE ?"; params.append(f"%{filtre_username}%")
-    q += " ORDER BY timestamp DESC LIMIT 200"
+        where += " AND username LIKE ?"; params.append(f"%{filtre_username}%")
+
     with get_db() as db:
-        logs    = db.execute(q, params).fetchall()
+        nb_filtre = db.execute(
+            f"SELECT COUNT(*) FROM connexions_log {where}", params
+        ).fetchone()[0]
+        logs = db.execute(
+            f"SELECT * FROM connexions_log {where} "
+            f"ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+            params + [per_page, offset]
+        ).fetchall()
         nb_fail = db.execute("SELECT COUNT(*) FROM connexions_log WHERE action='login_failed'").fetchone()[0]
         total   = db.execute("SELECT COUNT(*) FROM connexions_log").fetchone()[0]
+
+    nb_pages = max(1, (nb_filtre + per_page - 1) // per_page)
     return render_template("connexions.html",
         logs=[dict(l) for l in logs],
         nb_fail=nb_fail, total=total,
         filtre_action=filtre_action, filtre_username=filtre_username,
-        smtp_configured=EMAIL_CONFIGURED)
+        smtp_configured=EMAIL_CONFIGURED,
+        page=page, nb_pages=nb_pages, per_page=per_page,
+        nb_filtre=nb_filtre)
 
 
 @app.route("/api/connexions")
@@ -3470,40 +4117,8 @@ def api_openapi():
 @login_required
 @role_required("admin")
 def api_docs():
-    """Swagger UI servi depuis CDN — réservé aux admins."""
-    return """<!DOCTYPE html>
-<html lang="fr">
-<head>
-  <meta charset="UTF-8">
-  <title>IRM FAIR — Documentation API</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.17.14/swagger-ui.css">
-  <style>
-    body { margin: 0; }
-    .topbar { display: none; }
-    .swagger-ui .info { margin: 30px 0; }
-    .swagger-ui .info .title { font-family: 'IBM Plex Sans', sans-serif; }
-  </style>
-</head>
-<body>
-  <div id="swagger-ui"></div>
-  <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.17.14/swagger-ui-bundle.js"></script>
-  <script>
-    window.onload = () => {
-      SwaggerUIBundle({
-        url: '/api/openapi.json',
-        dom_id: '#swagger-ui',
-        deepLinking: true,
-        defaultModelsExpandDepth: 1,
-        docExpansion: 'list',
-        tagsSorter: 'alpha',
-        operationsSorter: 'alpha',
-        tryItOutEnabled: true,
-        persistAuthorization: true,
-      });
-    };
-  </script>
-</body>
-</html>"""
+    """Swagger UI + page d'intro stylée — réservé aux admins."""
+    return render_template("api_docs.html")
 
 
 @app.route("/api/logs")
@@ -4822,6 +5437,7 @@ if not RECAPTCHA_SITE_KEY or not RECAPTCHA_SECRET_KEY:
 
 # Appelé au démarrage quel que soit le mode (gunicorn ou python3 app.py)
 init_db()
+_ensure_scheduler()   # boucle de rappels J-1 (envoi 8h chaque jour)
 
 if __name__ == "__main__":
     try:
