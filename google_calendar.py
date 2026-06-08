@@ -30,10 +30,58 @@ log = logging.getLogger("google_calendar")
 
 # ─── Configuration ───────────────────────────────────────────────────────
 _CRED_PATH   = os.environ.get("GOOGLE_CALENDAR_CREDENTIALS_PATH", "")
+# Permet de passer le JSON directement en variable d'environnement (Railway,
+# Render, Heroku…). Plusieurs noms acceptés pour compatibilité Railway UI.
+_CRED_JSON   = (
+    os.environ.get("GOOGLE_CALENDAR_CREDENTIALS_JSON")
+    or os.environ.get("GOOGLE_CALENDAR_CREDENTIALS")
+    or os.environ.get("GOOGLE_CALENDAR_SA_JSON")
+    or ""
+)
 _CALENDAR_ID = os.environ.get("GOOGLE_CALENDAR_ID", "")
 _ENABLED     = os.environ.get("GOOGLE_CALENDAR_ENABLED", "true").lower() == "true"
 _TZ          = os.environ.get("GOOGLE_CALENDAR_TZ", "Europe/Paris")
 _SCOPES      = ["https://www.googleapis.com/auth/calendar"]
+
+
+def _parse_creds_json(blob: str):
+    """
+    Parse le JSON du service account, en tolérant les guillemets externes
+    parasites (copier-coller Railway, etc.) et les sauts de ligne dans
+    la private_key.
+    """
+    import json
+    s = (blob or "").strip()
+    if not s:
+        return None
+    # Cas où la variable a été collée entre guillemets (Railway garde parfois
+    # le `"` d'ouverture/fermeture)
+    if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
+        s = s[1:-1]
+    # Tente le parse direct
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        pass
+    # Tente : doubles guillemets échappés (\" en début/fin)
+    try:
+        return json.loads(s.replace('\\"', '"'))
+    except json.JSONDecodeError:
+        pass
+    # Dernière tentative : remplacer les vrais newlines DANS la private_key
+    # par des \n littéraux (Railway peut éclater les newlines)
+    try:
+        import re
+        # On capture la clé privée multi-lignes et on remplace les \n
+        # réels par \\n pour que le JSON soit valide
+        fixed = re.sub(
+            r'("private_key"\s*:\s*")(.+?)("\s*,)',
+            lambda m: m.group(1) + m.group(2).replace("\n", "\\n") + m.group(3),
+            s, flags=re.DOTALL
+        )
+        return json.loads(fixed)
+    except Exception:
+        return None
 
 # ─── Service singleton (lazy + cache) ────────────────────────────────────
 _service_cache = None
@@ -47,20 +95,37 @@ def _get_service():
         return None
     if _service_cache is not None:
         return _service_cache
-    if not _ENABLED or not _CRED_PATH or not _CALENDAR_ID:
+    if not _ENABLED or not _CALENDAR_ID:
         _service_failed = True
-        log.info("Google Calendar désactivé (config manquante).")
+        log.info("Google Calendar désactivé (config manquante : ENABLED ou CALENDAR_ID).")
         return None
-    if not os.path.isfile(_CRED_PATH):
+    # Deux modes : (a) JSON inline en variable d'env, (b) fichier
+    creds_info = None
+    if _CRED_JSON:
+        creds_info = _parse_creds_json(_CRED_JSON)
+        if not creds_info:
+            _service_failed = True
+            log.warning("Google Calendar : JSON inline invalide. Vérifie GOOGLE_CALENDAR_CREDENTIALS_JSON / GOOGLE_CALENDAR_CREDENTIALS.")
+            return None
+    elif _CRED_PATH and os.path.isfile(_CRED_PATH):
+        pass  # on utilisera from_service_account_file
+    else:
         _service_failed = True
-        log.warning("Google Calendar : credentials introuvables : %s", _CRED_PATH)
+        log.warning("Google Calendar : aucune credentials trouvées (ni JSON inline, ni fichier %s).", _CRED_PATH or "(non défini)")
         return None
     try:
         from google.oauth2 import service_account
         from googleapiclient.discovery import build
-        creds = service_account.Credentials.from_service_account_file(
-            _CRED_PATH, scopes=_SCOPES
-        )
+        if creds_info:
+            creds = service_account.Credentials.from_service_account_info(
+                creds_info, scopes=_SCOPES
+            )
+            log.info("Google Calendar : auth via JSON inline (env var).")
+        else:
+            creds = service_account.Credentials.from_service_account_file(
+                _CRED_PATH, scopes=_SCOPES
+            )
+            log.info("Google Calendar : auth via fichier %s.", _CRED_PATH)
         _service_cache = build("calendar", "v3", credentials=creds,
                                cache_discovery=False)
         log.info("Google Calendar : authentification OK (calendrier %s).", _CALENDAR_ID)

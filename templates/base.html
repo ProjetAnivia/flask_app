@@ -928,26 +928,7 @@
           <div class="user-dropdown-header">{{ current_user.username }}</div>
           <a href="/profil" class="user-dropdown-item">Mon profil &amp; mot de passe</a>
 
-          <!-- CR #21 : sélecteur de langue (FR/EN) -->
-          <div class="user-dropdown-sep"></div>
-          <div style="padding:8px 14px;">
-            <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);
-                        text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">
-              Langue / Language
-            </div>
-            <div style="display:flex;gap:6px;">
-              {% for L in supported_langs %}
-              <button type="button" onclick="setAppLang('{{ L.code }}')"
-                      style="flex:1;background:{% if lang == L.code %}var(--teal-bg){% else %}var(--bg){% endif %};
-                             border:1px solid {% if lang == L.code %}var(--teal){% else %}var(--border){% endif %};
-                             color:{% if lang == L.code %}var(--teal){% else %}var(--text){% endif %};
-                             border-radius:6px;padding:5px 8px;font-size:11px;cursor:pointer;
-                             display:flex;align-items:center;gap:4px;justify-content:center;">
-                <span>{{ L.flag }}</span><span>{{ L.code | upper }}</span>
-              </button>
-              {% endfor %}
-            </div>
-          </div>
+          <!-- Switcher de langue désactivé pour le moment (CR client : interface FR seule) -->
           <div class="user-dropdown-sep"></div>
 
           <div class="theme-switcher">
@@ -1028,32 +1009,29 @@
 
   <nav class="sidebar" id="sidebar" data-tour="sidebar">
     <!-- Réorganisation par axe mental : Opérationnel / Données / Système -->
-    <div class="nav-section">{{ "Opérationnel" | t }}</div>
-    <a href="/" class="nav-item {% if request.path == '/' %}active{% endif %}">
-      <span class="nav-icon">▦</span><span class="nav-label"> {{ "Tableau de bord" | t }}</span>
+    <div class="nav-section">Opérationnel</div>
+    <a href="/" class="nav-item {% if request.path == '/' or request.path.startswith('/projet') %}active{% endif %}">
+      <span class="nav-icon">▦</span><span class="nav-label"> Projets</span>
     </a>
     {% if current_user.role in ['admin', 'operateur'] %}
     <a href="/planning" class="nav-item {% if request.path == '/planning' or request.path == '/planification' or request.path == '/calendrier' %}active{% endif %}">
-      <span class="nav-icon">📅</span><span class="nav-label"> {{ "Planning" | t }}</span>
+      <span class="nav-icon">📅</span><span class="nav-label"> Planning</span>
     </a>
     {% endif %}
-    <a href="/projets" class="nav-item {% if request.path.startswith('/projet') %}active{% endif %}">
-      <span class="nav-icon">▣</span><span class="nav-label"> {{ "Projets" | t }}</span>
-    </a>
     <a href="/animaux" class="nav-item {% if request.path == '/animaux' or request.path.startswith('/animal/') %}active{% endif %}">
-      <span class="nav-icon">~</span><span class="nav-label"> {{ "Animaux" | t }}</span>
+      <span class="nav-icon">~</span><span class="nav-label"> Animaux</span>
     </a>
     <a href="/archive" class="nav-item {% if request.path == '/archive' %}active{% endif %}">
-      <span class="nav-icon">⊡</span><span class="nav-label"> {{ "Archive" | t }}</span>
+      <span class="nav-icon">⊡</span><span class="nav-label"> Archive</span>
     </a>
 
     {% if current_user.role in ['admin', 'operateur'] %}
-    <div class="nav-section">{{ "Données" | t }}</div>
+    <div class="nav-section">Données</div>
     <a href="/import" class="nav-item {% if request.path == '/import' %}active{% endif %}">
       <span class="nav-icon">↑</span><span class="nav-label"> Import</span>
     </a>
     <a href="/nas-explorer" class="nav-item {% if request.path == '/nas-explorer' %}active{% endif %}">
-      <span class="nav-icon">⊞</span><span class="nav-label"> {{ "Explorateur NAS" | t }}</span>
+      <span class="nav-icon">⊞</span><span class="nav-label"> Explorateur NAS</span>
     </a>
     <a href="/logs" class="nav-item {% if request.path == '/logs' %}active{% endif %}">
       <span class="nav-icon">!</span><span class="nav-label"> Logs pipeline</span>
@@ -1061,15 +1039,15 @@
     {% endif %}
 
     {% if current_user.role == 'admin' %}
-    <div class="nav-section">{{ "Système" | t }}</div>
+    <div class="nav-section">Système</div>
     <a href="/users" class="nav-item {% if request.path == '/users' %}active{% endif %}">
-      <span class="nav-icon">@</span><span class="nav-label"> {{ "Utilisateurs" | t }}</span>
+      <span class="nav-icon">@</span><span class="nav-label"> Utilisateurs</span>
     </a>
     <a href="/audit-log" class="nav-item {% if request.path == '/audit-log' %}active{% endif %}">
-      <span class="nav-icon">⏱</span><span class="nav-label"> {{ "Audit" | t }}</span>
+      <span class="nav-icon">⏱</span><span class="nav-label"> Audit</span>
     </a>
     <a href="/connexions" class="nav-item {% if request.path == '/connexions' %}active{% endif %}">
-      <span class="nav-icon">§</span><span class="nav-label"> {{ "Connexions" | t }}</span>
+      <span class="nav-icon">§</span><span class="nav-label"> Connexions</span>
     </a>
 
     <!-- Utilisation du NAS — admin uniquement, en bas de la nav -->

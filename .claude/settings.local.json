@@ -55,7 +55,8 @@
       "Bash(sed -i '' 's|placeholder=\"Nom ou responsable…\"|placeholder=\"Nom ou chercheur…\"|g; s|<label class=\"form-label\">Responsable</label>|<label class=\"form-label\">Chercheur</label>|g; s|<th>Responsable</th>|<th>Chercheur</th>|g' /Users/nolan/Documents/flask_app/templates/dashboard.html /Users/nolan/Documents/flask_app/templates/archive.html)",
       "Bash(sed -i '' 's|placeholder=\"Rechercher par nom ou responsable…\"|placeholder=\"Rechercher par nom ou chercheur…\"|g' /Users/nolan/Documents/flask_app/templates/archive.html)",
       "Bash(awk '/<div class=\"card\" id=\"vol-results-section\">/{flag=1} flag{print NR\": \"$0; if\\(/^<\\\\/div>$/\\){close=close+1; if\\(close==2\\) exit}}' /Users/nolan/Documents/flask_app/templates/animal_detail.html)",
-      "Bash(awk -F: '$1>=1055 && $1<=1180')"
+      "Bash(awk -F: '$1>=1055 && $1<=1180')",
+      "Bash(python3 -m py_compile /Users/nolan/Documents/flask_app/app.py /Users/nolan/Documents/flask_app/google_calendar.py)"
     ]
   }
 }

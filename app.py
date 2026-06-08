@@ -1668,16 +1668,10 @@ def inject_csrf():
 
 # ── i18n (CR #21) — injection lang + filtre Jinja `| t` ───────────────────
 def _get_current_lang() -> str:
-    """Détermine la langue active : session > préférence user > 'fr'."""
-    if "lang" in session:
-        return session["lang"]
-    try:
-        if current_user.is_authenticated:
-            lang = getattr(current_user, "lang", None)
-            if lang in ("fr", "en"):
-                return lang
-    except Exception:
-        pass
+    """
+    Langue active. Pour le moment forcée à 'fr' (i18n désactivée côté UI).
+    L'infrastructure reste en place pour réactiver plus tard.
+    """
     return "fr"
 
 
