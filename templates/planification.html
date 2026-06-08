@@ -290,14 +290,37 @@
         <input class="form-input" type="date" name="date_acq" required>
       </div>
 
-      <div class="form-row">
-        <label class="form-label">Heure début *</label>
-        <input class="form-input" type="time" name="heure_debut" required>
+      <div class="form-row" style="grid-column:1/-1;">
+        <label class="form-label">Période *</label>
+        <div class="periode-group" data-form="creneauForm">
+          <button type="button" class="periode-btn" data-periode="matin">
+            <span class="periode-emoji">🌅</span><span>Matin</span>
+            <span class="periode-sub">09:00–12:30</span>
+          </button>
+          <button type="button" class="periode-btn active" data-periode="apres_midi">
+            <span class="periode-emoji">🌇</span><span>Après-midi</span>
+            <span class="periode-sub">13:30–17:00</span>
+          </button>
+          <button type="button" class="periode-btn" data-periode="journee">
+            <span class="periode-emoji">🌞</span><span>Journée</span>
+            <span class="periode-sub">09:00–17:00</span>
+          </button>
+          <button type="button" class="periode-btn" data-periode="custom">
+            <span class="periode-emoji">⏱</span><span>Personnalisé</span>
+            <span class="periode-sub">heure + durée</span>
+          </button>
+        </div>
+        <input type="hidden" name="periode" value="apres_midi">
       </div>
 
-      <div class="form-row">
+      <div class="form-row periode-custom-row" style="display:none;">
+        <label class="form-label">Heure début *</label>
+        <input class="form-input" type="time" name="heure_debut" value="13:30">
+      </div>
+
+      <div class="form-row periode-custom-row" style="display:none;">
         <label class="form-label">Durée (min) *</label>
-        <input class="form-input" type="number" name="duree_min" min="1" max="480" value="30" required>
+        <input class="form-input" type="number" name="duree_min" min="1" max="480" value="30">
       </div>
 
       <div class="form-row">
@@ -307,6 +330,31 @@
           <option value="en_cours">en cours</option>
           <option value="ok">terminé</option>
         </select>
+      </div>
+
+      <div class="form-row" style="grid-column:1/-1;">
+        <label class="form-label">Appareil IRM</label>
+        <select class="form-select" name="scanner_id" id="creneauScanner">
+          <option value="">— non précisé —</option>
+        </select>
+      </div>
+
+      <!-- CR #15 : Champs TEP (affichés si séquence contient TEP/PET/FDG ou si "TEP" coché) -->
+      <div class="form-row" style="grid-column:1/-1;">
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);cursor:pointer;">
+          <input type="checkbox" id="creneauIsTepToggle" onchange="toggleTepFields('creneauForm', this.checked)">
+          <span>☢ Acquisition TEP / PET (afficher les champs dose + produit)</span>
+        </label>
+      </div>
+      <div class="form-row tep-row" style="display:none;">
+        <label class="form-label">Dose injectée (MBq)</label>
+        <input class="form-input" type="number" step="0.1" min="0" max="1000"
+               name="tep_dose_mbq" placeholder="ex : 18.5">
+      </div>
+      <div class="form-row tep-row" style="display:none;">
+        <label class="form-label">Produit radioactif</label>
+        <input class="form-input" type="text" name="tep_produit" maxlength="80"
+               placeholder="ex : 18F-FDG, 11C-Raclopride">
       </div>
 
       <!-- Zone de résultat (conflits / suggestions / OK) -->
@@ -321,7 +369,65 @@
   </div>
 </div>
 
+<style>
+  /* Boutons période demi-journée (CR CHR) */
+  .periode-group {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+  }
+  .periode-btn {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 8px; cursor: pointer; transition: all .12s;
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    color: var(--muted); font-family: inherit; font-size: 12px;
+  }
+  .periode-btn:hover { border-color: var(--border2); background: var(--bg3); }
+  .periode-btn .periode-emoji { font-size: 20px; line-height: 1; margin-bottom: 2px; }
+  .periode-btn .periode-sub {
+    font-family: var(--font-mono); font-size: 9px; color: var(--hint);
+    margin-top: 1px;
+  }
+  .periode-btn.active {
+    background: var(--teal-bg); border-color: var(--teal); color: var(--teal);
+  }
+  .periode-btn.active .periode-sub { color: var(--teal); opacity: 0.8; }
+</style>
+
 <script>
+// ── Période (CR CHR : créneaux matin/après-midi) ─────────────────────────
+const PERIODE_PRESETS = {
+  matin:      { heure: '09:00', duree: 210 },
+  apres_midi: { heure: '13:30', duree: 210 },
+  journee:    { heure: '09:00', duree: 480 },
+};
+function setupPeriodeGroups() {
+  document.querySelectorAll('.periode-group').forEach(group => {
+    const formId = group.dataset.form;
+    const form   = document.getElementById(formId);
+    if (!form) return;
+    group.querySelectorAll('.periode-btn').forEach(btn => {
+      btn.onclick = () => {
+        group.querySelectorAll('.periode-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const p = btn.dataset.periode;
+        form.querySelector('input[name=periode]').value = p;
+        // Affiche/cache les champs custom
+        form.querySelectorAll('.periode-custom-row').forEach(r => {
+          r.style.display = (p === 'custom') ? '' : 'none';
+        });
+        // Auto-fill heure_debut + duree_min depuis le preset
+        if (PERIODE_PRESETS[p]) {
+          const hInp = form.querySelector('input[name=heure_debut]');
+          const dInp = form.querySelector('input[name=duree_min]');
+          if (hInp) hInp.value = PERIODE_PRESETS[p].heure;
+          if (dInp) dInp.value = PERIODE_PRESETS[p].duree;
+        }
+      };
+    });
+  });
+}
+// Init au chargement
+document.addEventListener('DOMContentLoaded', setupPeriodeGroups);
+
 function todayISO() {
   const d = new Date();
   const y = d.getFullYear();
@@ -330,14 +436,82 @@ function todayISO() {
   return `${y}-${m}-${j}`;
 }
 
+// Charge la liste des scanners une fois pour les modals
+let _scannersCache = null;
+async function loadScanners() {
+  if (_scannersCache) return _scannersCache;
+  try {
+    const res = await fetch('/api/scanners');
+    _scannersCache = res.ok ? await res.json() : [];
+  } catch (e) { _scannersCache = []; }
+  return _scannersCache;
+}
+async function fillScannerSelect(selectEl) {
+  const scanners = await loadScanners();
+  selectEl.innerHTML = '<option value="">— non précisé —</option>' +
+    scanners.filter(s => s.actif).map(s =>
+      `<option value="${s.id}" style="color:${s.couleur};">⬤ ${s.nom}</option>`
+    ).join('');
+}
+
+function syncPeriodeButton(formId) {
+  // Synchronise l'état visuel des boutons période avec la valeur du hidden input
+  const form = document.getElementById(formId);
+  if (!form) return;
+  const cur   = form.querySelector('input[name=periode]')?.value;
+  const group = form.querySelector('.periode-group');
+  if (!cur || !group) return;
+  group.querySelectorAll('.periode-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.periode === cur);
+  });
+  form.querySelectorAll('.periode-custom-row').forEach(r => {
+    r.style.display = (cur === 'custom') ? '' : 'none';
+  });
+}
+
 function openCreneauModal() {
   document.getElementById('creneauModal').style.display = 'flex';
   document.getElementById('creneauResult').style.display = 'none';
   document.getElementById('creneauForm').reset();
+  syncPeriodeButton('creneauForm');
+  // CR #15 : reset TEP fields
+  document.getElementById('creneauIsTepToggle').checked = false;
+  toggleTepFields('creneauForm', false);
   // Préremplit la date d'acquisition avec aujourd'hui
   const dateInp = document.querySelector('#creneauForm [name=date_acq]');
   if (dateInp) dateInp.value = todayISO();
+  // Remplit le select scanner
+  fillScannerSelect(document.getElementById('creneauScanner'));
 }
+
+// CR #15 : montre/cache les champs TEP
+function toggleTepFields(formId, show) {
+  const f = document.getElementById(formId);
+  if (!f) return;
+  f.querySelectorAll('.tep-row').forEach(r => {
+    r.style.display = show ? '' : 'none';
+  });
+  // Si on désactive, on vide les champs pour ne pas envoyer de valeurs résiduelles
+  if (!show) {
+    const d = f.querySelector('[name=tep_dose_mbq]'); if (d) d.value = '';
+    const p = f.querySelector('[name=tep_produit]');  if (p) p.value = '';
+  }
+}
+
+// Auto-détection TEP au moment où l'utilisateur tape la séquence
+document.addEventListener('DOMContentLoaded', () => {
+  const seqInp = document.querySelector('#creneauForm [name=sequence]');
+  if (!seqInp) return;
+  seqInp.addEventListener('input', () => {
+    const v = (seqInp.value || '').toLowerCase();
+    const isTep = /\b(tep|pet|fdg|f-?18|c-?11|psma|suv)\b/.test(v);
+    const toggle = document.getElementById('creneauIsTepToggle');
+    if (isTep && !toggle.checked) {
+      toggle.checked = true;
+      toggleTepFields('creneauForm', true);
+    }
+  });
+});
 function closeCreneauModal() {
   document.getElementById('creneauModal').style.display = 'none';
 }
@@ -470,14 +644,37 @@ document.getElementById('creneauModal').addEventListener('click', (e) => {
         <input class="form-input" type="date" name="date_debut" required>
       </div>
 
-      <div class="form-row">
-        <label class="form-label">Heure début *</label>
-        <input class="form-input" type="time" name="heure_debut" value="09:00" required>
+      <div class="form-row" style="grid-column:1/-1;">
+        <label class="form-label">Période *</label>
+        <div class="periode-group" data-form="serieForm">
+          <button type="button" class="periode-btn active" data-periode="matin">
+            <span class="periode-emoji">🌅</span><span>Matin</span>
+            <span class="periode-sub">09:00–12:30</span>
+          </button>
+          <button type="button" class="periode-btn" data-periode="apres_midi">
+            <span class="periode-emoji">🌇</span><span>Après-midi</span>
+            <span class="periode-sub">13:30–17:00</span>
+          </button>
+          <button type="button" class="periode-btn" data-periode="journee">
+            <span class="periode-emoji">🌞</span><span>Journée</span>
+            <span class="periode-sub">09:00–17:00</span>
+          </button>
+          <button type="button" class="periode-btn" data-periode="custom">
+            <span class="periode-emoji">⏱</span><span>Personnalisé</span>
+            <span class="periode-sub">heure + durée</span>
+          </button>
+        </div>
+        <input type="hidden" name="periode" value="matin">
       </div>
 
-      <div class="form-row">
+      <div class="form-row periode-custom-row" style="display:none;">
+        <label class="form-label">Heure début *</label>
+        <input class="form-input" type="time" name="heure_debut" value="09:00">
+      </div>
+
+      <div class="form-row periode-custom-row" style="display:none;">
         <label class="form-label">Durée (min) *</label>
-        <input class="form-input" type="number" name="duree_min" min="1" max="480" value="30" required>
+        <input class="form-input" type="number" name="duree_min" min="1" max="480" value="30">
       </div>
 
       <div class="form-row">
@@ -536,6 +733,7 @@ function openSerieModal() {
   document.getElementById('serieForceWrap').style.display = 'none';
   document.getElementById('serieConfirmBtn').disabled = true;
   document.getElementById('serieForm').reset();
+  syncPeriodeButton('serieForm');
   // Préremplit la date de départ avec aujourd'hui
   const dateInp = document.querySelector('#serieForm [name=date_debut]');
   if (dateInp) dateInp.value = todayISO();

@@ -30,8 +30,45 @@
       </a>
     </div>
   </div>
-  <div class="page-sub">Resp. {{ projet.resp or "—" }} · {{ projet.nb_animaux_prevus }} animaux prévus</div>
+  <div class="page-sub">
+    {% if projet.nom_long %}
+      <span style="color:var(--text);font-weight:500;">{{ projet.nom_long }}</span>
+      <span style="margin:0 6px;color:var(--border2);">·</span>
+    {% endif %}
+    👤 Chercheur : <span id="projet-resp-inline">{{ projet.resp or "—" }}</span>
+    {% if projet.nb_animaux_prevus and projet.nb_animaux_prevus > 0 %}
+      · {{ projet.nb_animaux_prevus }} animaux prévus
+    {% else %}
+      · <span style="color:var(--hint);" title="Champ optionnel — peut être renseigné plus tard">nombre d'animaux non précisé</span>
+    {% endif %}
+    <span style="margin:0 6px;color:var(--border2);">·</span>
+    <a href="#" onclick="editNomLong(); return false;"
+       style="font-family:var(--font-mono);font-size:11px;color:var(--hint);text-decoration:none;
+              border-bottom:1px dashed var(--border2);">
+      {% if projet.nom_long %}modifier le nom complet{% else %}+ ajouter nom complet{% endif %}
+    </a>
+  </div>
 </div>
+
+<script>
+async function editNomLong() {
+  const current = {{ (projet.nom_long or '') | tojson }};
+  const v = prompt('Nom complet du projet (max 200 caractères) :', current);
+  if (v === null) return;
+  const trimmed = v.trim();
+  try {
+    const r = await fetch(`/api/projets/{{ projet.nom }}/nom-long`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nom_long: trimmed })
+    });
+    const j = await r.json();
+    if (!r.ok) { showToast(j.error || 'Erreur', 'error'); return; }
+    showToast('Nom complet mis à jour', 'success', 2000);
+    setTimeout(() => location.reload(), 500);
+  } catch (e) { showToast('Erreur réseau', 'error'); }
+}
+</script>
 
 <!-- Métriques -->
 <div class="metrics-row">
@@ -231,6 +268,215 @@ async function removeMembre(userId, username) {
 }
 </script>
 
+<!-- ─── Sessions (groupes d'animaux dans ce projet) ──────────────────────── -->
+<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;
+            box-shadow:0 1px 3px rgba(0,0,0,0.04);overflow:hidden;flex-shrink:0;"
+     id="sessionsCard">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;
+              padding:14px 20px;border-bottom:1px solid var(--border);flex-wrap:wrap;">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span style="width:32px;height:32px;border-radius:8px;background:var(--teal-bg);color:var(--teal);
+                   display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 9a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+      </span>
+      <div>
+        <div style="font-size:14px;font-weight:600;color:var(--text);">Sessions</div>
+        <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-top:2px;">
+          groupes d'animaux · avancement par session
+        </div>
+      </div>
+    </div>
+    {% if can_manage or my_role_projet in ('responsable','membre') %}
+    <button type="button" onclick="openSessionModal()"
+            style="display:inline-flex;align-items:center;gap:6px;
+                   font-family:var(--font-mono);font-size:12px;font-weight:500;
+                   padding:7px 14px;border-radius:6px;
+                   background:var(--btn-primary);color:var(--btn-primary-text);
+                   border:1px solid var(--btn-primary);cursor:pointer;
+                   box-shadow:0 1px 4px var(--btn-primary-shadow);">
+      + Nouvelle session
+    </button>
+    {% endif %}
+  </div>
+  <div id="sessionsList" style="padding:12px;">
+    <div class="ui-skeleton" style="height:48px;margin-bottom:6px;"></div>
+    <div class="ui-skeleton" style="height:48px;opacity:0.6;"></div>
+  </div>
+</div>
+
+<!-- Modal nouvelle/édition session -->
+<div id="sessionModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);
+     z-index:1000;align-items:flex-start;justify-content:center;padding-top:80px;">
+  <div style="background:var(--bg2);border-radius:12px;max-width:500px;width:100%;
+              margin:0 16px;box-shadow:0 12px 40px rgba(0,0,0,0.2);overflow:hidden;">
+    <div style="padding:14px 20px;border-bottom:1px solid var(--border);
+                display:flex;justify-content:space-between;align-items:center;">
+      <div style="font-size:14px;font-weight:600;color:var(--text);" id="sessionModalTitle">Nouvelle session</div>
+      <button onclick="closeSessionModal()"
+              style="background:none;border:none;font-size:22px;color:var(--muted);cursor:pointer;line-height:1;">&times;</button>
+    </div>
+    <div style="padding:20px;display:flex;flex-direction:column;gap:12px;">
+      <input type="hidden" id="sessionId" value="">
+      <div>
+        <label class="ui-label">Nom de la session *</label>
+        <input class="ui-input" id="sessionNom" placeholder="ex : S1, série-mai, baseline">
+      </div>
+      <div>
+        <label class="ui-label">Description (optionnel)</label>
+        <input class="ui-input" id="sessionDesc" placeholder="ex : Acquisitions de référence à J0">
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div>
+          <label class="ui-label">Date début</label>
+          <input class="ui-input" type="date" id="sessionDateDebut">
+        </div>
+        <div>
+          <label class="ui-label">Date fin</label>
+          <input class="ui-input" type="date" id="sessionDateFin">
+        </div>
+      </div>
+      <div id="sessionErr" style="display:none;color:var(--red);font-size:12px;"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px;">
+        <button class="ui-btn ui-btn-ghost" onclick="closeSessionModal()">Annuler</button>
+        <button class="ui-btn ui-btn-primary" onclick="saveSession()">Enregistrer</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const SES_PROJET    = "{{ projet.nom }}";
+const SES_CAN_EDIT  = {{ 'true' if (can_manage or my_role_projet in ('responsable','membre')) else 'false' }};
+const SES_IS_ADMIN  = {{ 'true' if current_user.role == 'admin' else 'false' }};
+
+function openSessionModal(s) {
+  document.getElementById('sessionModal').style.display = 'flex';
+  document.getElementById('sessionErr').style.display = 'none';
+  if (s) {
+    document.getElementById('sessionModalTitle').textContent = `Modifier ${s.nom}`;
+    document.getElementById('sessionId').value         = s.id;
+    document.getElementById('sessionNom').value        = s.nom || '';
+    document.getElementById('sessionDesc').value       = s.description || '';
+    document.getElementById('sessionDateDebut').value  = s.date_debut || '';
+    document.getElementById('sessionDateFin').value    = s.date_fin || '';
+  } else {
+    document.getElementById('sessionModalTitle').textContent = 'Nouvelle session';
+    document.getElementById('sessionId').value         = '';
+    document.getElementById('sessionNom').value        = '';
+    document.getElementById('sessionDesc').value       = '';
+    document.getElementById('sessionDateDebut').value  = '';
+    document.getElementById('sessionDateFin').value    = '';
+  }
+  setTimeout(() => document.getElementById('sessionNom').focus(), 50);
+}
+function closeSessionModal() { document.getElementById('sessionModal').style.display = 'none'; }
+document.getElementById('sessionModal').addEventListener('click', e => {
+  if (e.target.id === 'sessionModal') closeSessionModal();
+});
+
+async function loadSessions() {
+  const list = document.getElementById('sessionsList');
+  try {
+    const res = await fetch(`/api/projets/${encodeURIComponent(SES_PROJET)}/sessions`);
+    if (!res.ok) {
+      list.innerHTML = '<div style="padding:14px;color:var(--red);font-family:var(--font-mono);font-size:11px;">Erreur de chargement</div>';
+      return;
+    }
+    const sessions = await res.json();
+    if (!sessions.length) {
+      list.innerHTML = `
+        <div class="ui-empty">
+          <div class="ui-empty-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          </div>
+          <div class="ui-empty-title">Aucune session</div>
+          <div class="ui-empty-desc">Crée ta première session pour grouper les animaux et suivre l'avancement.</div>
+        </div>`;
+      return;
+    }
+    list.innerHTML = sessions.map(s => {
+      const total   = s.nb_acquisitions || 0;
+      const ok      = s.nb_acq_ok || 0;
+      const pct     = total > 0 ? Math.round(ok / total * 100) : 0;
+      const barColor= pct >= 75 ? 'var(--teal)' : pct >= 40 ? 'var(--amber)' : 'var(--red)';
+      const period  = (s.date_debut || s.date_fin)
+        ? `${s.date_debut || '—'} → ${s.date_fin || '—'}` : '';
+      return `
+        <div style="padding:10px 12px;border-radius:8px;border:1px solid var(--border);
+                    margin-bottom:6px;background:var(--bg);">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0;">
+              <span style="font-size:13px;font-weight:600;color:var(--text);">${escapeHtml(s.nom)}</span>
+              <span style="font-family:var(--font-mono);font-size:10px;color:var(--hint);">
+                ${s.nb_animaux} animal(aux) · ${total} acq.
+              </span>
+              ${period ? `<span style="font-family:var(--font-mono);font-size:10px;color:var(--hint);">· ${period}</span>` : ''}
+            </div>
+            <div style="display:flex;gap:4px;">
+              ${SES_CAN_EDIT ? `<button class="ui-btn ui-btn-ghost ui-btn-xs" onclick='openSessionModal(${JSON.stringify(s).replace(/'/g, "&apos;")})'>✎</button>` : ''}
+              ${SES_IS_ADMIN ? `<button class="ui-btn ui-btn-ghost ui-btn-xs" style="color:var(--red);" onclick="deleteSession(${s.id}, '${escapeHtml(s.nom)}')">🗑</button>` : ''}
+            </div>
+          </div>
+          ${s.description ? `<div style="font-size:12px;color:var(--muted);margin-top:4px;">${escapeHtml(s.description)}</div>` : ''}
+          <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+            <div style="flex:1;height:6px;background:var(--bg4);border-radius:3px;overflow:hidden;">
+              <div style="width:${pct}%;height:100%;background:${barColor};transition:width 0.6s;"></div>
+            </div>
+            <span style="font-family:var(--font-mono);font-size:10px;color:var(--muted);min-width:60px;text-align:right;">
+              ${ok} / ${total} ok (${pct}%)
+            </span>
+          </div>
+        </div>`;
+    }).join('');
+  } catch (e) {
+    list.innerHTML = '<div style="padding:14px;color:var(--red);font-size:11px;">Erreur réseau</div>';
+  }
+}
+
+function escapeHtml(s) {
+  return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function saveSession() {
+  const id   = document.getElementById('sessionId').value;
+  const data = {
+    nom:         document.getElementById('sessionNom').value.trim(),
+    description: document.getElementById('sessionDesc').value.trim(),
+    date_debut:  document.getElementById('sessionDateDebut').value,
+    date_fin:    document.getElementById('sessionDateFin').value,
+  };
+  if (!data.nom) {
+    const err = document.getElementById('sessionErr');
+    err.textContent = 'Nom de session requis.'; err.style.display = 'block';
+    return;
+  }
+  const url    = id
+    ? `/api/projets/${encodeURIComponent(SES_PROJET)}/sessions/${id}`
+    : `/api/projets/${encodeURIComponent(SES_PROJET)}/sessions`;
+  const method = id ? 'PATCH' : 'POST';
+  const res = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(data) });
+  if (!res.ok) {
+    const j = await res.json().catch(()=>({}));
+    const err = document.getElementById('sessionErr');
+    err.textContent = j.error || 'Erreur'; err.style.display = 'block';
+    return;
+  }
+  closeSessionModal();
+  loadSessions();
+  showToast(id ? 'Session modifiée' : 'Session créée', 'success', 2000);
+}
+
+async function deleteSession(id, nom) {
+  if (!confirm(`Supprimer la session "${nom}" ? Les animaux ne seront pas supprimés.`)) return;
+  const res = await fetch(`/api/projets/${encodeURIComponent(SES_PROJET)}/sessions/${id}`, { method: 'DELETE' });
+  if (res.ok) { loadSessions(); showToast('Session supprimée', 'success', 1500); }
+}
+
+loadSessions();
+</script>
+
 <!-- ─── Journal projet (CR de réunions, notes, décisions) ────────────────── -->
 <div class="rounded-xl border border-border bg-card shadow-card overflow-hidden" id="journalCard">
   <div class="flex items-center justify-between px-5 py-3 border-b border-border">
@@ -366,7 +612,8 @@ function relTime(iso) {
   if (diff < 3600)  return Math.floor(diff/60) + ' min';
   if (diff < 86400) return Math.floor(diff/3600) + ' h';
   if (diff < 7*86400) return Math.floor(diff/86400) + ' j';
-  return d.toLocaleDateString('fr-FR', { day:'numeric', month:'short', year:'numeric' });
+  // CR #20 : format de dates standardisé ISO 8601 (YYYY-MM-DD)
+  return d.toISOString().slice(0, 10);
 }
 
 async function loadNotes() {
@@ -518,15 +765,6 @@ loadNotes();
              placeholder="ex : Rat-1" style="width:140px;">
     </div>
     <div class="form-row">
-      <label class="form-label">Espèce</label>
-      <select class="form-select" name="espece" style="width:140px;">
-        <option value="">Toutes</option>
-        {% for e in especes %}
-          <option value="{{ e }}" {% if filtre_espece == e %}selected{% endif %}>{{ e }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <div class="form-row">
       <label class="form-label">Statut</label>
       <select class="form-select" name="statut" style="width:150px;">
         <option value="">Tous</option>
@@ -537,7 +775,7 @@ loadNotes();
       </select>
     </div>
     <button type="submit" class="btn-primary">Filtrer</button>
-    {% if filtre_statut or filtre_espece or filtre_q %}
+    {% if filtre_statut or filtre_q %}
       <a href="/projet/{{ projet.nom }}" class="btn-ghost" style="text-decoration:none;padding:9px 16px;">Réinitialiser</a>
     {% endif %}
   </form>
@@ -549,7 +787,7 @@ loadNotes();
   {% if animaux %}
   <table class="data-table">
     <thead>
-      <tr><th>ID</th><th>Dossier NAS</th><th>Espèce</th><th>1ère acq.</th><th>Nb acq.</th><th>Statut</th></tr>
+      <tr><th>ID</th><th>Dossier NAS</th><th>1ère acq.</th><th>Nb acq.</th><th>Statut</th></tr>
     </thead>
     <tbody>
     {% for a in animaux %}
@@ -563,7 +801,6 @@ loadNotes();
         <td class="mono" style="font-size:10px;color:var(--hint);">
           {{ a.date_premiere_acq or "00000000" }}_{{ a.animal_id }}/
         </td>
-        <td>{{ a.espece or "—" }}</td>
         <td class="mono">{{ a.date_premiere_acq or "—" }}</td>
         <td class="mono">{{ a.nb_acquisitions }}</td>
         <td>

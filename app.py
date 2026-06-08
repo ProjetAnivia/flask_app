@@ -20,6 +20,19 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 
+# ── Synchronisation Google Calendar (push one-way) ───────────────────────
+# Le module charge sa config via les variables d'environnement :
+#   GOOGLE_CALENDAR_CREDENTIALS_PATH, GOOGLE_CALENDAR_ID, GOOGLE_CALENDAR_ENABLED
+# Si non configuré → no-op silencieux (le Dashboard fonctionne normalement).
+try:
+    import google_calendar as gcal
+except Exception as _gcal_err:  # pragma: no cover
+    gcal = None
+    print(f"[google_calendar] module non chargé : {_gcal_err}")
+
+# ── i18n (CR #21) ────────────────────────────────────────────────────────
+from i18n import translate as _t_func, get_supported_languages
+
 def sanitize_animal_id(raw: str) -> str:
     """
     Normalise un ID animal — convention F2 client :
@@ -64,6 +77,234 @@ EMAIL_FROM_NAME  = os.environ.get("EMAIL_FROM_NAME", "IRM.FAIR")
 EMAIL_FROM_ADDR  = os.environ.get("EMAIL_FROM_ADDR", "")
 APP_URL   = os.environ.get("APP_URL",   "http://localhost:5001")
 EMAIL_CONFIGURED = bool(BREVO_API_KEY or RESEND_API_KEY or SMTP_HOST)
+
+
+# ── Demi-journées (CR CHR) ────────────────────────────────────────────────
+# Convention : matin = 09:00 → 12:30 (3h30) ; après-midi = 13:30 → 17:00 ;
+# journée = 09:00 → 17:00. "custom" laisse l'utilisateur saisir heure+durée.
+PERIODE_PRESETS = {
+    "matin":      {"heure": "09:00", "duree": 210, "label": "Matin"},
+    "apres_midi": {"heure": "13:30", "duree": 210, "label": "Après-midi"},
+    "journee":    {"heure": "09:00", "duree": 480, "label": "Journée"},
+}
+
+
+def resolve_periode(periode: str | None,
+                    heure_debut: str | None,
+                    duree_min: int | None) -> tuple[str | None, str | None, int | None]:
+    """
+    Si une période preset est demandée → renvoie (periode, heure, durée) du preset.
+    Sinon (custom/None) → renvoie (custom_ou_None, heure_passée, durée_passée).
+    """
+    if periode in PERIODE_PRESETS:
+        p = PERIODE_PRESETS[periode]
+        return periode, p["heure"], p["duree"]
+    # Custom : on garde ce que l'utilisateur a saisi.
+    # Tag "custom" uniquement si l'heure a été fournie sans correspondre à un preset.
+    if heure_debut:
+        return ("custom", heure_debut, duree_min)
+    return (None, heure_debut, duree_min)
+
+
+# ── Google Calendar sync helpers ──────────────────────────────────────────
+def _gcal_fetch_acq(db, acq_id: int) -> dict | None:
+    """Recharge une acquisition enrichie (avec scanner + chercheur) pour la sync."""
+    # CR #14 : on inclut le resp du projet pour l'afficher dans Google Calendar
+    row = db.execute(
+        """SELECT a.*, s.nom AS scanner_nom, s.couleur AS scanner_couleur,
+                  p.resp AS projet_resp, p.nom_long AS projet_nom_long
+           FROM acquisitions a
+           LEFT JOIN scanners s ON s.id = a.scanner_id
+           LEFT JOIN projets  p ON p.nom = a.projet
+           WHERE a.id=?""",
+        (acq_id,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def gcal_sync_acquisition(acq_id: int) -> None:
+    """
+    Crée ou met à jour l'événement Google Calendar pour cette acquisition.
+    Best-effort, ne lève jamais — la sync ne doit pas bloquer le Dashboard.
+    Sauvegarde le google_event_id retourné dans la DB.
+    """
+    if not gcal:
+        return
+    try:
+        with get_db() as db:
+            acq = _gcal_fetch_acq(db, acq_id)
+            if not acq:
+                return
+            # Pas de date/heure → on ne crée pas d'événement
+            if not acq.get("date_acq") or not acq.get("heure_debut"):
+                return
+            new_event_id = gcal.upsert_event(acq, app_url=APP_URL)
+            if new_event_id and new_event_id != acq.get("google_event_id"):
+                db.execute(
+                    "UPDATE acquisitions SET google_event_id=? WHERE id=?",
+                    (new_event_id, acq_id)
+                )
+                db.commit()
+    except Exception as e:
+        print(f"[gcal_sync_acquisition] acq={acq_id} : {e}")
+
+
+def gcal_delete_acquisition(event_id: str | None) -> None:
+    """Supprime l'événement Google si présent. Best-effort."""
+    if not gcal or not event_id:
+        return
+    try:
+        gcal.delete_event(event_id)
+    except Exception as e:
+        print(f"[gcal_delete_acquisition] event={event_id} : {e}")
+
+
+# ─── Reverse-sync (pull from Google → DB) ─────────────────────────────────
+def _kv_get(db, key: str) -> str | None:
+    row = db.execute("SELECT value FROM app_settings WHERE key=?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def _kv_set(db, key: str, value: str | None) -> None:
+    if value is None:
+        db.execute("DELETE FROM app_settings WHERE key=?", (key,))
+    else:
+        db.execute(
+            "INSERT INTO app_settings(key,value) VALUES(?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value)
+        )
+
+
+def gcal_pull_changes() -> dict:
+    """
+    Polling : récupère les événements modifiés/supprimés depuis le dernier sync
+    et applique les changements à la DB.
+
+    Règles :
+    - Événement supprimé côté Google (status='cancelled') ET correspondant à
+      une acquisition existante → on supprime l'acquisition.
+    - Événement modifié (date/heure/durée) ET correspondant à une acquisition
+      existante → on met à jour date_acq, heure_debut, duree_min.
+    - Événement créé côté Google sans acq_id : IGNORÉ (la création reste sur
+      le Dashboard pour préserver les métadonnées projet/animal/séquence).
+
+    IMPORTANT : les écritures DB faites ici NE déclenchent PAS de re-push
+    vers Google (on appelle pas gcal_sync_acquisition), donc pas de boucle.
+
+    Retourne {ok, updated, deleted, ignored}.
+    """
+    if not gcal or not gcal.is_enabled():
+        return {"ok": False, "reason": "gcal disabled"}
+
+    with get_db() as db:
+        sync_token = _kv_get(db, "gcal_sync_token")
+
+    result = gcal.list_changes(sync_token=sync_token)
+    if result.get("full_resync_needed"):
+        # Force un full resync : on retire le token et on rappelle
+        with get_db() as db:
+            _kv_set(db, "gcal_sync_token", None)
+            db.commit()
+        result = gcal.list_changes(sync_token=None)
+
+    events = result.get("events", [])
+    updated, deleted, ignored = 0, 0, 0
+
+    with get_db() as db:
+        for ev in events:
+            parsed = gcal.parse_event_to_acq_fields(ev)
+            acq_id   = parsed.get("acq_id")
+            event_id = parsed.get("google_event_id")
+
+            # Pas d'acq_id dans les extendedProperties → c'est soit un événement
+            # créé manuellement dans Google (qu'on ignore par design), soit un
+            # événement qu'on a perdu en DB.
+            if not acq_id:
+                # Fallback : si on retrouve un acq par google_event_id, on l'utilise
+                if event_id:
+                    row = db.execute(
+                        "SELECT id FROM acquisitions WHERE google_event_id=?",
+                        (event_id,)
+                    ).fetchone()
+                    if row:
+                        acq_id = row["id"]
+                if not acq_id:
+                    ignored += 1
+                    continue
+
+            # Vérifie que l'acq existe encore
+            row = db.execute(
+                "SELECT id, date_acq, heure_debut, duree_min, projet, animal_id, sequence "
+                "FROM acquisitions WHERE id=?",
+                (acq_id,)
+            ).fetchone()
+            if not row:
+                ignored += 1
+                continue
+
+            # Événement supprimé côté Google → on supprime l'acquisition
+            if parsed.get("status") == "cancelled":
+                db.execute("DELETE FROM acquisitions WHERE id=?", (acq_id,))
+                db.execute(
+                    "UPDATE animaux SET nb_acquisitions = "
+                    "  CASE WHEN nb_acquisitions > 0 THEN nb_acquisitions-1 ELSE 0 END "
+                    "WHERE animal_id=? AND projet=?",
+                    (row["animal_id"], row["projet"])
+                )
+                deleted += 1
+                continue
+
+            # Sinon : modification éventuelle de date/heure/durée
+            new_date  = parsed.get("date_acq")
+            new_heure = parsed.get("heure_debut")
+            new_duree = parsed.get("duree_min")
+            changes = {}
+            if new_date  and new_date  != row["date_acq"]:    changes["date_acq"]    = new_date
+            if new_heure and new_heure != row["heure_debut"]: changes["heure_debut"] = new_heure
+            if new_duree and new_duree != row["duree_min"]:   changes["duree_min"]   = new_duree
+            if changes:
+                set_clause = ", ".join(f"{k}=?" for k in changes)
+                params = list(changes.values()) + [acq_id]
+                db.execute(f"UPDATE acquisitions SET {set_clause} WHERE id=?", params)
+                updated += 1
+
+        # Persiste le nouveau syncToken pour la prochaine fois
+        new_token = result.get("next_sync_token")
+        if new_token:
+            _kv_set(db, "gcal_sync_token", new_token)
+        db.commit()
+
+    if updated or deleted:
+        print(f"[gcal-pull] {updated} maj, {deleted} suppr, {ignored} ignorés", flush=True)
+    return {"ok": True, "updated": updated, "deleted": deleted, "ignored": ignored}
+
+
+# Thread polling : tire les changements Google toutes les 2 minutes
+_gcal_poll_started = False
+def _gcal_poll_loop():
+    """Boucle de polling reverse-sync. 1ère exécution après 20s, puis toutes les 120s."""
+    time.sleep(20)
+    while True:
+        try:
+            gcal_pull_changes()
+        except Exception as exc:
+            print(f"[gcal-pull] erreur : {exc}", flush=True)
+        time.sleep(120)
+
+
+def _ensure_gcal_poll():
+    global _gcal_poll_started
+    if _gcal_poll_started:
+        return
+    if not gcal or not gcal.is_enabled():
+        print("[gcal-pull] non démarré (gcal désactivé)", flush=True)
+        return
+    _gcal_poll_started = True
+    t = threading.Thread(target=_gcal_poll_loop, daemon=True, name="gcal-poll")
+    t.start()
+    print("[gcal-pull] démarré (poll 120s)", flush=True)
+
 
 # ── reCAPTCHA v3 (optionnel — désactivé si clés absentes) ───────────────────
 RECAPTCHA_SITE_KEY      = os.environ.get("RECAPTCHA_SITE_KEY",   "")
@@ -361,6 +602,51 @@ def init_db():
             sent_at      TEXT NOT NULL,
             UNIQUE(user_id, kind, ref_date)
         );
+
+        /* ── Sessions (groupe d'animaux dans un projet) ── */
+        CREATE TABLE IF NOT EXISTS sessions (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            projet      TEXT NOT NULL,
+            nom         TEXT NOT NULL,
+            description TEXT,
+            date_debut  TEXT,
+            date_fin    TEXT,
+            created_at  TEXT NOT NULL,
+            created_by  TEXT,
+            UNIQUE(projet, nom)
+        );
+        CREATE INDEX IF NOT EXISTS idx_sessions_projet ON sessions(projet);
+
+        /* ── Appareils IRM (scanners) ── */
+        CREATE TABLE IF NOT EXISTS scanners (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            nom         TEXT UNIQUE NOT NULL,
+            couleur     TEXT NOT NULL DEFAULT '#3b82f6',
+            description TEXT,
+            actif       INTEGER DEFAULT 1
+        );
+
+        /* ── Audit log (qui a fait quoi, quand) ── */
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            username     TEXT NOT NULL,
+            action       TEXT NOT NULL,
+            entity_type  TEXT,
+            entity_id    TEXT,
+            entity_label TEXT,
+            projet       TEXT,
+            details      TEXT,
+            created_at   TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_audit_log_date    ON audit_log(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_audit_log_user    ON audit_log(username);
+        CREATE INDEX IF NOT EXISTS idx_audit_log_projet  ON audit_log(projet);
+
+        -- Petit kv store pour persister sync_token Google Calendar, etc.
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key   TEXT PRIMARY KEY,
+            value TEXT
+        );
         """)
 
         # Migration douce — ajoute les colonnes si absentes (SQLite ne supporte pas IF NOT EXISTS sur ALTER)
@@ -386,6 +672,24 @@ def init_db():
             # ── Planification (créneau réservé sur l'IRM) ─────────────────────
             "ALTER TABLE acquisitions ADD COLUMN heure_debut TEXT",
             "ALTER TABLE acquisitions ADD COLUMN duree_min INTEGER",
+            # ── Sessions, scanners (CR CHR 06/05) ─────────────────────────────
+            "ALTER TABLE animaux ADD COLUMN session_id INTEGER",
+            "ALTER TABLE acquisitions ADD COLUMN session_id INTEGER",
+            "ALTER TABLE acquisitions ADD COLUMN scanner_id INTEGER",
+            # ── TEP : dose injectée + produit radioactif ──────────────────────
+            "ALTER TABLE acquisitions ADD COLUMN tep_dose_mbq REAL",
+            "ALTER TABLE acquisitions ADD COLUMN tep_produit TEXT",
+            # ── Nom complet du projet (en plus de l'acronyme) ─────────────────
+            "ALTER TABLE projets ADD COLUMN nom_long TEXT",
+            # ── Synchronisation Google Calendar (CR CHR — sync mobile 3 chercheurs) ──
+            "ALTER TABLE acquisitions ADD COLUMN google_event_id TEXT",
+            # ── Demi-journées (CR CHR : créneaux matin/après-midi) ────────────
+            "ALTER TABLE acquisitions ADD COLUMN periode TEXT",
+            # ── Préférence de langue par utilisateur (CR #21 : EN optional) ──
+            "ALTER TABLE users ADD COLUMN lang TEXT DEFAULT 'fr'",
+            # ── Soft delete + restauration comptes utilisateurs ──────────────
+            "ALTER TABLE users ADD COLUMN deleted_at TEXT",
+            "ALTER TABLE users ADD COLUMN deleted_by TEXT",
         ]:
             try:
                 db.execute(col_sql)
@@ -438,6 +742,50 @@ def init_db():
             ]
             for a in animaux_demo:
                 db.execute("INSERT OR IGNORE INTO animaux (animal_id,espece,projet,date_premiere_acq,nb_acquisitions,statut) VALUES (?,?,?,?,?,?)", a)
+
+        # ── Seed des 3 appareils IRM (toujours, idempotent) ──────────────────
+        scanners_demo = [
+            ("IRM-1", "#3b82f6", "Bruker 7T — petit animal"),
+            ("IRM-2", "#10b981", "Bruker 9.4T — recherche"),
+            ("IRM-3", "#f59e0b", "Système clinique 3T"),
+        ]
+        for nom, couleur, desc in scanners_demo:
+            db.execute(
+                "INSERT OR IGNORE INTO scanners (nom, couleur, description) VALUES (?,?,?)",
+                (nom, couleur, desc)
+            )
+
+        # ── Migration : assigner une session par défaut aux animaux sans session
+        # Pour chaque projet ayant des animaux orphelins, créer la session "S0" et l'assigner.
+        now_iso = datetime.now().isoformat()
+        projets_orphelins = db.execute(
+            "SELECT DISTINCT projet FROM animaux WHERE session_id IS NULL"
+        ).fetchall()
+        for row in projets_orphelins:
+            projet_nom = row["projet"]
+            # Créer la session S0 si elle n'existe pas
+            existing_s0 = db.execute(
+                "SELECT id FROM sessions WHERE projet=? AND nom='S0'", (projet_nom,)
+            ).fetchone()
+            if existing_s0:
+                s0_id = existing_s0["id"]
+            else:
+                cur = db.execute(
+                    """INSERT INTO sessions (projet, nom, description, created_at, created_by)
+                       VALUES (?, 'S0', 'Session par défaut', ?, 'system')""",
+                    (projet_nom, now_iso)
+                )
+                s0_id = cur.lastrowid
+            # Assigner tous les animaux orphelins de ce projet à S0
+            db.execute(
+                "UPDATE animaux SET session_id=? WHERE projet=? AND session_id IS NULL",
+                (s0_id, projet_nom)
+            )
+            # Idem pour les acquisitions
+            db.execute(
+                "UPDATE acquisitions SET session_id=? WHERE projet=? AND session_id IS NULL",
+                (s0_id, projet_nom)
+            )
 
         # ── Données demo mai 2026 ─────────────────────────────────────────────
         # Injectées au démarrage si absentes — permet de visualiser l'historique
@@ -871,6 +1219,69 @@ def projet_require_view(projet: str):
 
 
 # ─────────────────────────────────────────────────
+#  Helpers métier — sessions, full_id, scanners
+# ─────────────────────────────────────────────────
+
+def compute_full_id(projet: str, session_nom: str | None, animal_id: str) -> str:
+    """Convention CR CHR 06/05 : nomprojet_session_nomanimal."""
+    p = sanitize_animal_id(projet or "PROJET")
+    s = sanitize_animal_id(session_nom or "S0")
+    a = sanitize_animal_id(animal_id or "?")
+    return f"{p}_{s}_{a}"
+
+
+def get_session_name(session_id: int | None) -> str | None:
+    """Récupère le nom de la session par ID (cache simple)."""
+    if not session_id:
+        return None
+    with get_db() as db:
+        r = db.execute("SELECT nom FROM sessions WHERE id=?", (session_id,)).fetchone()
+    return r["nom"] if r else None
+
+
+def get_scanner(scanner_id: int | None) -> dict | None:
+    """Récupère un scanner par ID."""
+    if not scanner_id:
+        return None
+    with get_db() as db:
+        r = db.execute("SELECT * FROM scanners WHERE id=?", (scanner_id,)).fetchone()
+    return dict(r) if r else None
+
+
+# ─────────────────────────────────────────────────
+#  AUDIT LOG — qui a fait quoi, quand
+# ─────────────────────────────────────────────────
+
+def log_action(action: str, entity_type: str | None = None,
+               entity_id: str | int | None = None,
+               entity_label: str | None = None,
+               projet: str | None = None,
+               details: dict | None = None) -> None:
+    """
+    Enregistre une action dans l'audit log. À appeler depuis les routes write.
+    Silencieux en cas d'erreur (ne doit jamais bloquer une action métier).
+    """
+    try:
+        username = (current_user.username if current_user.is_authenticated
+                    else "anonymous")
+        with get_db() as db:
+            db.execute(
+                """INSERT INTO audit_log
+                   (username, action, entity_type, entity_id, entity_label,
+                    projet, details, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (username, action, entity_type,
+                 str(entity_id) if entity_id is not None else None,
+                 entity_label, projet,
+                 json.dumps(details, ensure_ascii=False) if details else None,
+                 datetime.now().isoformat())
+            )
+            db.commit()
+    except Exception as exc:
+        print(f"[audit_log] erreur : {exc}", flush=True)
+
+
+# ─────────────────────────────────────────────────
 #  NOTIFICATIONS — inbox in-app + emails optionnels
 # ─────────────────────────────────────────────────
 #
@@ -1242,7 +1653,7 @@ def set_security_headers(resp):
         "style-src 'self' 'unsafe-inline' "
             "https://fonts.googleapis.com https://cdn.jsdelivr.net; "
         "font-src 'self' https://fonts.gstatic.com; "
-        "frame-src https://www.google.com; "
+        "frame-src https://www.google.com https://calendar.google.com; "
         "img-src 'self' data: https:; "
         "connect-src 'self';"
     )
@@ -1253,6 +1664,56 @@ def inject_csrf():
     if "csrf_token" not in session:
         session["csrf_token"] = secrets.token_hex(32)
     return {"csrf_token": session["csrf_token"]}
+
+
+# ── i18n (CR #21) — injection lang + filtre Jinja `| t` ───────────────────
+def _get_current_lang() -> str:
+    """Détermine la langue active : session > préférence user > 'fr'."""
+    if "lang" in session:
+        return session["lang"]
+    try:
+        if current_user.is_authenticated:
+            lang = getattr(current_user, "lang", None)
+            if lang in ("fr", "en"):
+                return lang
+    except Exception:
+        pass
+    return "fr"
+
+
+@app.context_processor
+def inject_lang():
+    lang = _get_current_lang()
+    return {
+        "lang": lang,
+        "supported_langs": get_supported_languages(),
+    }
+
+
+@app.template_filter("t")
+def jinja_translate(s, lang=None):
+    """Filtre Jinja : {{ "Nouveau projet" | t }}. Lang implicite = session."""
+    return _t_func(s, lang or _get_current_lang())
+
+
+@app.route("/api/lang", methods=["POST"])
+def api_set_lang():
+    """Change la langue active. Sauvegardé en session (et en DB si user connecté)."""
+    data = request.json or {}
+    lang = (data.get("lang") or "").strip().lower()
+    if lang not in ("fr", "en"):
+        return jsonify({"error": "Langue non supportée"}), 400
+    session["lang"] = lang
+    # Persiste sur l'utilisateur connecté
+    try:
+        if current_user.is_authenticated:
+            with get_db() as db:
+                db.execute("UPDATE users SET lang=? WHERE id=?",
+                           (lang, current_user.id))
+                db.commit()
+    except Exception:
+        pass
+    return jsonify({"ok": True, "lang": lang})
 
 # Chemins exemptés de la vérification CSRF (flux non-authentifiés)
 _CSRF_EXEMPT_PREFIXES = ("/reset-password/",)
@@ -1512,10 +1973,17 @@ def page_animaux():
     filtre_projet = request.args.get("projet", "")
     filtre_statut = request.args.get("statut", "")
     with get_db() as db:
-        q, params = "SELECT * FROM animaux WHERE 1=1", []
-        if filtre_projet: q += " AND projet=?"; params.append(filtre_projet)
-        if filtre_statut: q += " AND statut=?"; params.append(filtre_statut)
-        animaux = db.execute(q + " ORDER BY projet, animal_id", params).fetchall()
+        # CR #14 : JOIN sur projets pour récupérer le chercheur (resp) + nom long
+        q = """SELECT a.*, s.nom AS session_nom,
+                      p.resp AS projet_resp, p.nom_long AS projet_nom_long
+               FROM animaux a
+               LEFT JOIN sessions s ON s.id = a.session_id
+               LEFT JOIN projets  p ON p.nom = a.projet
+               WHERE 1=1"""
+        params: list = []
+        if filtre_projet: q += " AND a.projet=?"; params.append(filtre_projet)
+        if filtre_statut: q += " AND a.statut=?"; params.append(filtre_statut)
+        animaux = db.execute(q + " ORDER BY a.projet, a.animal_id", params).fetchall()
         projets = db.execute("SELECT nom FROM projets ORDER BY nom").fetchall()
         total   = db.execute("SELECT COUNT(*) FROM animaux").fetchone()[0]
 
@@ -1523,25 +1991,42 @@ def page_animaux():
     animaux = [a for a in animaux if user_can_view_projet(current_user, a["projet"])]
     projets = [p for p in projets if user_can_view_projet(current_user, p["nom"])]
 
+    # Enrichit avec full_id (convention CR : projet_session_animal)
+    enriched = []
+    for a in animaux:
+        d = dict(a)
+        d["full_id"] = compute_full_id(d["projet"], d.get("session_nom"), d["animal_id"])
+        enriched.append(d)
+
     return render_template("animaux.html",
-        animaux=[dict(a) for a in animaux], projets=[p["nom"] for p in projets],
-        total=len(animaux), filtre_projet=filtre_projet, filtre_statut=filtre_statut)
+        animaux=enriched, projets=[p["nom"] for p in projets],
+        total=len(enriched), filtre_projet=filtre_projet, filtre_statut=filtre_statut)
 
 @app.route("/projets")
 @login_required
 def page_projets():
-    return redirect("/")
+    """Page dédiée à la liste des projets (réutilise la logique dashboard)."""
+    # Délègue à la fonction dashboard pour réutiliser toute la logique de filtrage
+    # avec un flag pour signaler à la vue qu'on est en mode "liste projets"
+    return dashboard()
 
 
 @app.route("/archive")
 @login_required
 def page_archive():
+    sort = request.args.get("sort", "date_desc")  # date_desc | date_asc | nom | nb_acq
     with get_db() as db:
         projets_raw    = db.execute(
             "SELECT * FROM projets WHERE statut='terminé' ORDER BY nom"
         ).fetchall()
         acq_par_projet = db.execute("SELECT projet, COUNT(*) as n FROM acquisitions GROUP BY projet").fetchall()
         statuts        = db.execute("SELECT projet, statut, COUNT(*) as n FROM animaux GROUP BY projet, statut").fetchall()
+        # Date d'archivage = dernière action 'archive_projet' dans audit_log (sinon date_fin_prevue)
+        dates_archive_raw = db.execute(
+            "SELECT entity_id, MAX(created_at) AS archived_at "
+            "FROM audit_log WHERE action='archive_projet' GROUP BY entity_id"
+        ).fetchall()
+    archive_dates = {r["entity_id"]: r["archived_at"] for r in dates_archive_raw}
     acq_map    = {r["projet"]: r["n"] for r in acq_par_projet}
     statut_map = {}
     for s in statuts:
@@ -1549,19 +2034,30 @@ def page_archive():
     projets = []
     for p in projets_raw:
         seq     = p["seq_par_animal"] or 3
-        prevues = p["nb_animaux_prevus"] * seq
+        prevues = (p["nb_animaux_prevus"] or 0) * seq
         faites  = acq_map.get(p["nom"], 0)
         pct     = round(faites / prevues * 100) if prevues else 0
         sm      = statut_map.get(p["nom"], {})
+        archived_at = archive_dates.get(p["nom"]) or p["date_fin_prevue"] or ""
         projets.append({"nom": p["nom"], "resp": p["resp"],
-                        "nb_prevus": p["nb_animaux_prevus"],
+                        "nb_prevus": p["nb_animaux_prevus"] or 0,
                         "seq_par_animal": seq,
                         "prevues": prevues, "faites": faites, "pct": pct,
+                        "archived_at": archived_at[:10] if archived_at else "",
                         "nb_ok":      sm.get("ok", 0),
                         "nb_attente": sm.get("en_attente", 0),
                         "nb_cours":   sm.get("en_cours", 0),
                         "nb_refaire": sm.get("a_refaire", 0)})
-    return render_template("archive.html", projets=projets)
+    # Tri demandé
+    if sort == "date_asc":
+        projets.sort(key=lambda x: x["archived_at"] or "0000-00-00")
+    elif sort == "date_desc":
+        projets.sort(key=lambda x: x["archived_at"] or "0000-00-00", reverse=True)
+    elif sort == "nom":
+        projets.sort(key=lambda x: x["nom"])
+    elif sort == "nb_acq":
+        projets.sort(key=lambda x: x["faites"], reverse=True)
+    return render_template("archive.html", projets=projets, sort=sort)
 
 
 @app.route("/api/projets/<nom>/dates", methods=["PATCH"])
@@ -1614,6 +2110,26 @@ def api_projets_acq_prevues(nom):
         faites = db.execute("SELECT COUNT(*) FROM acquisitions WHERE projet=?", (nom,)).fetchone()[0]
         pct = round(faites / prevues * 100) if prevues else 0
     return jsonify({"ok": True, "nom": nom, "prevues": prevues, "faites": faites, "pct": pct})
+
+
+@app.route("/api/projets/<nom>/nom-long", methods=["PATCH"])
+@login_required
+@role_required("admin", "operateur")
+def api_set_projet_nom_long(nom):
+    """CR #10 : édition du nom complet (acronyme reste figé)."""
+    if not user_can_edit_projet(current_user, nom):
+        return jsonify({"error": "Droits insuffisants sur ce projet"}), 403
+    data = request.json or {}
+    val = (data.get("nom_long") or "").strip() or None
+    if val and len(val) > 200:
+        return jsonify({"error": "Nom complet trop long (max 200 caractères)"}), 400
+    with get_db() as db:
+        row = db.execute("SELECT nom FROM projets WHERE nom=?", (nom,)).fetchone()
+        if not row:
+            return jsonify({"error": "Projet introuvable"}), 404
+        db.execute("UPDATE projets SET nom_long=? WHERE nom=?", (val, nom))
+        db.commit()
+    return jsonify({"ok": True, "nom_long": val})
 
 
 @app.route("/api/projets/<nom>/ethique", methods=["PATCH"])
@@ -1699,14 +2215,79 @@ def page_logs():
 @role_required("admin")
 def page_users():
     with get_db() as db:
-        users = db.execute("SELECT id, username, role FROM users ORDER BY role, username").fetchall()
-        total = db.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-    return render_template("users.html", users=[dict(u) for u in users], total=total)
+        # Comptes actifs
+        users = db.execute(
+            "SELECT id, username, role, email, deleted_at FROM users "
+            "WHERE deleted_at IS NULL "
+            "ORDER BY role, username"
+        ).fetchall()
+        # Comptes supprimés (corbeille)
+        users_deleted = db.execute(
+            "SELECT id, username, role, email, deleted_at, deleted_by FROM users "
+            "WHERE deleted_at IS NOT NULL "
+            "ORDER BY deleted_at DESC"
+        ).fetchall()
+        total = db.execute(
+            "SELECT COUNT(*) FROM users WHERE deleted_at IS NULL"
+        ).fetchone()[0]
+    return render_template("users.html",
+        users=[dict(u) for u in users],
+        users_deleted=[dict(u) for u in users_deleted],
+        total=total)
 
 
 # ─────────────────────────────────────────────────
 #  API — DASHBOARD
 # ─────────────────────────────────────────────────
+
+@app.route("/api/qualite/summary")
+@login_required
+def api_qualite_summary():
+    """Résumé qualité d'image sur les projets accessibles à l'utilisateur."""
+    with get_db() as db:
+        rows = db.execute(
+            """SELECT projet, qualite, COUNT(*) as n
+               FROM acquisitions
+               WHERE qualite IS NOT NULL AND qualite != ''
+               GROUP BY projet, qualite"""
+        ).fetchall()
+        projets_rows = db.execute("SELECT nom FROM projets ORDER BY nom").fetchall()
+
+    visibles = [p["nom"] for p in projets_rows
+                if user_can_view_projet(current_user, p["nom"])]
+
+    by_projet: dict[str, dict] = {}
+    totaux = {"excellente": 0, "bonne": 0, "degradee": 0, "inutilisable": 0}
+    for r in rows:
+        if r["projet"] not in visibles:
+            continue
+        by_projet.setdefault(r["projet"], {
+            "excellente": 0, "bonne": 0, "degradee": 0, "inutilisable": 0
+        })
+        if r["qualite"] in by_projet[r["projet"]]:
+            by_projet[r["projet"]][r["qualite"]] += r["n"]
+            totaux[r["qualite"]] += r["n"]
+
+    # Score qualité par projet : (excellente*4 + bonne*3 + degradee*2 + inutilisable*1) / total / 4
+    projets_scored = []
+    for p, q in by_projet.items():
+        total = sum(q.values())
+        if total == 0:
+            continue
+        score = (q["excellente"]*4 + q["bonne"]*3 + q["degradee"]*2 + q["inutilisable"]*1) / total / 4
+        projets_scored.append({
+            "projet": p, "total": total, **q,
+            "score": round(score * 100),
+        })
+    projets_scored.sort(key=lambda x: -x["score"])
+
+    grand_total = sum(totaux.values())
+    return jsonify({
+        "totaux": totaux,
+        "grand_total": grand_total,
+        "projets": projets_scored,
+    })
+
 
 @app.route("/api/stats")
 @login_required
@@ -1836,12 +2417,23 @@ def api_charts_dashboard():
 def api_add_projet():
     data = request.json or {}
     nom            = data.get("nom", "").strip()
+    nom_long       = (data.get("nom_long") or "").strip() or None
     resp           = data.get("resp", "").strip()
-    nb_animaux     = data.get("nb_animaux", 0)
+    # CR #19 : nb_animaux est optionnel — on accepte vide / null / 0
+    nb_raw = data.get("nb_animaux")
+    if nb_raw in (None, "", 0, "0"):
+        nb_animaux = 0
+    else:
+        try:
+            nb_animaux = max(0, int(nb_raw))
+        except (ValueError, TypeError):
+            return jsonify({"error": "Nombre d'animaux invalide"}), 400
     seq_par_animal = max(1, min(10, int(data.get("seq_par_animal", 3) or 3)))
 
     if not nom:
-        return jsonify({"error": "Nom du projet requis"}), 400
+        return jsonify({"error": "Acronyme du projet requis"}), 400
+    if nom_long and len(nom_long) > 200:
+        return jsonify({"error": "Nom complet trop long (max 200 caractères)"}), 400
 
     nom_clean = re.sub(r"[^a-zA-Z0-9_\-]", "_", nom).strip("_").lower()
     if not nom_clean:
@@ -1850,12 +2442,15 @@ def api_add_projet():
     try:
         with get_db() as db:
             db.execute(
-                "INSERT INTO projets (nom, resp, nb_animaux_prevus, seq_par_animal) VALUES (?,?,?,?)",
-                (nom_clean, resp, int(nb_animaux), seq_par_animal)
+                "INSERT INTO projets (nom, nom_long, resp, nb_animaux_prevus, seq_par_animal) "
+                "VALUES (?,?,?,?,?)",
+                (nom_clean, nom_long, resp, int(nb_animaux), seq_par_animal)
             )
             db.commit()
         (NAS_ROOT / nom_clean).mkdir(parents=True, exist_ok=True)
         emit_event("projet_new", {"nom": nom_clean, "resp": resp, "par": current_user.username})
+        log_action("create_projet", "projet", nom_clean, nom_clean,
+                   projet=nom_clean, details={"resp": resp, "nb_animaux": int(nb_animaux)})
         return jsonify({"ok": True, "nom": nom_clean, "resp": resp, "seq_par_animal": seq_par_animal}), 201
     except sqlite3.IntegrityError:
         return jsonify({"error": f"Le projet « {nom_clean} » existe déjà"}), 409
@@ -1873,7 +2468,9 @@ def api_delete_projet(nom):
             return jsonify({"error": f"Impossible : {nb_acq} acquisition(s) liée(s) à ce projet"}), 409
         db.execute("DELETE FROM projets WHERE nom=?", (nom,))
         db.execute("DELETE FROM projet_membres WHERE projet=?", (nom,))
+        db.execute("DELETE FROM sessions WHERE projet=?", (nom,))
         db.commit()
+    log_action("delete_projet", "projet", nom, nom, projet=nom)
     return jsonify({"ok": True, "deleted": nom})
 
 
@@ -1936,6 +2533,8 @@ def api_projet_add_membre(nom):
     except Exception as exc:
         print(f"[notify] échec notification ajout membre : {exc}", flush=True)
 
+    log_action("add_member", "user", user["id"], username,
+               projet=nom, details={"role": role_projet})
     return jsonify({"ok": True})
 
 
@@ -2109,6 +2708,281 @@ def api_projet_remove_membre(nom, user_id):
 
 
 # ─────────────────────────────────────────────────
+#  API — SESSIONS (groupe d'animaux dans un projet)
+# ─────────────────────────────────────────────────
+
+@app.route("/api/projets/<nom>/sessions")
+@login_required
+def api_projet_sessions_list(nom):
+    if not user_can_view_projet(current_user, nom):
+        return jsonify({"error": "Accès refusé à ce projet"}), 403
+    with get_db() as db:
+        rows = db.execute(
+            """SELECT s.*,
+                      (SELECT COUNT(*) FROM animaux WHERE session_id = s.id) AS nb_animaux,
+                      (SELECT COUNT(*) FROM acquisitions a
+                       JOIN animaux an ON an.animal_id=a.animal_id AND an.projet=a.projet
+                       WHERE an.session_id = s.id) AS nb_acquisitions,
+                      (SELECT COUNT(*) FROM acquisitions a
+                       JOIN animaux an ON an.animal_id=a.animal_id AND an.projet=a.projet
+                       WHERE an.session_id = s.id AND a.statut='ok') AS nb_acq_ok
+               FROM sessions s
+               WHERE s.projet=?
+               ORDER BY s.date_debut DESC, s.nom""",
+            (nom,)
+        ).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route("/api/projets/<nom>/sessions", methods=["POST"])
+@login_required
+def api_projet_sessions_create(nom):
+    if not user_can_edit_projet(current_user, nom):
+        return jsonify({"error": "Droits insuffisants sur ce projet"}), 403
+    d = request.json or {}
+    session_nom = (d.get("nom") or "").strip()
+    if not session_nom:
+        return jsonify({"error": "Nom de session requis"}), 400
+    if len(session_nom) > 100:
+        return jsonify({"error": "Nom trop long (max 100)"}), 400
+
+    now_iso = datetime.now().isoformat()
+    with get_db() as db:
+        try:
+            cur = db.execute(
+                """INSERT INTO sessions (projet, nom, description, date_debut, date_fin, created_at, created_by)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (nom, session_nom, d.get("description") or None,
+                 d.get("date_debut") or None, d.get("date_fin") or None,
+                 now_iso, current_user.username)
+            )
+            new_id = cur.lastrowid
+            db.commit()
+        except sqlite3.IntegrityError:
+            return jsonify({"error": "Une session de ce nom existe déjà"}), 409
+
+    log_action("create_session", "session", new_id, session_nom, projet=nom)
+    return jsonify({"ok": True, "id": new_id}), 201
+
+
+@app.route("/api/projets/<nom>/sessions/<int:session_id>", methods=["PATCH"])
+@login_required
+def api_projet_sessions_update(nom, session_id):
+    if not user_can_edit_projet(current_user, nom):
+        return jsonify({"error": "Droits insuffisants sur ce projet"}), 403
+    d = request.json or {}
+    fields = {}
+    for k in ("nom", "description", "date_debut", "date_fin"):
+        if k in d:
+            v = (d[k] or "").strip() if isinstance(d[k], str) else d[k]
+            fields[k] = v or None
+    if not fields:
+        return jsonify({"error": "Aucun champ à modifier"}), 400
+    set_clause = ", ".join(f"{k}=?" for k in fields)
+    params = list(fields.values()) + [session_id, nom]
+    with get_db() as db:
+        try:
+            db.execute(
+                f"UPDATE sessions SET {set_clause} WHERE id=? AND projet=?", params
+            )
+            db.commit()
+        except sqlite3.IntegrityError:
+            return jsonify({"error": "Conflit de nom"}), 409
+    log_action("update_session", "session", session_id, fields.get("nom"), projet=nom)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/projets/<nom>/sessions/<int:session_id>", methods=["DELETE"])
+@login_required
+def api_projet_sessions_delete(nom, session_id):
+    if not user_can_edit_projet(current_user, nom):
+        return jsonify({"error": "Droits insuffisants sur ce projet"}), 403
+    with get_db() as db:
+        # Détacher les animaux et acquisitions (mais ne pas les supprimer)
+        db.execute("UPDATE animaux       SET session_id=NULL WHERE session_id=?", (session_id,))
+        db.execute("UPDATE acquisitions  SET session_id=NULL WHERE session_id=?", (session_id,))
+        db.execute("DELETE FROM sessions WHERE id=? AND projet=?", (session_id, nom))
+        db.commit()
+    log_action("delete_session", "session", session_id, projet=nom)
+    return jsonify({"ok": True})
+
+
+# ─────────────────────────────────────────────────
+#  API — SCANNERS (appareils IRM)
+# ─────────────────────────────────────────────────
+
+@app.route("/api/scanners")
+@login_required
+def api_scanners_list():
+    with get_db() as db:
+        rows = db.execute("SELECT * FROM scanners ORDER BY actif DESC, nom").fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route("/api/scanners", methods=["POST"])
+@login_required
+@role_required("admin")
+def api_scanners_create():
+    d = request.json or {}
+    nom     = (d.get("nom") or "").strip()
+    couleur = (d.get("couleur") or "#3b82f6").strip()
+    if not nom:
+        return jsonify({"error": "Nom requis"}), 400
+    if not re.match(r"^#[0-9a-fA-F]{6}$", couleur):
+        return jsonify({"error": "Couleur hex invalide (#RRGGBB)"}), 400
+    try:
+        with get_db() as db:
+            cur = db.execute(
+                "INSERT INTO scanners (nom, couleur, description) VALUES (?,?,?)",
+                (nom, couleur, d.get("description") or None)
+            )
+            db.commit()
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "Un appareil de ce nom existe déjà"}), 409
+    log_action("create_scanner", "scanner", cur.lastrowid, nom)
+    return jsonify({"ok": True, "id": cur.lastrowid}), 201
+
+
+@app.route("/api/scanners/<int:scanner_id>", methods=["PATCH"])
+@login_required
+@role_required("admin")
+def api_scanners_update(scanner_id):
+    d = request.json or {}
+    fields = {}
+    if "nom" in d:
+        v = (d["nom"] or "").strip()
+        if not v: return jsonify({"error": "Nom requis"}), 400
+        fields["nom"] = v
+    if "couleur" in d:
+        if not re.match(r"^#[0-9a-fA-F]{6}$", d["couleur"] or ""):
+            return jsonify({"error": "Couleur hex invalide"}), 400
+        fields["couleur"] = d["couleur"]
+    if "description" in d:
+        fields["description"] = (d["description"] or "").strip() or None
+    if "actif" in d:
+        fields["actif"] = 1 if d["actif"] else 0
+    if not fields:
+        return jsonify({"error": "Aucun champ à modifier"}), 400
+    set_clause = ", ".join(f"{k}=?" for k in fields)
+    params     = list(fields.values()) + [scanner_id]
+    with get_db() as db:
+        db.execute(f"UPDATE scanners SET {set_clause} WHERE id=?", params)
+        db.commit()
+    log_action("update_scanner", "scanner", scanner_id, fields.get("nom"))
+    return jsonify({"ok": True})
+
+
+# ─────────────────────────────────────────────────
+#  API — AUDIT LOG (admin uniquement)
+# ─────────────────────────────────────────────────
+
+@app.route("/audit-log")
+@login_required
+@role_required("admin")
+def page_audit_log():
+    """Page dédiée au journal d'activité (admin uniquement)."""
+    return render_template("audit_log.html")
+
+
+@app.route("/api/audit-log")
+@login_required
+@role_required("admin")
+def api_audit_log():
+    """Liste les dernières actions enregistrées (max 100)."""
+    try: limit = max(1, min(200, int(request.args.get("limit", 30))))
+    except ValueError: limit = 30
+    projet_filter = request.args.get("projet", "").strip()
+
+    where = ""
+    params: list = []
+    if projet_filter:
+        where = "WHERE projet=?"
+        params.append(projet_filter)
+    params.append(limit)
+
+    with get_db() as db:
+        rows = db.execute(
+            f"SELECT * FROM audit_log {where} ORDER BY created_at DESC LIMIT ?",
+            params
+        ).fetchall()
+
+    items = []
+    for r in rows:
+        d = dict(r)
+        if d.get("details"):
+            try: d["details"] = json.loads(d["details"])
+            except: d["details"] = None
+        items.append(d)
+    return jsonify({"items": items, "count": len(items)})
+
+
+# ─────────────────────────────────────────────────
+#  API — Animal cross-sessions (toutes les sessions d'une souris)
+# ─────────────────────────────────────────────────
+
+@app.route("/api/animaux/<projet>/<animal_id>/sessions")
+@login_required
+def api_animal_sessions(projet, animal_id):
+    """
+    Liste toutes les sessions du PROJET où cet animal_id apparaît
+    + ses acquisitions groupées par session.
+    """
+    if not user_can_view_projet(current_user, projet):
+        return jsonify({"error": "Accès refusé à ce projet"}), 403
+
+    with get_db() as db:
+        # Acquisitions de cet animal, groupées par session
+        # CR #12 : enrichi avec periode + scanner pour affichage cross-sessions
+        acqs = db.execute(
+            """SELECT a.*, s.nom AS session_nom, s.date_debut AS session_date_debut,
+                      sc.nom AS scanner_nom, sc.couleur AS scanner_couleur
+               FROM acquisitions a
+               LEFT JOIN sessions s  ON s.id  = a.session_id
+               LEFT JOIN scanners sc ON sc.id = a.scanner_id
+               WHERE a.animal_id=? AND a.projet=?
+               ORDER BY a.date_acq DESC""",
+            (animal_id, projet)
+        ).fetchall()
+
+        # Toutes les sessions du projet (pour permettre l'assignation)
+        all_sessions = db.execute(
+            "SELECT id, nom, description FROM sessions WHERE projet=? ORDER BY nom",
+            (projet,)
+        ).fetchall()
+
+    # Groupe acquisitions par session
+    by_session: dict = {}
+    for a in acqs:
+        key = a["session_id"]
+        if key not in by_session:
+            by_session[key] = {
+                "session_id":   a["session_id"],
+                "session_nom":  a["session_nom"] or "—",
+                "session_date": a["session_date_debut"],
+                "acquisitions": [],
+            }
+        by_session[key]["acquisitions"].append({
+            "id":              a["id"],
+            "sequence":        a["sequence"],
+            "date_acq":        a["date_acq"],
+            "heure_debut":     a["heure_debut"],
+            "statut":          a["statut"],
+            "qualite":         a["qualite"],
+            "poids_g":         a["poids_g"],
+            "periode":         a["periode"],
+            "scanner_nom":     a["scanner_nom"],
+            "scanner_couleur": a["scanner_couleur"],
+        })
+
+    return jsonify({
+        "animal_id":     animal_id,
+        "projet":        projet,
+        "sessions":      list(by_session.values()),
+        "all_sessions":  [dict(s) for s in all_sessions],
+    })
+
+
+# ─────────────────────────────────────────────────
 #  API — ANIMAUX
 # ─────────────────────────────────────────────────
 
@@ -2126,10 +3000,22 @@ def api_animaux():
     if statut:
         q += " AND statut=?"; params.append(statut)
     with get_db() as db:
-        rows = db.execute(q, params).fetchall()
+        rows = db.execute(
+            q.replace("SELECT * FROM animaux", """
+                SELECT a.*, s.nom AS session_nom
+                FROM animaux a
+                LEFT JOIN sessions s ON s.id = a.session_id""")
+            , params
+        ).fetchall()
     # Filtre les projets restreints quand pas de paramètre projet
     rows = [r for r in rows if user_can_view_projet(current_user, r["projet"])]
-    return jsonify([dict(r) for r in rows])
+    # Enrichit avec full_id calculé
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["full_id"] = compute_full_id(d["projet"], d.get("session_nom"), d["animal_id"])
+        out.append(d)
+    return jsonify(out)
 
 @app.route("/api/animaux/<animal_id>")
 @login_required
@@ -2262,7 +3148,7 @@ def api_planification_serie_preview():
     """
     d = request.json or {}
     required = ("projet", "animal_id", "sequence", "date_debut",
-                "heure_debut", "duree_min", "frequence", "nb_repetitions")
+                "frequence", "nb_repetitions")
     if not all(k in d for k in required):
         return jsonify({"error": f"Champs requis : {', '.join(required)}"}), 400
 
@@ -2271,16 +3157,30 @@ def api_planification_serie_preview():
     except ValueError:
         return jsonify({"error": "Date invalide (YYYY-MM-DD)"}), 400
 
-    if not re.match(r"^\d{2}:\d{2}$", d["heure_debut"]):
+    # Période (preset) → écrase heure_debut + duree_min si fournie
+    periode_in = (d.get("periode") or "").strip().lower() or None
+    heure_in   = d.get("heure_debut") or "09:00"
+    duree_in   = d.get("duree_min")
+    try:
+        duree_in = int(duree_in) if duree_in not in (None, "") else 30
+    except (ValueError, TypeError):
+        duree_in = 30
+    _, heure_eff, duree_eff = resolve_periode(periode_in, heure_in, duree_in)
+
+    if not re.match(r"^\d{2}:\d{2}$", heure_eff or ""):
         return jsonify({"error": "Heure invalide (HH:MM)"}), 400
 
     try:
-        duree_min = int(d["duree_min"])
+        duree_min = int(duree_eff or 30)
         nb        = int(d["nb_repetitions"])
         if not (1 <= duree_min <= 480): raise ValueError
         if not (1 <= nb <= 50):         raise ValueError("nb_repetitions doit être entre 1 et 50")
     except (ValueError, TypeError) as e:
         return jsonify({"error": f"Durée ou nombre invalide : {e}"}), 400
+
+    # Réécrit pour la suite
+    d = dict(d)
+    d["heure_debut"] = heure_eff
 
     delta = _parse_frequence(d["frequence"], d.get("custom_days"))
     if delta is None:
@@ -2332,6 +3232,10 @@ def api_planification_serie_confirm():
 
     force      = bool(d.get("force", False))
     duree_min  = int(d.get("duree_min") or 0) or None
+    # Période (preset matin/après-midi/journée → écrase heure_debut + duree_min)
+    periode_in = (d.get("periode") or "").strip().lower() or None
+    if periode_in and periode_in not in ("matin", "apres_midi", "journee", "custom"):
+        return jsonify({"error": "Période invalide"}), 400
     created    = []
     skipped    = []
     now_iso    = datetime.now().isoformat()
@@ -2343,25 +3247,34 @@ def api_planification_serie_confirm():
             if not date_acq or not heure_debut:
                 continue
 
+            # Si une période preset est demandée, elle écrase l'heure (cohérence)
+            periode_eff, heure_eff, duree_eff = resolve_periode(
+                periode_in, heure_debut, duree_min
+            )
+
             # Re-vérification serveur des conflits (la preview pourrait être obsolète)
-            conflicts = detect_conflicts(date_acq, heure_debut, duree_min or 30)
+            conflicts = detect_conflicts(date_acq, heure_eff, duree_eff or 30)
             if conflicts and not force:
-                skipped.append({"date_acq": date_acq, "heure_debut": heure_debut,
+                skipped.append({"date_acq": date_acq, "heure_debut": heure_eff,
                                 "reason": "conflit"})
                 continue
 
             cur = db.execute(
                 """INSERT INTO acquisitions
                    (animal_id,projet,sequence,date_acq,heure_debut,duree_min,
-                    statut,importé_par,importé_le)
-                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                    statut,importé_par,importé_le,periode)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
                 (d["animal_id"], d["projet"], d["sequence"], date_acq,
-                 heure_debut, duree_min, "en_attente",
-                 current_user.username, now_iso)
+                 heure_eff, duree_eff, "en_attente",
+                 current_user.username, now_iso, periode_eff)
             )
             created.append({"id": cur.lastrowid, "date_acq": date_acq,
                             "heure_debut": heure_debut})
         db.commit()
+
+    # Synchronisation Google Calendar (en bloc, best-effort)
+    for c in created:
+        gcal_sync_acquisition(c["id"])
 
     return jsonify({
         "ok":         True,
@@ -2500,43 +3413,414 @@ def api_search():
     return jsonify(out)
 
 
+@app.route("/implementation-nas")
+@login_required
+@role_required("admin")
+def page_implementation_nas():
+    """Guide étape par étape pour déployer le Dashboard sur un NAS Synology."""
+    return render_template("implementation_nas.html")
+
+
+@app.route("/securite")
+@login_required
+@role_required("admin")
+def page_securite():
+    """
+    CR #23 — Page admin documentant toutes les protections en place.
+    Utile pour présenter aux clients lors des prochains RDV.
+    """
+    # On agrège quelques stats de sécurité en live
+    with get_db() as db:
+        nb_users         = db.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        nb_2fa_active    = db.execute(
+            "SELECT COUNT(*) FROM users WHERE totp_secret IS NOT NULL AND totp_enabled=1"
+        ).fetchone()[0] if "totp_enabled" in [r[1] for r in db.execute("PRAGMA table_info(users)").fetchall()] else 0
+        nb_email_verif   = db.execute(
+            "SELECT COUNT(*) FROM users WHERE email_verified=1"
+        ).fetchone()[0]
+        nb_connexions_24h = db.execute(
+            "SELECT COUNT(*) FROM connexions_log WHERE timestamp > ?",
+            ((datetime.now() - timedelta(days=1)).isoformat(),)
+        ).fetchone()[0]
+        last_admin_action = db.execute(
+            "SELECT created_at FROM audit_log WHERE username='admin' "
+            "ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+
+    return render_template("securite.html",
+        nb_users          = nb_users,
+        nb_2fa_active     = nb_2fa_active,
+        nb_email_verif    = nb_email_verif,
+        nb_connexions_24h = nb_connexions_24h,
+        last_admin_action = last_admin_action["created_at"] if last_admin_action else None,
+        recaptcha_enabled = RECAPTCHA_ENABLED,
+        email_configured  = EMAIL_CONFIGURED,
+    )
+
+
+@app.route("/api/planification/series-groups")
+@login_required
+@role_required("admin", "operateur")
+def api_series_groups():
+    """
+    CR : liste les "séries" planifiées détectées dans la DB.
+    Une série = un groupe (projet, animal_id, sequence) avec ≥ 2 créneaux
+    en statut en_attente ou en_cours. Retourne le détail pour permettre
+    une suppression en bloc.
+    """
+    with get_db() as db:
+        rows = db.execute(
+            """SELECT projet, animal_id, sequence, id, date_acq, heure_debut, statut
+               FROM acquisitions
+               WHERE statut IN ('en_attente','en_cours')
+               ORDER BY projet, animal_id, sequence, date_acq, heure_debut"""
+        ).fetchall()
+    grouped: dict = {}
+    for r in rows:
+        if not user_can_view_projet(current_user, r["projet"]):
+            continue
+        key = (r["projet"], r["animal_id"], r["sequence"])
+        grouped.setdefault(key, []).append({
+            "id":          r["id"],
+            "date_acq":    r["date_acq"],
+            "heure_debut": r["heure_debut"],
+            "statut":      r["statut"],
+        })
+    out = []
+    for (projet, animal_id, seq), items in grouped.items():
+        if len(items) < 2:
+            continue  # pas une série
+        out.append({
+            "projet": projet, "animal_id": animal_id, "sequence": seq,
+            "count": len(items), "items": items,
+        })
+    out.sort(key=lambda g: (-g["count"], g["projet"], g["animal_id"]))
+    return jsonify({"groups": out})
+
+
+@app.route("/api/planification/serie/delete", methods=["POST"])
+@login_required
+@role_required("admin", "operateur")
+def api_serie_delete():
+    """Supprime tous les créneaux planifiés d'une série (projet+animal+seq)."""
+    d = request.json or {}
+    required = ("projet", "animal_id", "sequence")
+    if not all(k in d for k in required):
+        return jsonify({"error": f"Champs requis : {', '.join(required)}"}), 400
+    if not user_can_edit_projet(current_user, d["projet"]):
+        return jsonify({"error": "Droits insuffisants sur ce projet"}), 403
+    with get_db() as db:
+        # Récupère les IDs + google_event_id avant suppression
+        rows = db.execute(
+            """SELECT id, google_event_id FROM acquisitions
+               WHERE projet=? AND animal_id=? AND sequence=?
+                 AND statut IN ('en_attente','en_cours')""",
+            (d["projet"], d["animal_id"], d["sequence"])
+        ).fetchall()
+        ids = [r["id"] for r in rows]
+        gcal_ids = [r["google_event_id"] for r in rows if r["google_event_id"]]
+        if ids:
+            db.executemany("DELETE FROM acquisitions WHERE id=?", [(i,) for i in ids])
+            # Décrémenter nb_acquisitions de l'animal
+            db.execute(
+                """UPDATE animaux
+                   SET nb_acquisitions = MAX(0, nb_acquisitions - ?)
+                   WHERE animal_id=? AND projet=?""",
+                (len(ids), d["animal_id"], d["projet"])
+            )
+            db.commit()
+    # Suppression Google Calendar (best-effort)
+    for gid in gcal_ids:
+        gcal_delete_acquisition(gid)
+    log_action("delete_serie", "acquisition", None,
+               f"{d['animal_id']} · {d['sequence']} ({len(ids)} créneaux)",
+               projet=d["projet"])
+    return jsonify({"ok": True, "deleted": len(ids)})
+
+
+@app.route("/api/alertes/dismiss", methods=["POST"])
+@login_required
+@role_required("admin", "operateur")
+def api_dismiss_alerte():
+    """
+    CR : permet de masquer une alerte individuelle.
+    On marque l'alerte comme acquittée pour cet utilisateur dans la table
+    app_settings (clé 'alertes_dismissed_<user>') ou via un timestamp +
+    contexte. Approche simple : on enregistre un set de hashes d'alertes
+    par utilisateur dans un blob JSON.
+    """
+    data = request.json or {}
+    alerte_key = data.get("key", "").strip()
+    if not alerte_key:
+        return jsonify({"error": "key requise"}), 400
+    user_key = f"alertes_dismissed_{current_user.id}"
+    with get_db() as db:
+        row = db.execute("SELECT value FROM app_settings WHERE key=?",
+                         (user_key,)).fetchone()
+        try:
+            dismissed = set(json.loads(row["value"])) if row else set()
+        except Exception:
+            dismissed = set()
+        dismissed.add(alerte_key)
+        db.execute(
+            "INSERT INTO app_settings(key,value) VALUES(?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (user_key, json.dumps(sorted(dismissed)))
+        )
+        db.commit()
+    return jsonify({"ok": True, "dismissed_count": len(dismissed)})
+
+
+@app.route("/api/alertes/dismiss-all", methods=["POST"])
+@login_required
+@role_required("admin", "operateur")
+def api_dismiss_all_alertes():
+    """Masque toutes les alertes courantes pour cet utilisateur."""
+    data = request.json or {}
+    keys = data.get("keys", [])
+    if not isinstance(keys, list):
+        return jsonify({"error": "keys doit être une liste"}), 400
+    user_key = f"alertes_dismissed_{current_user.id}"
+    with get_db() as db:
+        row = db.execute("SELECT value FROM app_settings WHERE key=?",
+                         (user_key,)).fetchone()
+        try:
+            dismissed = set(json.loads(row["value"])) if row else set()
+        except Exception:
+            dismissed = set()
+        dismissed.update(k for k in keys if k)
+        db.execute(
+            "INSERT INTO app_settings(key,value) VALUES(?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (user_key, json.dumps(sorted(dismissed)))
+        )
+        db.commit()
+    return jsonify({"ok": True, "dismissed_count": len(dismissed)})
+
+
+def _get_dismissed_alertes(user_id: int) -> set[str]:
+    """Retourne le set des keys d'alertes masquées par cet utilisateur."""
+    with get_db() as db:
+        row = db.execute("SELECT value FROM app_settings WHERE key=?",
+                         (f"alertes_dismissed_{user_id}",)).fetchone()
+    if not row:
+        return set()
+    try:
+        return set(json.loads(row["value"]))
+    except Exception:
+        return set()
+
+
+@app.route("/api/nas/fix-naming", methods=["POST"])
+@login_required
+@role_required("admin")
+def api_nas_fix_naming():
+    """
+    CR : renomme TOUS les dossiers NAS et fichiers acquisitions pour respecter
+    la convention <projet>/<AAAAMMJJ_AnimalID>/<sequence>/. Aussi met à jour
+    les chemins en DB. Idempotent.
+    """
+    moved = 0
+    renamed_db = 0
+    errors: list = []
+    with get_db() as db:
+        # 1. Pour chaque acquisition avec fichier_dest, vérifie le chemin attendu
+        rows = db.execute(
+            "SELECT id, projet, animal_id, sequence, date_acq, fichier_dest "
+            "FROM acquisitions WHERE fichier_dest IS NOT NULL AND fichier_dest != ''"
+        ).fetchall()
+        for r in rows:
+            fd_raw = r["fichier_dest"]
+            try:
+                p_current = Path(fd_raw)
+                # Normalise en chemin relatif au NAS
+                try:
+                    rel = p_current.resolve().relative_to(NAS_ROOT.resolve())
+                except (ValueError, OSError):
+                    # Pas dans NAS_ROOT → on ignore (peut être absolu hors mount)
+                    rel = Path(fd_raw)
+                expected_dir = NAS_ROOT / r["projet"] / build_animal_folder(
+                    r["animal_id"], r["date_acq"] or "00000000"
+                ) / sanitize_animal_id(r["sequence"] or "SEQ")
+                expected_dir.mkdir(parents=True, exist_ok=True)
+                expected_file = expected_dir / p_current.name
+                # Si différent du chemin attendu → déplace
+                src = NAS_ROOT / rel if not p_current.is_absolute() else p_current
+                if src.exists() and str(src.resolve()) != str(expected_file.resolve()):
+                    expected_file.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(src), str(expected_file))
+                    moved += 1
+                # Met à jour le chemin DB
+                new_rel = str(expected_file.relative_to(NAS_ROOT))
+                if fd_raw != new_rel and fd_raw != str(expected_file):
+                    db.execute(
+                        "UPDATE acquisitions SET fichier_dest=? WHERE id=?",
+                        (new_rel, r["id"])
+                    )
+                    renamed_db += 1
+            except Exception as exc:
+                errors.append({"acq_id": r["id"], "error": str(exc)})
+        db.commit()
+
+    log_action("nas_fix_naming", "system", None,
+               f"{moved} fichiers déplacés · {renamed_db} chemins DB mis à jour")
+    return jsonify({
+        "ok":          True,
+        "moved":       moved,
+        "renamed_db":  renamed_db,
+        "errors":      errors[:10],  # max 10 erreurs renvoyées
+        "errors_total": len(errors),
+    })
+
+
+@app.route("/api/nas/suggest-name", methods=["POST"])
+@login_required
+def api_nas_suggest_name():
+    """
+    CR : suggère le chemin NAS canonique pour les paramètres d'import donnés.
+    Retourne le chemin attendu (<projet>/<AAAAMMJJ_AnimalID>/<sequence>/) +
+    avertissements éventuels (caractères incorrects, date manquante, etc.).
+    """
+    d = request.json or {}
+    projet     = (d.get("projet") or "").strip()
+    animal_id  = (d.get("animal_id") or "").strip()
+    sequence   = (d.get("sequence") or "").strip()
+    date_acq   = (d.get("date_acq") or "").strip()
+    warnings: list = []
+    if not projet:    warnings.append("Projet manquant — choisis-en un")
+    if not animal_id: warnings.append("ID animal manquant")
+    if not sequence:  warnings.append("Séquence manquante")
+    if not date_acq:  warnings.append("Date manquante — utilise la date du jour")
+
+    animal_clean = sanitize_animal_id(animal_id or "ANIMAL")
+    if animal_clean != animal_id and animal_id:
+        warnings.append(f"L'ID animal sera nettoyé : « {animal_id} » → « {animal_clean} »")
+    seq_clean = sanitize_animal_id(sequence or "SEQ")
+    if seq_clean != sequence and sequence:
+        warnings.append(f"La séquence sera nettoyée : « {sequence} » → « {seq_clean} »")
+
+    folder = build_animal_folder(animal_clean, date_acq or "00000000")
+    suggested = f"{projet}/{folder}/{seq_clean}/" if projet else f"<projet>/{folder}/{seq_clean}/"
+
+    return jsonify({
+        "suggested": suggested,
+        "folder":    folder,
+        "warnings":  warnings,
+        "ok":        not warnings,
+    })
+
+
+@app.route("/api/google-calendar/status")
+@login_required
+@role_required("admin")
+def api_gcal_status():
+    """Diagnostic Google Calendar (admin uniquement)."""
+    if not gcal:
+        return jsonify({"ok": False, "message": "Module google_calendar non chargé."})
+    return jsonify(gcal.test_connection())
+
+
+@app.route("/api/google-calendar/resync", methods=["POST"])
+@login_required
+@role_required("admin")
+def api_gcal_resync():
+    """
+    Re-pousse toutes les acquisitions planifiées (date_acq >= today,
+    statut en_attente/en_cours) vers Google Calendar.
+    Idempotent grâce à google_event_id : crée si absent, met à jour sinon.
+    """
+    if not gcal or not gcal.is_enabled():
+        return jsonify({"ok": False, "message": "Google Calendar désactivé."}), 503
+    today_iso = datetime.now().strftime("%Y-%m-%d")
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT id FROM acquisitions WHERE date_acq >= ? "
+            "AND statut IN ('en_attente','en_cours','ok') "
+            "AND heure_debut IS NOT NULL",
+            (today_iso,)
+        ).fetchall()
+    count_ok, count_skip = 0, 0
+    for r in rows:
+        try:
+            gcal_sync_acquisition(r["id"])
+            count_ok += 1
+        except Exception:
+            count_skip += 1
+    return jsonify({"ok": True, "synced": count_ok, "skipped": count_skip,
+                    "total": len(rows)})
+
+
 @app.route("/api/planification/mes-creneaux")
 @login_required
 def api_mes_creneaux():
     """
     Prochaines acquisitions accessibles à l'utilisateur courant.
-    - Admin : toutes les acquisitions planifiées (en_attente ou en_cours)
-    - Autres : seulement celles des projets dont ils sont membres
-    - Aujourd'hui et futur uniquement, ordonné par date+heure
+    - Filtre temps : créneaux passés (date+heure_fin < maintenant) exclus automatiquement
+    - "en cours" : un créneau dont l'heure de début est passée mais pas la fin
+    - Limite par défaut : 6
     """
-    today_iso = datetime.now().strftime("%Y-%m-%d")
-    limit     = max(1, min(20, int(request.args.get("limit", 8))))
+    now      = datetime.now()
+    today_iso = now.strftime("%Y-%m-%d")
+    now_hhmm  = now.strftime("%H:%M")
+    limit     = max(1, min(20, int(request.args.get("limit", 6))))
 
     with get_db() as db:
+        # CR #14 : JOIN sur projets pour ajouter le chercheur (resp)
         rows = db.execute(
-            """SELECT id, animal_id, projet, sequence, date_acq, heure_debut,
-                      duree_min, statut, importé_par, poids_g, qualite
-               FROM acquisitions
-               WHERE date_acq >= ?
-                 AND statut IN ('en_attente', 'en_cours')
-               ORDER BY date_acq ASC, COALESCE(heure_debut, '99:99') ASC
+            """SELECT a.id, a.animal_id, a.projet, a.sequence, a.date_acq, a.heure_debut,
+                      a.duree_min, a.statut, a.importé_par, a.poids_g, a.qualite,
+                      a.scanner_id, a.periode,
+                      s.nom AS scanner_nom, s.couleur AS scanner_couleur,
+                      p.resp AS projet_resp
+               FROM acquisitions a
+               LEFT JOIN scanners s ON s.id = a.scanner_id
+               LEFT JOIN projets  p ON p.nom = a.projet
+               WHERE a.date_acq >= ?
+                 AND a.statut IN ('en_attente', 'en_cours')
+               ORDER BY a.date_acq ASC, COALESCE(a.heure_debut, '99:99') ASC
                LIMIT 200""",
             (today_iso,)
         ).fetchall()
 
-    # Filtrage par droits projet
+    # Filtrage par droits projet + filtre temporel (passés exclus, en cours marqué)
     creneaux = []
+    en_cours = None
     for r in rows:
         if not user_can_view_projet(current_user, r["projet"]):
             continue
-        creneaux.append(dict(r))
+        d = dict(r)
+        # Détermine si le créneau est passé / en cours / à venir
+        c_date  = d.get("date_acq") or ""
+        c_start = d.get("heure_debut") or "00:00"
+        c_dur   = d.get("duree_min") or 30
+        try:
+            start_dt = datetime.strptime(f"{c_date} {c_start}", "%Y-%m-%d %H:%M")
+            end_dt   = start_dt + timedelta(minutes=int(c_dur))
+        except ValueError:
+            start_dt = end_dt = None
+        if start_dt and end_dt:
+            if end_dt < now:
+                continue  # totalement passé → ne plus afficher
+            if start_dt <= now <= end_dt:
+                d["_is_current"] = True
+                # On garde le créneau en cours à part pour le mettre en premier
+                if en_cours is None:
+                    en_cours = d
+                    continue
+        creneaux.append(d)
         if len(creneaux) >= limit:
             break
+
+    # Le créneau en cours arrive toujours en premier dans la liste
+    if en_cours:
+        creneaux.insert(0, en_cours)
+        creneaux = creneaux[:limit]
 
     return jsonify({
         "today":     today_iso,
         "creneaux":  creneaux,
         "count":     len(creneaux),
+        "now":       now.strftime("%Y-%m-%dT%H:%M"),
     })
 
 
@@ -2603,6 +3887,27 @@ def api_add_acquisition():
     else:
         duree_min = None
 
+    # ── Période (matin/après-midi/journée/custom) — CR CHR ────────────────
+    periode_in = (data.get("periode") or "").strip().lower() or None
+    if periode_in and periode_in not in ("matin", "apres_midi", "journee", "custom"):
+        return jsonify({"error": "Période invalide"}), 400
+    periode, heure_debut, duree_min = resolve_periode(periode_in, heure_debut, duree_min)
+
+    # ── TEP : dose injectée + produit radioactif (CR #15) ──────────────────
+    tep_dose_mbq = data.get("tep_dose_mbq")
+    if tep_dose_mbq not in (None, ""):
+        try:
+            tep_dose_mbq = float(tep_dose_mbq)
+            if tep_dose_mbq < 0 or tep_dose_mbq > 1000:
+                return jsonify({"error": "Dose TEP invalide (0–1000 MBq)"}), 400
+        except (ValueError, TypeError):
+            return jsonify({"error": "Dose TEP doit être un nombre"}), 400
+    else:
+        tep_dose_mbq = None
+    tep_produit = (data.get("tep_produit") or "").strip() or None
+    if tep_produit and len(tep_produit) > 80:
+        return jsonify({"error": "Nom du produit TEP trop long (max 80)"}), 400
+
     # ── Détection de conflit de créneau (si heure + durée fournies) ──────────
     if heure_debut and duree_min:
         conflicts = detect_conflicts(data["date_acq"], heure_debut, duree_min)
@@ -2612,29 +3917,76 @@ def api_add_acquisition():
                 "conflicts": conflicts,
             }), 409
 
+    # Scanner_id (appareil IRM) — optionnel
+    scanner_id = data.get("scanner_id")
+    if scanner_id:
+        try: scanner_id = int(scanner_id)
+        except (ValueError, TypeError): scanner_id = None
+
     with get_db() as db:
-        db.execute(
+        cur_acq = db.execute(
             """INSERT INTO acquisitions
                (animal_id,projet,sequence,date_acq,statut,importé_par,importé_le,
-                poids_g,qualite,probleme_type,probleme_desc,heure_debut,duree_min)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                poids_g,qualite,probleme_type,probleme_desc,heure_debut,duree_min,
+                scanner_id,periode,tep_dose_mbq,tep_produit)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (data["animal_id"], data["projet"], data["sequence"],
              data["date_acq"], data.get("statut","ok"),
              current_user.username, datetime.now().isoformat(),
              poids_g, qualite, probleme_type,
              data.get("probleme_desc") or None,
-             heure_debut, duree_min)
+             heure_debut, duree_min, scanner_id, periode,
+             tep_dose_mbq, tep_produit)
         )
-        db.execute(
-            "UPDATE animaux SET nb_acquisitions=nb_acquisitions+1 WHERE animal_id=?",
-            (data["animal_id"],)
-        )
+        new_acq_id = cur_acq.lastrowid
+        # Auto-création de l'animal s'il n'existe pas dans ce projet
+        # (un créneau planifié peut être créé avant l'arrivée des fichiers)
+        existing_animal = db.execute(
+            "SELECT id FROM animaux WHERE animal_id=? AND projet=?",
+            (data["animal_id"], data["projet"])
+        ).fetchone()
+        if existing_animal:
+            db.execute(
+                "UPDATE animaux SET nb_acquisitions=nb_acquisitions+1 "
+                "WHERE animal_id=? AND projet=?",
+                (data["animal_id"], data["projet"])
+            )
+        else:
+            # Récupère la session S0 par défaut (créée à init_db)
+            s0 = db.execute(
+                "SELECT id FROM sessions WHERE projet=? AND nom='S0'",
+                (data["projet"],)
+            ).fetchone()
+            if not s0:
+                # Crée la session S0 si elle n'existait pas
+                cur_s = db.execute(
+                    """INSERT INTO sessions (projet, nom, description, created_at, created_by)
+                       VALUES (?, 'S0', 'Session par défaut', ?, ?)""",
+                    (data["projet"], datetime.now().isoformat(), current_user.username)
+                )
+                s0_id = cur_s.lastrowid
+            else:
+                s0_id = s0["id"]
+            db.execute(
+                """INSERT INTO animaux
+                   (animal_id, espece, projet, date_premiere_acq, nb_acquisitions, statut, session_id)
+                   VALUES (?, ?, ?, ?, 1, 'en_attente', ?)""",
+                (data["animal_id"], "—", data["projet"], data["date_acq"], s0_id)
+            )
         db.commit()
     emit_event("acquisition_new", {
         "animal_id": data["animal_id"], "projet": data["projet"],
         "sequence": data["sequence"], "par": current_user.username
     })
-    return jsonify({"ok": True}), 201
+    log_action("create_acquisition", "acquisition", None,
+               f"{data['animal_id']} · {data['sequence']}",
+               projet=data["projet"],
+               details={"sequence": data["sequence"], "date": data["date_acq"],
+                        "heure": heure_debut, "duree": duree_min,
+                        "scanner_id": data.get("scanner_id")})
+    # Synchronisation Google Calendar (best-effort, ne bloque pas si KO)
+    gcal_sync_acquisition(new_acq_id)
+    return jsonify({"ok": True, "id": new_acq_id}), 201
 
 
 # ─────────────────────────────────────────────────
@@ -2804,8 +4156,12 @@ def process_uploaded_file(src: Path, project: str, animal_id: str,
     is_nifti  = ext in {".nii", ".nii.gz"}
     is_dicom  = ext in {".dcm", ".ima"} or ext == ""
 
-    # Construire le chemin destination (même convention que le vrai NAS)
-    # /nas_simule/structured/<projet>/<animal>_<date>/<sequence>/
+    # CR #17 : la conversion NIfTI est sauvegardée AU MÊME ENDROIT que les
+    # DICOM sources, dans le même dossier <projet>/<AAAAMMJJ_AnimalID>/<sequence>/
+    # → simplifie la recherche pour les chercheurs (un seul dossier par
+    #   acquisition contient tous les formats associés).
+    # Convention identique pour : (a) NIfTI uploadé tel quel, (b) NIfTI converti
+    # depuis DICOM via dicom_to_nifti(), (c) série DICOM via dicom_series_to_nifti().
     dest_dir   = NAS_ROOT / project / build_animal_folder(animal_id, date_acq) / sanitize_animal_id(sequence)
     dest_dir.mkdir(parents=True, exist_ok=True)
 
@@ -3110,6 +4466,11 @@ def api_upload_file():
         )
         db.commit()
 
+    log_action("upload_acquisition", "acquisition", None,
+               f"{final_animal} · {final_seq}", projet=project,
+               details={"sequence": final_seq, "date": final_date,
+                        "nb_files": len(files), "md5": md5})
+
     return jsonify({
         "ok":       True,
         "message":  f"{file_type} importé avec succès",
@@ -3126,7 +4487,13 @@ def api_upload_file():
 @app.route("/planification")
 @login_required
 @role_required("admin", "operateur")
-def page_planification():
+def page_planification_redirect():
+    """Anciennement /planification — fusionné dans /planning."""
+    return redirect("/planning#avancement", code=301)
+
+
+# Ancienne route conservée pour réutilisation interne / éviter de tout casser
+def _legacy_page_planification():
     with get_db() as db:
         projets_raw = db.execute("SELECT * FROM projets ORDER BY nom").fetchall()
         animaux_raw = db.execute("SELECT * FROM animaux ORDER BY projet, animal_id").fetchall()
@@ -4174,17 +5541,70 @@ def api_add_user():
 @login_required
 @role_required("admin")
 def api_delete_user(user_id):
+    """Soft delete : marque le compte comme supprimé. Récupérable via restore."""
     if user_id == current_user.id:
         return jsonify({"error": "Impossible de supprimer son propre compte"}), 400
     with get_db() as db:
-        row = db.execute("SELECT username, role FROM users WHERE id=?", (user_id,)).fetchone()
+        row = db.execute(
+            "SELECT username, role, deleted_at FROM users WHERE id=?",
+            (user_id,)
+        ).fetchone()
         if not row:
             return jsonify({"error": "Utilisateur introuvable"}), 404
+        if row["deleted_at"]:
+            return jsonify({"error": "Compte déjà supprimé"}), 400
         if row["role"] == "admin" and current_user.username != "admin":
             return jsonify({"error": "Seul le compte « admin » peut supprimer un autre administrateur"}), 403
+        db.execute(
+            "UPDATE users SET deleted_at=?, deleted_by=? WHERE id=?",
+            (datetime.now().isoformat(), current_user.username, user_id)
+        )
+        db.commit()
+    log_action("delete_user", "user", user_id, row["username"])
+    return jsonify({"ok": True, "deleted": row["username"], "soft": True})
+
+
+@app.route("/api/users/<int:user_id>/restore", methods=["POST"])
+@login_required
+@role_required("admin")
+def api_restore_user(user_id):
+    """CR : restaure un compte précédemment soft-deleted, avec tous ses paramètres."""
+    with get_db() as db:
+        row = db.execute(
+            "SELECT username, deleted_at FROM users WHERE id=?", (user_id,)
+        ).fetchone()
+        if not row:
+            return jsonify({"error": "Utilisateur introuvable"}), 404
+        if not row["deleted_at"]:
+            return jsonify({"error": "Ce compte n'est pas supprimé"}), 400
+        db.execute(
+            "UPDATE users SET deleted_at=NULL, deleted_by=NULL WHERE id=?",
+            (user_id,)
+        )
+        db.commit()
+    log_action("restore_user", "user", user_id, row["username"])
+    return jsonify({"ok": True, "restored": row["username"]})
+
+
+@app.route("/api/users/<int:user_id>/hard-delete", methods=["DELETE"])
+@login_required
+@role_required("admin")
+def api_hard_delete_user(user_id):
+    """Suppression définitive (irréversible) — seulement pour comptes soft-deleted."""
+    if user_id == current_user.id:
+        return jsonify({"error": "Impossible"}), 400
+    with get_db() as db:
+        row = db.execute(
+            "SELECT username, deleted_at FROM users WHERE id=?", (user_id,)
+        ).fetchone()
+        if not row:
+            return jsonify({"error": "Utilisateur introuvable"}), 404
+        if not row["deleted_at"]:
+            return jsonify({"error": "Soft-delete d'abord requis"}), 400
         db.execute("DELETE FROM users WHERE id=?", (user_id,))
         db.commit()
-    return jsonify({"ok": True, "deleted": row["username"]})
+    log_action("hard_delete_user", "user", user_id, row["username"])
+    return jsonify({"ok": True, "purged": row["username"]})
 
 @app.route("/api/users/<int:user_id>/role", methods=["PATCH"])
 @login_required
@@ -4387,6 +5807,10 @@ def page_animal(projet, animal_id):
         ).fetchone()
         if not animal:
             return "Animal introuvable", 404
+        # CR #14 : récupère le chercheur (resp) + nom long du projet pour affichage
+        projet_info = db.execute(
+            "SELECT nom, nom_long, resp FROM projets WHERE nom=?", (projet,)
+        ).fetchone()
         acqs = db.execute(
             "SELECT * FROM acquisitions WHERE animal_id=? AND projet=? ORDER BY date_acq DESC",
             (animal_id, projet)
@@ -4401,6 +5825,29 @@ def page_animal(projet, animal_id):
         ).fetchall()
 
     dossier_nas = build_animal_folder(animal_id, animal["date_premiere_acq"] or "00000000")
+
+    # CR #18 : check de cohérence — vérifie que les `fichier_dest` réels en DB
+    # respectent bien la convention NAS attendue (<projet>/<AAAAMMJJ_AnimalID>/<seq>).
+    # Permet de détecter les dossiers historiques mal nommés ou les imports
+    # qui auraient contourné le naming standard.
+    nas_coherence_issues = []
+    expected_root = f"{projet}/{dossier_nas}/"
+    for a in acqs:
+        fd = a["fichier_dest"]
+        if not fd:
+            continue
+        # On normalise en relatif au NAS pour la comparaison
+        try:
+            rel = str(Path(fd).resolve().relative_to(NAS_ROOT.resolve()))
+        except (ValueError, OSError):
+            rel = fd
+        if not rel.startswith(expected_root):
+            nas_coherence_issues.append({
+                "acq_id":      a["id"],
+                "sequence":    a["sequence"],
+                "fichier":     rel,
+                "expected":    expected_root,
+            })
 
     # Dernière volumétrie par acquisition
     with get_db() as db:
@@ -4431,7 +5878,8 @@ def page_animal(projet, animal_id):
                 d["resultats"] = json.loads(d["resultats"])
             dti_by_acq[dti["acq_id"]] = d
 
-    # Enrichir chaque acquisition avec l'URL NIfTI, la volumétrie et le flag DTI
+    # Enrichir chaque acquisition avec l'URL NIfTI, la volumétrie et les flags
+    # DTI / TEP (CR #15 pour TEP)
     acqs_enriched = []
     for a in acqs:
         d = dict(a)
@@ -4439,6 +5887,7 @@ def page_animal(projet, animal_id):
         d["volumetrie"] = vol_by_acq.get(d["id"])
         d["is_dti"]     = is_dti_sequence(d.get("sequence", ""))
         d["dti"]        = dti_by_acq.get(d["id"])
+        d["is_tep"]     = is_tep_sequence(d.get("sequence", ""))
         acqs_enriched.append(d)
 
     # Statut pipeline : 4 étapes
@@ -4455,14 +5904,40 @@ def page_animal(projet, animal_id):
         {"label": "Post-traité","sub": "Volumétrie calculée","ok": has_post,  "icon": "★"},
     ]
 
+    animal_dict = dict(animal)
+    animal_dict["session_nom"] = get_session_name(animal_dict.get("session_id"))
+    animal_dict["full_id"]     = compute_full_id(projet, animal_dict.get("session_nom"), animal_id)
+
+    # ── CR #13 : série temporelle du poids pour le graphique d'évolution ──
+    # On veut TOUTES les pesées (une par acquisition, ordre chronologique).
+    # Inclut date + heure + sequence + acq_id pour le tooltip et l'ancre.
+    weight_series = []
+    for a in sorted(acqs_enriched, key=lambda x: (x.get("date_acq") or "",
+                                                  x.get("heure_debut") or "")):
+        if a.get("poids_g") is not None:
+            weight_series.append({
+                "acq_id":   a["id"],
+                "date":     a.get("date_acq") or "",
+                "heure":    a.get("heure_debut") or "",
+                "sequence": a.get("sequence") or "",
+                "poids_g":  float(a["poids_g"]),
+            })
+
     return render_template("animal_detail.html",
-        animal       = dict(animal),
-        acqs         = acqs_enriched,
-        commentaires = [dict(c) for c in commentaires],
-        logs         = [dict(l) for l in logs],
-        dossier_nas  = dossier_nas,
-        projet       = projet,
-        pipeline     = pipeline,
+        animal        = animal_dict,
+        acqs          = acqs_enriched,
+        commentaires  = [dict(c) for c in commentaires],
+        logs          = [dict(l) for l in logs],
+        dossier_nas   = dossier_nas,
+        projet        = projet,
+        # CR #14 : nom du chercheur (resp) + nom long visibles partout
+        projet_resp     = (projet_info["resp"]     if projet_info else "") or "",
+        projet_nom_long = (projet_info["nom_long"] if projet_info else "") or "",
+        # CR #18 : check de cohérence noms NAS ↔ interface
+        nas_coherence_issues = nas_coherence_issues,
+        nas_expected_root    = expected_root,
+        pipeline      = pipeline,
+        weight_series = weight_series,
     )
 
 
@@ -4525,6 +6000,41 @@ def api_update_animal_statut(projet, animal_id):
     return jsonify({"ok": True, "statut": statut})
 
 
+@app.route("/api/acquisitions/<int:acq_id>", methods=["DELETE"])
+@login_required
+def api_delete_acquisition(acq_id):
+    """Supprime un créneau / acquisition. Décrémente nb_acquisitions de l'animal."""
+    with get_db() as db:
+        acq = db.execute(
+            "SELECT projet, animal_id, sequence, date_acq, fichier_dest, google_event_id "
+            "FROM acquisitions WHERE id=?",
+            (acq_id,)
+        ).fetchone()
+        if not acq:
+            return jsonify({"error": "Créneau introuvable"}), 404
+        if not user_can_edit_projet(current_user, acq["projet"]):
+            return jsonify({"error": "Droits insuffisants sur ce projet"}), 403
+        gcal_event_id = acq["google_event_id"]
+        db.execute("DELETE FROM acquisitions WHERE id=?", (acq_id,))
+        # Décrémente le compteur de l'animal (sans descendre sous 0)
+        db.execute(
+            """UPDATE animaux
+               SET nb_acquisitions = CASE WHEN nb_acquisitions > 0
+                                          THEN nb_acquisitions - 1
+                                          ELSE 0 END
+               WHERE animal_id=? AND projet=?""",
+            (acq["animal_id"], acq["projet"])
+        )
+        db.commit()
+
+    log_action("delete_acquisition", "acquisition", acq_id,
+               f"{acq['animal_id']} · {acq['sequence']} ({acq['date_acq']})",
+               projet=acq["projet"])
+    # Supprime aussi l'événement Google Calendar correspondant (best-effort)
+    gcal_delete_acquisition(gcal_event_id)
+    return jsonify({"ok": True})
+
+
 @app.route("/api/acquisitions/<int:acq_id>/statut", methods=["PATCH"])
 @login_required
 @role_required("admin", "operateur")
@@ -4542,6 +6052,8 @@ def api_update_statut(acq_id):
         db.execute("UPDATE acquisitions SET statut=? WHERE id=?", (statut, acq_id))
         db.commit()
     emit_event("statut_acq", {"acq_id": acq_id, "statut": statut, "par": current_user.username})
+    # Met à jour le résumé/description côté Google Calendar
+    gcal_sync_acquisition(acq_id)
     return jsonify({"ok": True})
 
 
@@ -4593,6 +6105,26 @@ def api_update_acq_metadata(acq_id):
             return jsonify({"error": "Description trop longue (max 1000)"}), 400
         fields["probleme_desc"] = v
 
+    # CR #15 : champs TEP éditables inline (dose injectée + produit)
+    if "tep_dose_mbq" in data:
+        v = data["tep_dose_mbq"]
+        if v in (None, ""):
+            fields["tep_dose_mbq"] = None
+        else:
+            try:
+                v = float(v)
+                if v < 0 or v > 1000:
+                    return jsonify({"error": "Dose TEP invalide (0–1000 MBq)"}), 400
+                fields["tep_dose_mbq"] = v
+            except (ValueError, TypeError):
+                return jsonify({"error": "Dose TEP doit être un nombre"}), 400
+
+    if "tep_produit" in data:
+        v = (data["tep_produit"] or "").strip() or None
+        if v and len(v) > 80:
+            return jsonify({"error": "Nom du produit TEP trop long (max 80)"}), 400
+        fields["tep_produit"] = v
+
     if not fields:
         return jsonify({"error": "Aucun champ à mettre à jour"}), 400
 
@@ -4613,6 +6145,22 @@ def is_dti_sequence(seq: str) -> bool:
     if not seq:
         return False
     return bool(re.search(r'\b(dti|dwi|diffusion|diff)\b', seq.lower()))
+
+
+def is_tep_sequence(seq: str) -> bool:
+    """
+    CR #15 : détecte si une séquence est de type TEP / PET (tomographie par
+    émission de positons). Triggers : tep, pet, fdg, c11, f18, suv, psma.
+
+    On utilise des lookarounds (?<![a-z])(?![a-z]) au lieu de \\b parce que
+    `\\b` considère `_` comme un caractère de mot — donc `pet_dynamic` ne
+    matchait pas. Ici on ignore juste les lettres alphabétiques voisines.
+    """
+    if not seq:
+        return False
+    return bool(re.search(
+        r'(?<![a-z])(tep|pet|fdg|f-?18|c-?11|18-?f|11-?c|suv|psma)(?![a-z])',
+        seq.lower()))
 
 
 def normalize_path_for_storage(path: str) -> str:
@@ -5320,7 +6868,15 @@ def reset_password(token):
 @app.route("/calendrier")
 @login_required
 @role_required("admin", "operateur")
-def page_calendrier():
+def page_calendrier_redirect():
+    """Anciennement /calendrier — fusionné dans /planning."""
+    return redirect("/planning", code=301)
+
+
+@app.route("/planning")
+@login_required
+@role_required("admin", "operateur")
+def page_planning():
     now    = datetime.now()
     year   = int(request.args.get("year",  now.year))
     month  = int(request.args.get("month", now.month))
@@ -5343,11 +6899,25 @@ def page_calendrier():
 
     with get_db() as db:
         acqs_raw = db.execute(q, params).fetchall()
-        projets  = db.execute("SELECT DISTINCT nom FROM projets ORDER BY nom").fetchall()
-        # Totaux par jour pour le mois
+        # CR #9 : la légende ne montre que les projets actifs dans le mois affiché
+        # (+ ceux qui ont déjà été créés mais pas encore d'acq → on rajoute aussi
+        # le projet sélectionné s'il est dans le filtre, pour clarté)
+        projets_actifs = db.execute(
+            "SELECT DISTINCT p.nom, p.nom_long, p.resp "
+            "FROM projets p "
+            "JOIN acquisitions a ON a.projet = p.nom "
+            "WHERE a.date_acq LIKE ? "
+            "ORDER BY p.nom",
+            (f"{month_str}%",)
+        ).fetchall()
+        # Totaux par jour pour le mois (enrichi : périodes + scanner pour stats)
         all_acqs = db.execute(
-            "SELECT date_acq, projet, animal_id, sequence, statut FROM acquisitions "
-            "WHERE date_acq LIKE ? ORDER BY date_acq",
+            "SELECT a.date_acq, a.projet, a.animal_id, a.sequence, a.statut, "
+            "       a.periode, a.heure_debut, a.duree_min, "
+            "       a.scanner_id, s.nom AS scanner_nom, s.couleur AS scanner_couleur "
+            "FROM acquisitions a "
+            "LEFT JOIN scanners s ON s.id = a.scanner_id "
+            "WHERE a.date_acq LIKE ? ORDER BY a.date_acq",
             (f"{month_str}%",)
         ).fetchall()
 
@@ -5366,10 +6936,42 @@ def page_calendrier():
     # Grille calendrier (liste de semaines, chaque semaine = 7 jours, 0 = hors mois)
     cal_weeks = _cal.monthcalendar(year, month)
 
-    # Couleurs par projet (rotation)
+    # Couleurs par projet (rotation) — uniquement projets actifs ce mois (CR #9)
     proj_colors = ["teal", "blue", "amber", "red"]
-    proj_list   = [p["nom"] for p in projets]
+    proj_list   = [p["nom"] for p in projets_actifs]
     color_map   = {p: proj_colors[i % len(proj_colors)] for i, p in enumerate(proj_list)}
+    # Map acronyme → nom long pour la légende (CR #10)
+    nom_long_map = {p["nom"]: (p["nom_long"] or "") for p in projets_actifs}
+    resp_map     = {p["nom"]: (p["resp"]     or "") for p in projets_actifs}
+
+    # ── Stats d'occupation du mois (CR #11) ──────────────────────────────
+    nb_total_mois = len(all_acqs)
+    nb_par_periode = {"matin": 0, "apres_midi": 0, "journee": 0, "custom_ou_none": 0}
+    nb_par_scanner = {}
+    nb_par_jour    = {}
+    for a in all_acqs:
+        p = a["periode"]
+        if p in ("matin", "apres_midi", "journee"):
+            nb_par_periode[p] += 1
+        else:
+            nb_par_periode["custom_ou_none"] += 1
+        sname = a["scanner_nom"] or "Non précisé"
+        nb_par_scanner.setdefault(sname, {"count": 0, "couleur": a["scanner_couleur"] or "#999"})
+        nb_par_scanner[sname]["count"] += 1
+        d = a["date_acq"]
+        if d and len(d) >= 10:
+            nb_par_jour[d[:10]] = nb_par_jour.get(d[:10], 0) + 1
+    # Jour le plus chargé
+    jour_max = max(nb_par_jour.items(), key=lambda kv: kv[1]) if nb_par_jour else None
+    # Compte de jours occupés (>0)
+    nb_jours_occupes = len(nb_par_jour)
+    stats_occupation = {
+        "total":          nb_total_mois,
+        "par_periode":    nb_par_periode,
+        "par_scanner":    nb_par_scanner,
+        "jour_max":       {"date": jour_max[0], "count": jour_max[1]} if jour_max else None,
+        "jours_occupes":  nb_jours_occupes,
+    }
 
     month_names_fr = [
         "", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
@@ -5377,11 +6979,154 @@ def page_calendrier():
     ]
 
     with get_db() as db2:
+        # CR #14 : ajout du chercheur (projet.resp) dans la table récap
         dernieres_acq = db2.execute(
-            "SELECT * FROM acquisitions ORDER BY date_acq DESC LIMIT 20"
+            "SELECT a.*, p.resp AS projet_resp "
+            "FROM acquisitions a "
+            "LEFT JOIN projets p ON p.nom = a.projet "
+            "ORDER BY a.date_acq DESC LIMIT 20"
         ).fetchall()
 
-    return render_template("calendrier.html",
+    # ── Config Google Calendar pour l'embed iframe ───────────────────────
+    gcal_calendar_id = os.environ.get("GOOGLE_CALENDAR_ID", "")
+    gcal_enabled     = bool(gcal and gcal.is_enabled() and gcal_calendar_id)
+    gcal_tz          = os.environ.get("GOOGLE_CALENDAR_TZ", "Europe/Paris")
+
+    # ── Avancement par projet + alertes + conflits (ex-planification) ────
+    # Fusionné dans la page /planning unifiée
+    with get_db() as db:
+        projets_raw_p = db.execute("SELECT * FROM projets ORDER BY nom").fetchall()
+        animaux_raw_p = db.execute("SELECT * FROM animaux ORDER BY projet, animal_id").fetchall()
+        acq_counts_p  = db.execute(
+            "SELECT animal_id, projet, COUNT(*) as n FROM acquisitions GROUP BY animal_id, projet"
+        ).fetchall()
+    acq_map_p   = {(r["animal_id"], r["projet"]): r["n"] for r in acq_counts_p}
+    dismissed_keys = _get_dismissed_alertes(current_user.id)
+    alertes_brut = []
+    projets_plan = []
+
+    # ── CR : avancement par SESSION (préférence cliente) ─────────────────
+    # On agrège : pour chaque session, combien d'animaux, combien d'acquisitions,
+    # % d'avancement.
+    with get_db() as db:
+        sessions_raw = db.execute(
+            """SELECT s.id, s.nom AS session_nom, s.projet, s.date_debut, s.description,
+                      p.nom_long, p.resp,
+                      (SELECT COUNT(*) FROM animaux WHERE session_id=s.id) AS nb_animaux,
+                      (SELECT COUNT(*) FROM acquisitions a
+                       WHERE a.session_id=s.id) AS nb_acquisitions,
+                      (SELECT COUNT(*) FROM acquisitions a
+                       WHERE a.session_id=s.id AND a.statut='ok') AS nb_ok
+               FROM sessions s
+               LEFT JOIN projets p ON p.nom = s.projet
+               ORDER BY s.projet, s.nom"""
+        ).fetchall()
+    sessions_plan = []
+    for s in sessions_raw:
+        if not user_can_view_projet(current_user, s["projet"]):
+            continue
+        nb_anim = s["nb_animaux"] or 0
+        nb_acq  = s["nb_acquisitions"] or 0
+        nb_ok   = s["nb_ok"] or 0
+        # Avancement : ok / total acquisitions de la session
+        pct = round(nb_ok / nb_acq * 100) if nb_acq else 0
+        sessions_plan.append({
+            "id": s["id"],
+            "session_nom": s["session_nom"],
+            "projet": s["projet"],
+            "projet_nom_long": s["nom_long"] or "",
+            "projet_resp": s["resp"] or "",
+            "date_debut": s["date_debut"] or "",
+            "description": s["description"] or "",
+            "nb_animaux": nb_anim,
+            "nb_acquisitions": nb_acq,
+            "nb_ok": nb_ok,
+            "pct": pct,
+            "couleur": "teal" if pct >= 75 else ("amber" if pct >= 40 else "red"),
+        })
+    for p in projets_raw_p:
+        # Filtre droits projet
+        if not user_can_view_projet(current_user, p["nom"]):
+            continue
+        seq      = p["seq_par_animal"] if p["seq_par_animal"] else 3
+        animaux  = [a for a in animaux_raw_p if a["projet"] == p["nom"]]
+        nb_ok = nb_attente = nb_cours = nb_refaire = nb_manquant = 0
+        for a in animaux:
+            acq_faites = acq_map_p.get((a["animal_id"], p["nom"]), 0)
+            restantes  = max(0, seq - acq_faites)
+            if a["statut"] == "ok":          nb_ok      += 1
+            elif a["statut"] == "en_attente": nb_attente += 1
+            elif a["statut"] == "en_cours":   nb_cours   += 1
+            elif a["statut"] == "a_refaire":  nb_refaire += 1
+            if restantes > 0:                 nb_manquant += 1
+            if a["statut"] == "a_refaire":
+                alertes_brut.append({"type": "reprise", "projet": p["nom"],
+                                "animal_id": a["animal_id"],
+                                "msg": f"Reprise requise : {a['animal_id']} ({p['nom']})"})
+            if restantes > 0 and a["statut"] != "ok":
+                alertes_brut.append({"type": "manquant", "projet": p["nom"],
+                                "animal_id": a["animal_id"],
+                                "msg": f"{restantes} acq. manquante(s) — {a['animal_id']} ({p['nom']})"})
+        nb_prevus_p = p["nb_animaux_prevus"] or 0
+        prevues = nb_prevus_p * seq
+        faites  = sum(acq_map_p.get((a["animal_id"], p["nom"]), 0) for a in animaux)
+        pct     = round(faites / prevues * 100) if prevues else 0
+        if pct < 50 and nb_prevus_p > 0:
+            alertes_brut.append({"type": "retard", "projet": p["nom"], "animal_id": None,
+                            "msg": f"{p['nom']} : seulement {pct}% des acquisitions réalisées"})
+        projets_plan.append({
+            "nom": p["nom"], "nom_long": p["nom_long"], "resp": p["resp"],
+            "nb_prevus": nb_prevus_p, "nb_inscrits": len(animaux),
+            "seq_par_animal": seq, "prevues": prevues, "faites": faites, "pct": pct,
+            "couleur": "teal" if pct >= 75 else ("amber" if pct >= 40 else "red"),
+            "nb_ok": nb_ok, "nb_attente": nb_attente,
+            "nb_cours": nb_cours, "nb_refaire": nb_refaire,
+            "nb_manquant": nb_manquant,
+        })
+
+    # Calcule une key stable par alerte + filtre celles dismissed
+    alertes = []
+    for a in alertes_brut:
+        key = f"{a['type']}|{a['projet']}|{a.get('animal_id') or ''}"
+        if key in dismissed_keys:
+            continue
+        a["key"] = key
+        alertes.append(a)
+
+    # Conflits de créneaux (chevauchements horaires)
+    with get_db() as db:
+        rows_conf = db.execute(
+            """SELECT id, animal_id, projet, sequence, date_acq,
+                      heure_debut, duree_min, importé_par, statut
+               FROM acquisitions
+               WHERE heure_debut IS NOT NULL AND duree_min IS NOT NULL
+                 AND date_acq >= ?
+               ORDER BY date_acq, heure_debut""",
+            (datetime.now().strftime("%Y-%m-%d"),)
+        ).fetchall()
+    by_date_c: dict[str, list] = {}
+    for r in rows_conf:
+        by_date_c.setdefault(r["date_acq"], []).append(dict(r))
+    conflits = []
+    for date_acq, acqs_c in by_date_c.items():
+        for i in range(len(acqs_c)):
+            a = acqs_c[i]; a_start = _hhmm_to_min(a["heure_debut"])
+            a_end = a_start + int(a["duree_min"])
+            for j in range(i + 1, len(acqs_c)):
+                b = acqs_c[j]; b_start = _hhmm_to_min(b["heure_debut"])
+                b_end = b_start + int(b["duree_min"])
+                if a_start < b_end and b_start < a_end:
+                    conflits.append({
+                        "date_acq": date_acq,
+                        "a_heure": a["heure_debut"], "a_fin": _min_to_hhmm(a_end),
+                        "a_animal": a["animal_id"], "a_projet": a["projet"],
+                        "a_seq": a["sequence"], "a_user": a["importé_par"], "a_id": a["id"],
+                        "b_heure": b["heure_debut"], "b_fin": _min_to_hhmm(b_end),
+                        "b_animal": b["animal_id"], "b_projet": b["projet"],
+                        "b_seq": b["sequence"], "b_user": b["importé_par"], "b_id": b["id"],
+                    })
+
+    return render_template("planning.html",
         year=year, month=month,
         month_name=month_names_fr[month],
         cal_weeks=cal_weeks,
@@ -5393,6 +7138,22 @@ def page_calendrier():
         next_year=next_dt.year, next_month=next_dt.month,
         today_day=now.day if (now.year == year and now.month == month) else -1,
         dernieres_acq=[dict(r) for r in dernieres_acq],
+        # CR #10 : nom complet projet + responsable pour la légende
+        nom_long_map=nom_long_map,
+        resp_map=resp_map,
+        # CR #11 : stats d'occupation du mois
+        stats_occupation=stats_occupation,
+        # Google Calendar embed
+        gcal_enabled=gcal_enabled,
+        gcal_calendar_id=gcal_calendar_id,
+        gcal_tz=gcal_tz,
+        # Fusion ex-/planification
+        projets_plan=projets_plan,
+        sessions_plan=sessions_plan,  # CR : avancement par session
+        alertes=alertes,
+        nb_alertes=len(alertes),
+        conflits=conflits,
+        nb_conflits=len(conflits),
     )
 
 
@@ -5438,6 +7199,7 @@ if not RECAPTCHA_SITE_KEY or not RECAPTCHA_SECRET_KEY:
 # Appelé au démarrage quel que soit le mode (gunicorn ou python3 app.py)
 init_db()
 _ensure_scheduler()   # boucle de rappels J-1 (envoi 8h chaque jour)
+_ensure_gcal_poll()   # polling Google Calendar → DB (toutes les 120s)
 
 if __name__ == "__main__":
     try:

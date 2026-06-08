@@ -1,0 +1,1601 @@
+{% extends "base.html" %}
+{% block title %}{{ "Planning" | t }}{% endblock %}
+{% block content %}
+
+<!-- ─── En-tête avec actions principales (fusion planification + calendrier) ── -->
+<div style="display:flex;align-items:center;justify-content:space-between;
+            gap:16px;flex-wrap:wrap;margin-bottom:14px;">
+  <div>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <h1 style="font-size:24px;font-weight:600;letter-spacing:-0.01em;color:var(--text);margin:0;">
+        📅 {{ "Planning" | t }}
+      </h1>
+      {% if nb_alertes > 0 %}
+        <a href="#alertes" style="text-decoration:none;">
+        <span style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;
+                     border-radius:6px;font-family:var(--font-mono);font-size:10px;
+                     background:var(--red-bg);color:var(--red);border:1px solid var(--red);">
+          ⚠ {{ nb_alertes }} alerte(s)
+        </span>
+        </a>
+      {% endif %}
+      {% if nb_conflits > 0 %}
+        <a href="#alertes" style="text-decoration:none;">
+        <span style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;
+                     border-radius:6px;font-family:var(--font-mono);font-size:10px;
+                     background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber);">
+          ⚡ {{ nb_conflits }} conflit(s)
+        </span>
+        </a>
+      {% endif %}
+    </div>
+    <p style="font-size:12px;color:var(--hint);font-family:var(--font-mono);margin:6px 0 0;">
+      Réservation des créneaux IRM · {{ month_name }} {{ year }} · sync mobile via Google Agenda
+    </p>
+  </div>
+
+  <!-- Boutons d'action principaux : niveau "primary" -->
+  <div style="display:flex;gap:10px;flex-wrap:wrap;">
+    <button type="button" class="btn-action btn-action-secondary" onclick="openSerieModal()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+      Série récurrente
+    </button>
+    <button type="button" class="btn-action btn-action-primary" onclick="openCreneauModal()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+           stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      Réserver un créneau
+    </button>
+  </div>
+</div>
+
+<style>
+  /* Boutons d'action standardisés — 3 niveaux cohérents */
+  .btn-action {
+    display:inline-flex; align-items:center; gap:8px;
+    font-family: var(--font-mono); font-size: 13px; font-weight: 500;
+    padding: 10px 16px; border-radius: 8px;
+    cursor: pointer; transition: all .15s; white-space: nowrap;
+    border: 1.5px solid transparent;
+  }
+  .btn-action-primary {
+    background: var(--teal); color: #fff; border-color: var(--teal);
+    box-shadow: 0 2px 8px rgba(234,124,28,0.32);
+    font-weight: 600;
+  }
+  .btn-action-primary:hover { background: var(--teal-dim); border-color: var(--teal-dim); }
+  .btn-action-secondary {
+    background: transparent; color: var(--text); border-color: var(--border2);
+  }
+  .btn-action-secondary:hover { background: var(--bg3); border-color: var(--text); }
+  .btn-action-discrete {
+    background: var(--bg); color: var(--hint); border-color: var(--border);
+    font-size: 11px; padding: 6px 10px;
+  }
+  .btn-action-discrete:hover { color: var(--text); }
+</style>
+
+<!-- ─── Google Calendar embed (bidirectionnel) ─────────────────────────── -->
+{% if gcal_enabled %}
+<div class="card" style="padding:0;overflow:hidden;">
+  <div style="display:flex;align-items:center;justify-content:space-between;
+              padding:10px 16px;border-bottom:1px solid var(--border);
+              background:var(--bg2);flex-wrap:wrap;gap:8px;">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span style="width:24px;height:24px;border-radius:6px;background:var(--teal-bg);
+                   color:var(--teal);display:inline-flex;align-items:center;justify-content:center;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="4" width="18" height="18" rx="2"/>
+          <line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/>
+          <line x1="3" y1="10" x2="21" y2="10"/></svg>
+      </span>
+      <div>
+        <div style="font-size:13px;font-weight:600;color:var(--text);">Google Agenda — IRM Dashboard</div>
+        <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-top:2px;">
+          Synchronisé bidirectionnellement · accès mobile via l'app Google Agenda
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center;">
+      <!-- Switcher de vue -->
+      <div id="gcal-view-switcher" style="display:flex;gap:0;border:1px solid var(--border);border-radius:6px;overflow:hidden;">
+        <button onclick="setGcalView('WEEK')"  data-view="WEEK"  class="gcal-view-btn">Semaine</button>
+        <button onclick="setGcalView('MONTH')" data-view="MONTH" class="gcal-view-btn">Mois</button>
+        <button onclick="setGcalView('AGENDA')" data-view="AGENDA" class="gcal-view-btn">Agenda</button>
+      </div>
+      {% if current_user.role == 'admin' %}
+      <button onclick="resyncGcal()" title="Re-pousser tous les créneaux vers Google Calendar"
+              style="background:var(--bg);border:1px solid var(--border);border-radius:6px;
+                     padding:5px 10px;font-family:var(--font-mono);font-size:11px;
+                     color:var(--hint);cursor:pointer;">↻ resync</button>
+      {% endif %}
+      <a href="https://calendar.google.com/calendar/u/0/r?cid={{ gcal_calendar_id }}"
+         target="_blank" rel="noopener"
+         style="background:var(--bg);border:1px solid var(--border);border-radius:6px;
+                padding:5px 10px;font-family:var(--font-mono);font-size:11px;
+                color:var(--hint);text-decoration:none;">↗ ouvrir dans Google</a>
+    </div>
+  </div>
+  <div style="position:relative;">
+    <iframe id="gcal-iframe"
+            src=""
+            style="border:0;width:100%;height:700px;display:block;background:var(--bg);"
+            frameborder="0" scrolling="no"
+            onload="onGcalLoaded()"></iframe>
+
+    <!-- Message d'aide affiché si iframe reste blanche (droits manquants) -->
+    <div id="gcal-help" style="display:none;position:absolute;top:0;left:0;right:0;bottom:0;
+                                background:var(--bg2);padding:32px;
+                                display:flex;align-items:center;justify-content:center;">
+      <div style="max-width:520px;text-align:center;">
+        <div style="font-size:42px;margin-bottom:12px;">📅</div>
+        <div style="font-size:16px;font-weight:600;color:var(--text);margin-bottom:8px;">
+          L'agenda Google ne s'affiche pas ?
+        </div>
+        <div style="font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:16px;">
+          C'est probablement un problème de <b>droits d'accès</b>. Le calendrier
+          partagé doit soit être <b>public en lecture</b>, soit être partagé avec
+          le compte Google auquel tu es connecté dans ce navigateur.
+        </div>
+        <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;
+                    padding:14px;text-align:left;font-size:12px;color:var(--text);
+                    margin-bottom:14px;">
+          <div style="font-weight:600;margin-bottom:6px;">Solution rapide (recommandée) :</div>
+          <ol style="margin:0;padding-left:18px;line-height:1.7;">
+            <li>Ouvre <a href="https://calendar.google.com" target="_blank" style="color:var(--teal);">calendar.google.com</a> sur le compte qui détient le calendrier</li>
+            <li>Côté gauche → survole "IRM Dashboard" → ⋮ → <b>Paramètres et partage</b></li>
+            <li>Coche <b>"Rendre disponible publiquement"</b> → "Afficher tous les détails"</li>
+            <li>Recharge cette page</li>
+          </ol>
+        </div>
+        <a href="https://calendar.google.com/calendar/u/0/r?cid={{ gcal_calendar_id }}"
+           target="_blank" rel="noopener"
+           style="display:inline-block;background:var(--teal);color:white;
+                  text-decoration:none;padding:8px 16px;border-radius:6px;
+                  font-family:var(--font-mono);font-size:12px;">
+          Ouvrir directement dans Google Calendar →
+        </a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+  .gcal-view-btn {
+    background: var(--bg); border: none; padding: 5px 12px;
+    font-family: var(--font-mono); font-size: 11px;
+    color: var(--hint); cursor: pointer; transition: all .12s;
+    border-right: 1px solid var(--border);
+  }
+  .gcal-view-btn:last-child { border-right: none; }
+  .gcal-view-btn:hover { background: var(--bg3); color: var(--text); }
+  .gcal-view-btn.active {
+    background: var(--teal); color: white;
+  }
+</style>
+
+<script>
+  const GCAL_ID = {{ gcal_calendar_id | tojson }};
+  const GCAL_TZ = {{ gcal_tz | tojson }};
+
+  // Affiche le message d'aide si l'iframe n'a pas chargé après 5s
+  // (Google renvoie une page d'erreur silencieuse si pas de droits)
+  let _gcalLoadOK = false;
+  function onGcalLoaded() {
+    _gcalLoadOK = true;
+    const help = document.getElementById('gcal-help');
+    if (help) help.style.display = 'none';
+  }
+  setTimeout(() => {
+    if (!_gcalLoadOK) {
+      const help = document.getElementById('gcal-help');
+      if (help) help.style.display = 'flex';
+    }
+  }, 5000);
+  function setGcalView(mode) {
+    const iframe = document.getElementById('gcal-iframe');
+    const params = new URLSearchParams({
+      src:          GCAL_ID,
+      ctz:          GCAL_TZ,
+      mode:         mode,
+      wkst:         '2',         // semaine commence lundi
+      showTitle:    '0',
+      showNav:      '1',
+      showDate:     '1',
+      showPrint:    '0',
+      showTabs:     '0',
+      showCalendars:'0',
+      showTz:       '0',
+    });
+    iframe.src = 'https://calendar.google.com/calendar/embed?' + params.toString();
+    // Marque le bouton actif
+    document.querySelectorAll('.gcal-view-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.view === mode);
+    });
+    try { localStorage.setItem('gcal_view', mode); } catch(e) {}
+  }
+  // Restaure la dernière vue choisie, défaut = WEEK
+  let _savedView = 'WEEK';
+  try { _savedView = localStorage.getItem('gcal_view') || 'WEEK'; } catch(e) {}
+  setGcalView(_savedView);
+
+  async function resyncGcal() {
+    if (!confirm('Re-pousser tous les créneaux planifiés vers Google Calendar ?')) return;
+    try {
+      const r = await fetch('/api/google-calendar/resync', { method: 'POST' });
+      const j = await r.json();
+      if (j.ok) {
+        showToast(`Resync OK : ${j.synced} créneaux poussés`, 'success', 4000);
+        setTimeout(() => document.getElementById('gcal-iframe').src += '', 1500); // reload iframe
+      } else {
+        showToast(j.message || 'Resync échoué', 'error');
+      }
+    } catch (e) { showToast('Erreur réseau', 'error'); }
+  }
+</script>
+{% else %}
+<!-- Fallback : Google Calendar non configuré → on garde la grille interne -->
+<div class="card" style="padding:16px;">
+  <div style="background:var(--amber-bg);color:var(--amber);padding:8px 12px;border-radius:6px;
+              font-family:var(--font-mono);font-size:11px;margin-bottom:12px;">
+    ⚠ Google Calendar non configuré — affichage de la grille locale.
+    Définissez GOOGLE_CALENDAR_ID et GOOGLE_CALENDAR_CREDENTIALS_PATH pour activer la synchro.
+  </div>
+  <!-- Grille calendrier locale (fallback) -->
+  <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:6px;">
+    {% for day in ["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"] %}
+    <div style="text-align:center;font-family:var(--font-mono);font-size:9px;
+                letter-spacing:.08em;text-transform:uppercase;color:var(--hint);padding:4px 0;">
+      {{ day }}
+    </div>
+    {% endfor %}
+  </div>
+  <div style="display:flex;flex-direction:column;gap:4px;">
+    {% for week in cal_weeks %}
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;">
+      {% for day in week %}
+      {% set day_acqs = acqs_by_day.get(day, []) if day > 0 else [] %}
+      <div onclick="{% if day > 0 and day_acqs %}showDay({{ day }}){% endif %}"
+        style="min-height:80px;border-radius:4px;padding:6px;cursor:{% if day > 0 and day_acqs %}pointer{% else %}default{% endif %};
+               border:1px solid {% if day == today_day %}var(--teal){% else %}var(--border){% endif %};
+               background:{% if day == 0 %}var(--bg){% elif day == today_day %}var(--teal-bg){% else %}var(--bg2){% endif %};">
+        {% if day > 0 %}
+          <div style="font-family:var(--font-mono);font-size:11px;color:{% if day == today_day %}var(--teal){% else %}var(--muted){% endif %};margin-bottom:4px;">{{ day }}</div>
+          {% if day_acqs %}
+            <div style="display:flex;flex-direction:column;gap:2px;">
+              {% for a in day_acqs[:4] %}
+              <div style="font-family:var(--font-mono);font-size:9px;padding:1px 5px;border-radius:2px;
+                          overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:var(--bg3);color:var(--text);"
+                   title="{{ a.animal_id }} — {{ a.sequence }}">{{ a.animal_id }}</div>
+              {% endfor %}
+              {% if day_acqs | length > 4 %}
+              <div style="font-family:var(--font-mono);font-size:9px;color:var(--hint);">+{{ day_acqs | length - 4 }}</div>
+              {% endif %}
+            </div>
+          {% endif %}
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+
+
+
+<!-- ─── Stats d'occupation du mois (CR #11) ──────────────────────────── -->
+{% if stats_occupation.total > 0 %}
+<div class="card" style="padding:14px 20px;">
+  <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px;">
+    <span style="font-family:var(--font-mono);font-size:10px;color:var(--hint);
+                 text-transform:uppercase;letter-spacing:0.08em;">
+      Occupation — {{ month_name }} {{ year }}
+    </span>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">
+    <!-- Total -->
+    <div>
+      <div style="font-size:22px;font-weight:600;color:var(--text);line-height:1;">
+        {{ stats_occupation.total }}
+      </div>
+      <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-top:3px;">
+        créneau{{ 'x' if stats_occupation.total > 1 else '' }}
+        sur {{ stats_occupation.jours_occupes }} jour{{ 's' if stats_occupation.jours_occupes > 1 else '' }}
+      </div>
+    </div>
+
+    <!-- Répartition matin/après-midi/journée -->
+    <div>
+      <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-bottom:4px;">
+        Répartition demi-journée
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;">
+        {% set p = stats_occupation.par_periode %}
+        {% if p.matin %}<span title="Matin">🌅 {{ p.matin }}</span>{% endif %}
+        {% if p.apres_midi %}<span title="Après-midi">🌇 {{ p.apres_midi }}</span>{% endif %}
+        {% if p.journee %}<span title="Journée">🌞 {{ p.journee }}</span>{% endif %}
+        {% if p.custom_ou_none %}
+          <span title="Personnalisé / non défini"
+                style="color:var(--hint);font-family:var(--font-mono);font-size:10px;">
+            ⏱ {{ p.custom_ou_none }}
+          </span>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Top scanners -->
+    <div>
+      <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-bottom:4px;">
+        Par appareil IRM
+      </div>
+      <div style="display:flex;flex-direction:column;gap:3px;">
+        {% for sname, info in stats_occupation.par_scanner.items() %}
+        <div style="display:flex;align-items:center;gap:6px;font-size:11px;">
+          <span style="width:8px;height:8px;border-radius:50%;background:{{ info.couleur }};"></span>
+          <span style="color:var(--text);">{{ sname }}</span>
+          <span style="margin-left:auto;font-family:var(--font-mono);color:var(--hint);">
+            {{ info.count }}
+          </span>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- Jour le plus chargé -->
+    {% if stats_occupation.jour_max %}
+    <div>
+      <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-bottom:4px;">
+        Journée la plus chargée
+      </div>
+      <div style="font-size:13px;color:var(--text);">
+        <strong>{{ stats_occupation.jour_max.date }}</strong>
+        <span style="font-family:var(--font-mono);font-size:11px;color:var(--teal);margin-left:6px;">
+          {{ stats_occupation.jour_max.count }} créneaux
+        </span>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+<!-- ─── Mes créneaux à venir (remonté en haut pour visibilité) ─────────── -->
+<div id="mes-creneaux-card"
+     style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;
+            box-shadow:0 1px 3px rgba(0,0,0,0.04);overflow:hidden;margin-bottom:14px;
+            flex-shrink:0;flex-grow:0;flex-basis:auto;">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+              padding:12px 20px;border-bottom:1px solid var(--border);">
+    <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+      <span style="width:32px;height:32px;border-radius:8px;background:var(--teal-bg);color:var(--teal);
+                   display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      </span>
+      <div style="min-width:0;">
+        <div style="font-size:14px;font-weight:600;color:var(--text);">Mes créneaux à venir</div>
+        <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-top:2px;"
+             id="mes-creneaux-sub-top">prochaines acquisitions planifiées</div>
+      </div>
+    </div>
+    {% if current_user.role in ['admin', 'operateur'] %}
+    <a href="/planification"
+       style="font-family:var(--font-mono);font-size:11px;color:var(--hint);text-decoration:none;flex-shrink:0;">
+      ouvrir la planification →
+    </a>
+    {% endif %}
+  </div>
+  <div id="mes-creneaux-body-top" style="padding:12px;">
+    <div class="ui-skeleton" style="height:48px;margin-bottom:6px;"></div>
+    <div class="ui-skeleton" style="height:48px;margin-bottom:6px;opacity:0.7;"></div>
+    <div class="ui-skeleton" style="height:48px;opacity:0.4;"></div>
+  </div>
+</div>
+
+<style>
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
+  .creneau-item:hover {
+    background: var(--bg3);
+    border-color: var(--border) !important;
+  }
+</style>
+
+<script>
+(function loadMesCreneauxTop() {
+  const $body = document.getElementById('mes-creneaux-body-top');
+  const $sub  = document.getElementById('mes-creneaux-sub-top');
+  if (!$body) return;
+
+  function relDay(iso) {
+    const d = new Date(iso + 'T00:00:00');
+    const today = new Date(); today.setHours(0,0,0,0);
+    const diff = Math.round((d - today) / 86400000);
+    if (diff === 0) return "Aujourd'hui";
+    if (diff === 1) return "Demain";
+    if (diff < 7) return d.toLocaleDateString('fr-FR', { weekday: 'short' });
+    return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+  }
+  function statutPill(statut) {
+    const colors = {
+      en_attente: { bg:'var(--amber-bg)', col:'var(--amber)' },
+      en_cours:   { bg:'var(--blue-bg)',  col:'var(--blue)' },
+    };
+    const c = colors[statut] || { bg:'var(--bg3)', col:'var(--muted)' };
+    return `<span style="display:inline-block;font-family:var(--font-mono);font-size:10px;
+                         padding:2px 8px;border-radius:4px;background:${c.bg};color:${c.col};
+                         border:1px solid ${c.col};">${statut.replace('_',' ')}</span>`;
+  }
+  function escHtml(s) {
+    return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  fetch('/api/planification/mes-creneaux?limit=6')
+    .then(r => r.json())
+    .then(d => {
+      if (d.count === 0) {
+        $body.innerHTML = `
+          <div style="display:flex;flex-direction:column;align-items:center;text-align:center;padding:24px;">
+            <div style="width:48px;height:48px;border-radius:50%;background:var(--bg3);color:var(--hint);
+                        display:flex;align-items:center;justify-content:center;margin-bottom:12px;">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                   stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            </div>
+            <div style="font-size:14px;font-weight:500;color:var(--text);">Aucun créneau à venir</div>
+            <div style="font-family:var(--font-mono);font-size:11px;color:var(--hint);margin-top:4px;">
+              Aucune acquisition planifiée pour le moment.
+            </div>
+          </div>`;
+        $sub.textContent = '0 créneau';
+        return;
+      }
+      $sub.textContent = `${d.count} créneau(x) à venir`;
+      $body.innerHTML = d.creneaux.map(c => {
+        const heure  = c.heure_debut || '—';
+        const day    = relDay(c.date_acq);
+        const animal = escHtml(c.animal_id);
+        const seq    = escHtml(c.sequence || '—');
+        const proj   = escHtml(c.projet || '');
+        const aut    = escHtml(c.importé_par || '—');
+        const dur    = c.duree_min ? ` · ${c.duree_min} min` : '';
+        // CR #14 : chercheur affiché si dispo
+        const resp   = c.projet_resp
+          ? `<span style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-left:6px;">· 👤 ${escHtml(c.projet_resp)}</span>`
+          : '';
+        const scannerBadge = c.scanner_nom
+          ? `<span style="display:inline-flex;align-items:center;gap:4px;
+                          font-family:var(--font-mono);font-size:10px;color:${c.scanner_couleur};
+                          border:1px solid ${c.scanner_couleur};padding:1px 6px;border-radius:4px;
+                          margin-left:6px;">⬤ ${escHtml(c.scanner_nom)}</span>`
+          : '';
+        const barColor = c.scanner_couleur || 'var(--teal)';
+        // Badge "EN COURS" en tête du créneau actuellement en train de tourner
+        const enCoursBadge = c._is_current
+          ? `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:4px;
+                          background:var(--teal);color:#fff;font-family:var(--font-mono);font-size:9px;
+                          font-weight:700;letter-spacing:0.08em;margin-right:6px;animation:pulse 1.6s infinite;">
+                ● EN COURS</span>`
+          : '';
+        const itemBg = c._is_current
+          ? 'background:var(--teal-bg);border:1px solid var(--teal);'
+          : 'border:1px solid transparent;';
+        return `
+        <div class="creneau-item"
+           style="display:flex;align-items:center;gap:12px;padding:8px 12px;border-radius:8px;
+                  color:inherit;${itemBg}
+                  border-left:4px solid ${barColor};
+                  margin-bottom:4px;transition:background 0.12s,border 0.12s;">
+          <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
+                      flex-shrink:0;background:var(--teal-bg);color:var(--teal);
+                      border-radius:6px;padding:6px 8px;min-width:64px;">
+            <div style="font-family:var(--font-mono);font-size:9px;text-transform:uppercase;
+                        letter-spacing:0.1em;opacity:0.7;white-space:nowrap;">${day}</div>
+            <div style="font-family:var(--font-mono);font-size:12px;font-weight:600;
+                        line-height:1.1;margin-top:2px;">${heure}</div>
+          </div>
+          <a href="/animal/${encodeURIComponent(c.projet)}/${encodeURIComponent(c.animal_id)}"
+             style="flex:1;min-width:0;text-decoration:none;color:inherit;">
+            <div style="font-size:13px;font-weight:500;color:var(--text);
+                        overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+              ${enCoursBadge}${animal}<span style="color:var(--hint);font-weight:400;"> · ${seq}</span>${scannerBadge}
+            </div>
+            <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-top:2px;
+                        overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+              ${proj} · ${aut}${dur}${resp}
+            </div>
+          </a>
+          <div style="flex-shrink:0;display:flex;gap:6px;align-items:center;">
+            ${statutPill(c.statut)}
+            <button type="button" onclick="deleteCreneau(${c.id}, '${animal}', '${seq}')"
+                    title="Supprimer ce créneau"
+                    style="background:none;border:1px solid var(--border2);
+                           border-radius:4px;padding:4px 6px;cursor:pointer;
+                           color:var(--hint);transition:all 0.15s;line-height:1;"
+                    onmouseover="this.style.color='var(--red)';this.style.borderColor='var(--red)';"
+                    onmouseout="this.style.color='var(--hint)';this.style.borderColor='var(--border2)';">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                   stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="3 6 5 6 21 6"/>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            </button>
+          </div>
+        </div>`;
+      }).join('');
+    })
+    .catch(err => {
+      console.error('[mes-creneaux-top]', err);
+      $body.innerHTML = `<div style="padding:14px;color:var(--red);font-family:var(--font-mono);font-size:12px;">Erreur de chargement</div>`;
+    });
+})();
+
+// Suppression d'un créneau (dispo aussi depuis planification)
+async function deleteCreneau(acqId, animalLabel, seqLabel) {
+  if (!confirm(`Supprimer le créneau ${animalLabel} · ${seqLabel} ?`)) return;
+  try {
+    const res = await fetch(`/api/acquisitions/${acqId}`, { method: 'DELETE' });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      showToast(j.error || 'Erreur lors de la suppression', 'error');
+      return;
+    }
+    showToast('Créneau supprimé', 'success', 2000);
+    setTimeout(() => location.reload(), 600);
+  } catch (e) {
+    showToast('Erreur réseau', 'error');
+  }
+}
+</script>
+
+<!-- Panneau détail jour -->
+<div id="day-panel" style="display:none;" class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+    <div class="card-title" id="day-panel-title" style="margin-bottom:0;padding-bottom:0;border:none;"></div>
+    <button onclick="document.getElementById('day-panel').style.display='none'"
+            style="background:none;border:none;font-size:16px;cursor:pointer;color:var(--hint);">✕</button>
+  </div>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Animal</th><th>Projet</th><th>Séquence</th><th>Statut</th><th>Importé par</th>
+      </tr>
+    </thead>
+    <tbody id="day-panel-body"></tbody>
+  </table>
+</div>
+
+<!-- ─── Avancement par SESSION (CR : préférence cliente) ──────────────── -->
+<div class="card" id="avancement">
+  <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+    <span>📋 Avancement par session</span>
+    <span style="font-family:var(--font-mono);font-size:10px;color:var(--hint);text-transform:none;letter-spacing:0;font-weight:400;">
+      {{ sessions_plan | length }} session(s) accessible(s)
+    </span>
+  </div>
+  {% if sessions_plan %}
+  <div style="display:flex;flex-direction:column;gap:10px;">
+    {% for sp in sessions_plan %}
+    <a href="/projet/{{ sp.projet }}#session-{{ sp.id }}" style="text-decoration:none;color:inherit;">
+      <div style="display:grid;grid-template-columns:200px 1fr 180px auto;gap:12px;align-items:center;
+                  padding:10px 14px;border:1px solid var(--border);border-radius:8px;
+                  background:var(--bg2);transition:all .12s;"
+           onmouseover="this.style.background='var(--bg3)';"
+           onmouseout="this.style.background='var(--bg2)';">
+        <div>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span style="font-family:var(--font-mono);font-size:11px;color:var(--hint);">{{ sp.projet | upper }}</span>
+            <span style="color:var(--border2);">·</span>
+            <span style="font-weight:600;color:var(--text);font-size:13px;">{{ sp.session_nom }}</span>
+          </div>
+          {% if sp.projet_resp %}
+          <div style="font-family:var(--font-mono);font-size:10px;color:var(--muted);margin-top:2px;">
+            👤 {{ sp.projet_resp }}
+          </div>
+          {% endif %}
+          {% if sp.date_debut %}
+          <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-top:2px;">
+            depuis {{ sp.date_debut[:10] }}
+          </div>
+          {% endif %}
+        </div>
+        <div>
+          {% if sp.nb_acquisitions > 0 %}
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div style="flex:1;height:8px;background:var(--bg);border-radius:4px;overflow:hidden;">
+              <div style="height:100%;width:{{ sp.pct }}%;
+                          background:{% if sp.couleur == 'teal' %}var(--teal)
+                                     {% elif sp.couleur == 'amber' %}var(--amber)
+                                     {% else %}var(--red){% endif %};"></div>
+            </div>
+            <span style="font-family:var(--font-mono);font-size:11px;color:var(--text);min-width:34px;text-align:right;">
+              {{ sp.pct }}%
+            </span>
+          </div>
+          <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-top:4px;">
+            {{ sp.nb_ok }} / {{ sp.nb_acquisitions }} acquisitions OK · {{ sp.nb_animaux }} animal(aux)
+          </div>
+          {% else %}
+          <div style="font-family:var(--font-mono);font-size:11px;color:var(--hint);font-style:italic;">
+            Aucune acquisition pour cette session
+          </div>
+          <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-top:4px;">
+            {{ sp.nb_animaux }} animal(aux) rattaché(s)
+          </div>
+          {% endif %}
+        </div>
+        <div style="font-family:var(--font-mono);font-size:10px;color:var(--muted);">
+          {{ sp.nb_animaux }} animal(aux) · {{ sp.nb_acquisitions }} acq.
+        </div>
+        <span style="color:var(--hint);font-family:var(--font-mono);">→</span>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+    <div class="mono" style="color:var(--hint);padding:16px 0;">Aucune session accessible.</div>
+  {% endif %}
+</div>
+
+<!-- Ancienne version : Avancement par projet (cachée, conservée pour compat) -->
+<div class="card" id="avancement-par-projet-legacy" style="display:none;">
+  <div class="card-title">📋 Avancement par projet (legacy)</div>
+  {% if projets_plan %}
+  <div style="display:flex;flex-direction:column;gap:10px;">
+    {% for pp in projets_plan %}
+    <a href="/projet/{{ pp.nom }}" style="text-decoration:none;color:inherit;">
+      <div style="display:grid;grid-template-columns:180px 1fr 220px auto;gap:12px;align-items:center;
+                  padding:10px 14px;border:1px solid var(--border);border-radius:8px;
+                  background:var(--bg2);transition:all .12s;"
+           onmouseover="this.style.background='var(--bg3)';"
+           onmouseout="this.style.background='var(--bg2)';">
+        <!-- Acronyme + nom long -->
+        <div>
+          <div style="font-weight:600;color:var(--text);font-size:13px;">{{ pp.nom | upper }}</div>
+          {% if pp.nom_long %}
+          <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-top:2px;
+                      overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ pp.nom_long }}</div>
+          {% endif %}
+          {% if pp.resp %}
+          <div style="font-family:var(--font-mono);font-size:10px;color:var(--muted);margin-top:2px;">
+            👤 {{ pp.resp }}
+          </div>
+          {% endif %}
+        </div>
+        <!-- Barre de progression -->
+        <div>
+          {% if pp.nb_prevus > 0 %}
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div style="flex:1;height:8px;background:var(--bg);border-radius:4px;overflow:hidden;">
+              <div style="height:100%;width:{{ pp.pct }}%;
+                          background:{% if pp.couleur == 'teal' %}var(--teal)
+                                     {% elif pp.couleur == 'amber' %}var(--amber)
+                                     {% else %}var(--red){% endif %};"></div>
+            </div>
+            <span style="font-family:var(--font-mono);font-size:11px;color:var(--text);min-width:34px;text-align:right;">
+              {{ pp.pct }}%
+            </span>
+          </div>
+          <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-top:4px;">
+            {{ pp.faites }} / {{ pp.prevues }} acquisitions · {{ pp.nb_inscrits }} animal(aux) inscrit(s)
+          </div>
+          {% else %}
+          <div style="font-family:var(--font-mono);font-size:11px;color:var(--hint);font-style:italic;">
+            Nombre d'animaux prévus non précisé
+          </div>
+          <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-top:4px;">
+            {{ pp.faites }} acquisitions · {{ pp.nb_inscrits }} animal(aux)
+          </div>
+          {% endif %}
+        </div>
+        <!-- Stats statuts -->
+        <div style="display:flex;gap:6px;flex-wrap:wrap;font-family:var(--font-mono);font-size:10px;">
+          {% if pp.nb_ok %}<span class="pill pill-ok" style="font-size:10px;padding:1px 6px;">✓ {{ pp.nb_ok }}</span>{% endif %}
+          {% if pp.nb_cours %}<span class="pill pill-prog" style="font-size:10px;padding:1px 6px;">▶ {{ pp.nb_cours }}</span>{% endif %}
+          {% if pp.nb_attente %}<span class="pill pill-wait" style="font-size:10px;padding:1px 6px;">⌛ {{ pp.nb_attente }}</span>{% endif %}
+          {% if pp.nb_refaire %}<span class="pill pill-redo" style="font-size:10px;padding:1px 6px;">⚠ {{ pp.nb_refaire }}</span>{% endif %}
+        </div>
+        <!-- Flèche -->
+        <span style="color:var(--hint);font-family:var(--font-mono);">→</span>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+    <div class="mono" style="color:var(--hint);padding:16px 0;">Aucun projet accessible.</div>
+  {% endif %}
+</div>
+
+<!-- ─── Alertes & conflits (s'affiche seulement s'il y en a) ─────────── -->
+{% if alertes or conflits %}
+<div class="card" id="alertes" style="border-left:3px solid var(--amber);">
+  <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span>⚠ Alertes & conflits</span>
+      <span style="font-family:var(--font-mono);font-size:10px;color:var(--hint);text-transform:none;letter-spacing:0;font-weight:400;">
+        {{ nb_alertes }} alerte(s) · {{ nb_conflits }} conflit(s)
+      </span>
+    </div>
+    {% if alertes %}
+    <button type="button" onclick="dismissAllAlertes()"
+            style="font-family:var(--font-mono);font-size:11px;text-transform:none;letter-spacing:0;
+                   font-weight:500;padding:4px 10px;background:var(--bg);border:1px solid var(--border);
+                   border-radius:6px;color:var(--hint);cursor:pointer;">
+      ✕ Tout masquer
+    </button>
+    {% endif %}
+  </div>
+
+  {% if conflits %}
+  <div style="margin-bottom:14px;">
+    <div style="font-family:var(--font-mono);font-size:10px;color:var(--red);
+                text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">
+      Chevauchements horaires
+    </div>
+    <div style="display:flex;flex-direction:column;gap:6px;">
+      {% for c in conflits %}
+      <div style="display:grid;grid-template-columns:110px 1fr 1fr;gap:12px;align-items:center;
+                  padding:8px 12px;border-radius:6px;background:var(--red-bg);
+                  border:1px solid var(--red);font-size:11px;">
+        <div class="mono" style="color:var(--red);font-weight:500;">{{ c.date_acq }}</div>
+        <div>
+          <a href="/animal/{{ c.a_projet }}/{{ c.a_animal }}" style="color:var(--text);text-decoration:none;font-weight:500;">
+            {{ c.a_animal }} · {{ c.a_seq }}
+          </a>
+          <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);">
+            {{ c.a_heure }}–{{ c.a_fin }} · {{ c.a_projet }}
+          </div>
+        </div>
+        <div>
+          <a href="/animal/{{ c.b_projet }}/{{ c.b_animal }}" style="color:var(--text);text-decoration:none;font-weight:500;">
+            {{ c.b_animal }} · {{ c.b_seq }}
+          </a>
+          <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);">
+            {{ c.b_heure }}–{{ c.b_fin }} · {{ c.b_projet }}
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if alertes %}
+  <div>
+    <div style="font-family:var(--font-mono);font-size:10px;color:var(--amber);
+                text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">
+      Alertes projets
+    </div>
+    <div style="display:flex;flex-direction:column;gap:4px;">
+      {% for al in alertes %}
+      <div class="alerte-row" data-key="{{ al.key }}"
+           style="display:flex;align-items:center;gap:10px;padding:6px 10px;border-radius:6px;
+                  background:var(--bg2);border:1px solid var(--border);font-size:12px;">
+        <span style="font-family:var(--font-mono);font-size:9px;font-weight:600;padding:1px 6px;border-radius:3px;
+                     {% if al.type == 'retard' %}background:var(--red-bg);color:var(--red);
+                     {% elif al.type == 'reprise' %}background:var(--amber-bg);color:var(--amber);
+                     {% else %}background:var(--blue-bg);color:var(--blue);{% endif %}">
+          {{ al.type | upper }}
+        </span>
+        <span style="color:var(--text);flex:1;">{{ al.msg }}</span>
+        {% if al.animal_id %}
+        <a href="/animal/{{ al.projet }}/{{ al.animal_id }}"
+           style="font-family:var(--font-mono);font-size:10px;color:var(--teal);text-decoration:none;">
+          voir →
+        </a>
+        {% else %}
+        <a href="/projet/{{ al.projet }}"
+           style="font-family:var(--font-mono);font-size:10px;color:var(--teal);text-decoration:none;">
+          voir projet →
+        </a>
+        {% endif %}
+        <button type="button" onclick="dismissAlerte('{{ al.key }}', this)"
+                title="Masquer cette alerte"
+                style="background:none;border:1px solid var(--border2);border-radius:4px;
+                       padding:2px 7px;cursor:pointer;color:var(--hint);font-size:11px;line-height:1;">
+          ✕
+        </button>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+<style>
+  .day-cell:hover { background: var(--bg3) !important; }
+</style>
+
+<script>
+const acqsByDay = {{ acqs_by_day | tojson }};
+const colorMap  = {{ color_map | tojson }};
+
+const colorStyle = {
+  teal:  { bg: 'rgba(234,124,28,0.12)',  text: 'var(--teal)' },
+  blue:  { bg: 'rgba(29,78,216,0.1)',   text: '#1d4ed8' },
+  amber: { bg: 'rgba(180,83,9,0.1)',    text: '#b45309' },
+  red:   { bg: 'rgba(220,38,38,0.1)',   text: '#dc2626' },
+};
+
+const statuts = {
+  ok:         '<span class="pill pill-ok">OK</span>',
+  en_cours:   '<span class="pill pill-prog">en cours</span>',
+  en_attente: '<span class="pill pill-wait">en attente</span>',
+  a_refaire:  '<span class="pill pill-redo">à refaire</span>',
+};
+
+function showDay(day) {
+  const acqs  = acqsByDay[day] || [];
+  const panel = document.getElementById('day-panel');
+  const title = document.getElementById('day-panel-title');
+  const tbody = document.getElementById('day-panel-body');
+
+  title.textContent = `{{ month_name }} {{ year }} — jour ${day} (${acqs.length} acquisition(s))`;
+
+  tbody.innerHTML = acqs.map(a => {
+    const col = colorMap[a.projet] || 'teal';
+    const cs  = colorStyle[col];
+    return `<tr>
+      <td><strong>${a.animal_id}</strong></td>
+      <td><span style="font-family:var(--font-mono);font-size:10px;padding:1px 6px;border-radius:2px;
+                       background:${cs.bg};color:${cs.text};">${a.projet.replace(/_/g,' ')}</span></td>
+      <td class="mono">${a.sequence || '—'}</td>
+      <td>${statuts[a.statut] || a.statut}</td>
+      <td class="mono">${a.importé_par || '—'}</td>
+    </tr>`;
+  }).join('');
+
+  panel.style.display = 'block';
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+</script>
+
+
+
+<!-- ─── Modals (réservation créneau + série) — fusion planification ─── -->
+<div id="creneauModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);
+     z-index:1000;align-items:center;justify-content:center;padding:20px;">
+  <div style="background:var(--bg2);border-radius:10px;max-width:520px;width:100%;
+              padding:24px;box-shadow:0 12px 40px rgba(0,0,0,0.25);">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+      <div style="font-size:15px;font-weight:600;color:var(--text);">Réserver un créneau IRM</div>
+      <button onclick="closeCreneauModal()" style="background:none;border:none;font-size:20px;
+              color:var(--muted);cursor:pointer;line-height:1;">&times;</button>
+    </div>
+
+    <form id="creneauForm" class="form-grid" onsubmit="submitCreneau(event)">
+      <div class="form-row" style="grid-column:1/-1;">
+        <label class="form-label">Projet *</label>
+        <select class="form-select" name="projet" required>
+          <option value="">— sélectionner —</option>
+          {% for p in projets %}
+            <option value="{{ p.nom }}">{{ p.nom }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="form-row">
+        <label class="form-label">Animal *</label>
+        <input class="form-input" name="animal_id" required placeholder="ex: B3">
+      </div>
+
+      <div class="form-row">
+        <label class="form-label">Séquence *</label>
+        <input class="form-input" name="sequence" required placeholder="ex: T2_MSME">
+      </div>
+
+      <div class="form-row">
+        <label class="form-label">Date *</label>
+        <input class="form-input" type="date" name="date_acq" required>
+      </div>
+
+      <div class="form-row" style="grid-column:1/-1;">
+        <label class="form-label">Période *</label>
+        <div class="periode-group" data-form="creneauForm">
+          <button type="button" class="periode-btn" data-periode="matin">
+            <span class="periode-emoji">🌅</span><span>Matin</span>
+            <span class="periode-sub">09:00–12:30</span>
+          </button>
+          <button type="button" class="periode-btn active" data-periode="apres_midi">
+            <span class="periode-emoji">🌇</span><span>Après-midi</span>
+            <span class="periode-sub">13:30–17:00</span>
+          </button>
+          <button type="button" class="periode-btn" data-periode="journee">
+            <span class="periode-emoji">🌞</span><span>Journée</span>
+            <span class="periode-sub">09:00–17:00</span>
+          </button>
+          <button type="button" class="periode-btn" data-periode="custom">
+            <span class="periode-emoji">⏱</span><span>Personnalisé</span>
+            <span class="periode-sub">heure + durée</span>
+          </button>
+        </div>
+        <input type="hidden" name="periode" value="apres_midi">
+      </div>
+
+      <div class="form-row periode-custom-row" style="display:none;">
+        <label class="form-label">Heure début *</label>
+        <input class="form-input" type="time" name="heure_debut" value="13:30">
+      </div>
+
+      <div class="form-row periode-custom-row" style="display:none;">
+        <label class="form-label">Durée (min) *</label>
+        <input class="form-input" type="number" name="duree_min" min="1" max="480" value="30">
+      </div>
+
+      <div class="form-row">
+        <label class="form-label">Statut</label>
+        <select class="form-select" name="statut">
+          <option value="en_attente">en attente (planifié)</option>
+          <option value="en_cours">en cours</option>
+          <option value="ok">terminé</option>
+        </select>
+      </div>
+
+      <div class="form-row" style="grid-column:1/-1;">
+        <label class="form-label">Appareil IRM</label>
+        <select class="form-select" name="scanner_id" id="creneauScanner">
+          <option value="">— non précisé —</option>
+        </select>
+      </div>
+
+      <!-- CR #15 : Champs TEP (affichés si séquence contient TEP/PET/FDG ou si "TEP" coché) -->
+      <div class="form-row" style="grid-column:1/-1;">
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);cursor:pointer;">
+          <input type="checkbox" id="creneauIsTepToggle" onchange="toggleTepFields('creneauForm', this.checked)">
+          <span>☢ Acquisition TEP / PET (afficher les champs dose + produit)</span>
+        </label>
+      </div>
+      <div class="form-row tep-row" style="display:none;">
+        <label class="form-label">Dose injectée (MBq)</label>
+        <input class="form-input" type="number" step="0.1" min="0" max="1000"
+               name="tep_dose_mbq" placeholder="ex : 18.5">
+      </div>
+      <div class="form-row tep-row" style="display:none;">
+        <label class="form-label">Produit radioactif</label>
+        <input class="form-input" type="text" name="tep_produit" maxlength="80"
+               placeholder="ex : 18F-FDG, 11C-Raclopride">
+      </div>
+
+      <!-- Zone de résultat (conflits / suggestions / OK) -->
+      <div id="creneauResult" style="grid-column:1/-1;display:none;"></div>
+
+      <div style="grid-column:1/-1;display:flex;gap:8px;justify-content:flex-end;margin-top:8px;">
+        <button type="button" class="btn-ghost" onclick="closeCreneauModal()">Annuler</button>
+        <button type="button" class="btn-ghost" onclick="checkCreneau()">Vérifier le créneau</button>
+        <button type="submit" class="btn-primary" id="creneauSubmitBtn">Réserver</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<style>
+  /* Boutons période demi-journée (CR CHR) */
+  .periode-group {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+  }
+  .periode-btn {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 8px; cursor: pointer; transition: all .12s;
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    color: var(--muted); font-family: inherit; font-size: 12px;
+  }
+  .periode-btn:hover { border-color: var(--border2); background: var(--bg3); }
+  .periode-btn .periode-emoji { font-size: 20px; line-height: 1; margin-bottom: 2px; }
+  .periode-btn .periode-sub {
+    font-family: var(--font-mono); font-size: 9px; color: var(--hint);
+    margin-top: 1px;
+  }
+  .periode-btn.active {
+    background: var(--teal-bg); border-color: var(--teal); color: var(--teal);
+  }
+  .periode-btn.active .periode-sub { color: var(--teal); opacity: 0.8; }
+</style>
+
+<script>
+// ── Période (CR CHR : créneaux matin/après-midi) ─────────────────────────
+const PERIODE_PRESETS = {
+  matin:      { heure: '09:00', duree: 210 },
+  apres_midi: { heure: '13:30', duree: 210 },
+  journee:    { heure: '09:00', duree: 480 },
+};
+function setupPeriodeGroups() {
+  document.querySelectorAll('.periode-group').forEach(group => {
+    const formId = group.dataset.form;
+    const form   = document.getElementById(formId);
+    if (!form) return;
+    group.querySelectorAll('.periode-btn').forEach(btn => {
+      btn.onclick = () => {
+        group.querySelectorAll('.periode-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const p = btn.dataset.periode;
+        form.querySelector('input[name=periode]').value = p;
+        // Affiche/cache les champs custom
+        form.querySelectorAll('.periode-custom-row').forEach(r => {
+          r.style.display = (p === 'custom') ? '' : 'none';
+        });
+        // Auto-fill heure_debut + duree_min depuis le preset
+        if (PERIODE_PRESETS[p]) {
+          const hInp = form.querySelector('input[name=heure_debut]');
+          const dInp = form.querySelector('input[name=duree_min]');
+          if (hInp) hInp.value = PERIODE_PRESETS[p].heure;
+          if (dInp) dInp.value = PERIODE_PRESETS[p].duree;
+        }
+      };
+    });
+  });
+}
+// Init au chargement
+document.addEventListener('DOMContentLoaded', setupPeriodeGroups);
+
+function todayISO() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const j = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${j}`;
+}
+
+// Charge la liste des scanners une fois pour les modals
+let _scannersCache = null;
+async function loadScanners() {
+  if (_scannersCache) return _scannersCache;
+  try {
+    const res = await fetch('/api/scanners');
+    _scannersCache = res.ok ? await res.json() : [];
+  } catch (e) { _scannersCache = []; }
+  return _scannersCache;
+}
+async function fillScannerSelect(selectEl) {
+  const scanners = await loadScanners();
+  selectEl.innerHTML = '<option value="">— non précisé —</option>' +
+    scanners.filter(s => s.actif).map(s =>
+      `<option value="${s.id}" style="color:${s.couleur};">⬤ ${s.nom}</option>`
+    ).join('');
+}
+
+function syncPeriodeButton(formId) {
+  // Synchronise l'état visuel des boutons période avec la valeur du hidden input
+  const form = document.getElementById(formId);
+  if (!form) return;
+  const cur   = form.querySelector('input[name=periode]')?.value;
+  const group = form.querySelector('.periode-group');
+  if (!cur || !group) return;
+  group.querySelectorAll('.periode-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.periode === cur);
+  });
+  form.querySelectorAll('.periode-custom-row').forEach(r => {
+    r.style.display = (cur === 'custom') ? '' : 'none';
+  });
+}
+
+function openCreneauModal() {
+  document.getElementById('creneauModal').style.display = 'flex';
+  document.getElementById('creneauResult').style.display = 'none';
+  document.getElementById('creneauForm').reset();
+  syncPeriodeButton('creneauForm');
+  // CR #15 : reset TEP fields
+  document.getElementById('creneauIsTepToggle').checked = false;
+  toggleTepFields('creneauForm', false);
+  // Préremplit la date d'acquisition avec aujourd'hui
+  const dateInp = document.querySelector('#creneauForm [name=date_acq]');
+  if (dateInp) dateInp.value = todayISO();
+  // Remplit le select scanner
+  fillScannerSelect(document.getElementById('creneauScanner'));
+}
+
+// CR #15 : montre/cache les champs TEP
+function toggleTepFields(formId, show) {
+  const f = document.getElementById(formId);
+  if (!f) return;
+  f.querySelectorAll('.tep-row').forEach(r => {
+    r.style.display = show ? '' : 'none';
+  });
+  // Si on désactive, on vide les champs pour ne pas envoyer de valeurs résiduelles
+  if (!show) {
+    const d = f.querySelector('[name=tep_dose_mbq]'); if (d) d.value = '';
+    const p = f.querySelector('[name=tep_produit]');  if (p) p.value = '';
+  }
+}
+
+// Auto-détection TEP au moment où l'utilisateur tape la séquence
+document.addEventListener('DOMContentLoaded', () => {
+  const seqInp = document.querySelector('#creneauForm [name=sequence]');
+  if (!seqInp) return;
+  seqInp.addEventListener('input', () => {
+    const v = (seqInp.value || '').toLowerCase();
+    const isTep = /\b(tep|pet|fdg|f-?18|c-?11|psma|suv)\b/.test(v);
+    const toggle = document.getElementById('creneauIsTepToggle');
+    if (isTep && !toggle.checked) {
+      toggle.checked = true;
+      toggleTepFields('creneauForm', true);
+    }
+  });
+});
+function closeCreneauModal() {
+  document.getElementById('creneauModal').style.display = 'none';
+}
+
+async function checkCreneau() {
+  const f = document.getElementById('creneauForm');
+  const data = Object.fromEntries(new FormData(f));
+  if (!data.date_acq || !data.heure_debut || !data.duree_min) {
+    showToast('Renseigne date, heure et durée pour vérifier.', 'warning');
+    return;
+  }
+  const res = await fetch('/api/planification/check', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const j = await res.json();
+  renderCreneauResult(j);
+}
+
+function renderCreneauResult(j) {
+  const box = document.getElementById('creneauResult');
+  box.style.display = 'block';
+  if (j.ok) {
+    box.innerHTML = `
+      <div style="padding:10px 12px;border-radius:4px;background:var(--teal-bg);
+                  border:1px solid rgba(234,124,28,0.28);color:var(--teal);font-size:12px;">
+        Créneau libre — tu peux réserver.
+      </div>`;
+    return;
+  }
+  let html = `<div style="padding:10px 12px;border-radius:4px;background:var(--red-bg);
+                          border:1px solid rgba(220,38,38,0.25);font-size:12px;">
+    <div style="color:var(--red);font-weight:500;margin-bottom:6px;">
+      Conflit avec ${j.conflicts.length} créneau(x) existant(s) :
+    </div>
+    <ul style="margin:0 0 8px 16px;color:var(--text);">`;
+  for (const c of j.conflicts) {
+    const fin = c.heure_fin || '—';
+    html += `<li>${c.animal_id} · ${c.sequence} (${c.heure_debut}–${fin}) — ${c.importé_par || '—'}</li>`;
+  }
+  html += '</ul>';
+  if (j.suggestions && j.suggestions.length) {
+    html += '<div style="color:var(--muted);font-size:11px;margin-top:6px;">Créneaux suggérés :</div>';
+    html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;">';
+    for (const s of j.suggestions) {
+      html += `<button type="button" class="btn-ghost" style="padding:4px 10px;font-size:11px;"
+              onclick="applySuggestion('${s.heure_debut}')">${s.heure_debut} → ${s.heure_fin}</button>`;
+    }
+    html += '</div>';
+  }
+  html += '</div>';
+  box.innerHTML = html;
+}
+
+function applySuggestion(heure) {
+  document.querySelector('#creneauForm [name=heure_debut]').value = heure;
+  checkCreneau();
+}
+
+async function submitCreneau(e) {
+  e.preventDefault();
+  const f = document.getElementById('creneauForm');
+  const data = Object.fromEntries(new FormData(f));
+  const res = await fetch('/api/acquisitions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (res.status === 409) {
+    const j = await res.json();
+    renderCreneauResult({ ok: false, conflicts: j.conflicts || [], suggestions: [] });
+    showToast('Conflit — choisis un autre créneau.', 'error');
+    return;
+  }
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    showToast(j.error || 'Erreur lors de la réservation', 'error');
+    return;
+  }
+  showToast('Créneau réservé.', 'success');
+  closeCreneauModal();
+  setTimeout(() => location.reload(), 800);
+}
+
+// Fermer la modal en cliquant en dehors
+document.getElementById('creneauModal').addEventListener('click', (e) => {
+  if (e.target.id === 'creneauModal') closeCreneauModal();
+});
+</script>
+
+<!-- ─── Modal Planifier une série ────────────────────────────────────────── -->
+<div id="serieModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);
+     z-index:1000;align-items:center;justify-content:center;padding:20px;overflow-y:auto;">
+  <div style="background:var(--bg2);border-radius:10px;max-width:760px;width:100%;
+              padding:24px;box-shadow:0 12px 40px rgba(0,0,0,0.25);max-height:90vh;
+              overflow-y:auto;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+      <div style="font-size:15px;font-weight:600;color:var(--text);">Planifier une série d'acquisitions</div>
+      <button onclick="closeSerieModal()" style="background:none;border:none;font-size:20px;
+              color:var(--muted);cursor:pointer;line-height:1;">&times;</button>
+    </div>
+    <div style="font-size:11px;color:var(--hint);margin-bottom:16px;">
+      Génère N acquisitions planifiées (statut « en attente ») selon une fréquence donnée.
+    </div>
+
+    <form id="serieForm" class="form-grid" onsubmit="event.preventDefault();">
+      <div class="form-row" style="grid-column:1/-1;">
+        <label class="form-label">Projet *</label>
+        <select class="form-select" name="projet" required>
+          <option value="">— sélectionner —</option>
+          {% for p in projets %}
+            <option value="{{ p.nom }}">{{ p.nom }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="form-row">
+        <label class="form-label">Animal *</label>
+        <input class="form-input" name="animal_id" required placeholder="ex: B3">
+      </div>
+
+      <div class="form-row">
+        <label class="form-label">Séquence *</label>
+        <input class="form-input" name="sequence" required placeholder="ex: T2_MSME">
+      </div>
+
+      <div class="form-row">
+        <label class="form-label">Date 1ère acquisition *</label>
+        <input class="form-input" type="date" name="date_debut" required>
+      </div>
+
+      <div class="form-row" style="grid-column:1/-1;">
+        <label class="form-label">Période *</label>
+        <div class="periode-group" data-form="serieForm">
+          <button type="button" class="periode-btn active" data-periode="matin">
+            <span class="periode-emoji">🌅</span><span>Matin</span>
+            <span class="periode-sub">09:00–12:30</span>
+          </button>
+          <button type="button" class="periode-btn" data-periode="apres_midi">
+            <span class="periode-emoji">🌇</span><span>Après-midi</span>
+            <span class="periode-sub">13:30–17:00</span>
+          </button>
+          <button type="button" class="periode-btn" data-periode="journee">
+            <span class="periode-emoji">🌞</span><span>Journée</span>
+            <span class="periode-sub">09:00–17:00</span>
+          </button>
+          <button type="button" class="periode-btn" data-periode="custom">
+            <span class="periode-emoji">⏱</span><span>Personnalisé</span>
+            <span class="periode-sub">heure + durée</span>
+          </button>
+        </div>
+        <input type="hidden" name="periode" value="matin">
+      </div>
+
+      <div class="form-row periode-custom-row" style="display:none;">
+        <label class="form-label">Heure début *</label>
+        <input class="form-input" type="time" name="heure_debut" value="09:00">
+      </div>
+
+      <div class="form-row periode-custom-row" style="display:none;">
+        <label class="form-label">Durée (min) *</label>
+        <input class="form-input" type="number" name="duree_min" min="1" max="480" value="30">
+      </div>
+
+      <div class="form-row">
+        <label class="form-label">Fréquence *</label>
+        <select class="form-select" name="frequence" required onchange="toggleCustomDays()">
+          <option value="24h">24h</option>
+          <option value="48h">48h</option>
+          <option value="72h">72h</option>
+          <option value="1sem" selected>1 semaine</option>
+          <option value="2sem">2 semaines</option>
+          <option value="1mois">1 mois</option>
+          <option value="custom">Personnalisée…</option>
+        </select>
+      </div>
+
+      <div class="form-row" id="serie-custom-days-row" style="display:none;">
+        <label class="form-label">Tous les N jours</label>
+        <input class="form-input" type="number" name="custom_days" min="1" max="365" value="7">
+      </div>
+
+      <div class="form-row">
+        <label class="form-label">Nombre d'acquisitions *</label>
+        <input class="form-input" type="number" name="nb_repetitions" min="1" max="50" value="6" required>
+      </div>
+
+      <!-- Aperçu de la série -->
+      <div id="seriePreview" style="grid-column:1/-1;display:none;">
+        <div style="display:flex;gap:14px;align-items:center;margin:8px 0 6px;">
+          <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);
+                       letter-spacing:0.1em;text-transform:uppercase;">Aperçu de la série</div>
+          <div id="serieStats" style="display:flex;gap:10px;"></div>
+        </div>
+        <div id="serieItems" style="border:1px solid var(--border);border-radius:6px;
+             max-height:260px;overflow-y:auto;"></div>
+      </div>
+
+      <div style="grid-column:1/-1;display:flex;gap:8px;justify-content:flex-end;margin-top:8px;
+                  align-items:center;">
+        <label style="font-size:11px;color:var(--muted);display:none;align-items:center;gap:6px;
+                       margin-right:auto;" id="serieForceWrap">
+          <input type="checkbox" id="serieForce"> <span>Forcer même les créneaux en conflit</span>
+        </label>
+        <button type="button" onclick="openDeleteSerieModal()"
+                style="background:var(--red-bg);color:var(--red);
+                       border:1px solid var(--red);border-radius:4px;padding:6px 12px;
+                       font-family:var(--font-mono);font-size:11px;cursor:pointer;">
+          🗑 Supprimer une série récurrente
+        </button>
+        <button type="button" class="btn-ghost" onclick="closeSerieModal()">Annuler</button>
+        <button type="button" class="btn-ghost" onclick="previewSerie()">Aperçu</button>
+        <button type="button" class="btn-primary" id="serieConfirmBtn"
+                onclick="confirmSerie()" disabled>Confirmer</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+function openSerieModal() {
+  document.getElementById('serieModal').style.display = 'flex';
+  document.getElementById('seriePreview').style.display = 'none';
+  document.getElementById('serieForceWrap').style.display = 'none';
+  document.getElementById('serieConfirmBtn').disabled = true;
+  document.getElementById('serieForm').reset();
+  syncPeriodeButton('serieForm');
+  // Préremplit la date de départ avec aujourd'hui
+  const dateInp = document.querySelector('#serieForm [name=date_debut]');
+  if (dateInp) dateInp.value = todayISO();
+  toggleCustomDays();
+}
+function closeSerieModal() {
+  document.getElementById('serieModal').style.display = 'none';
+}
+function toggleCustomDays() {
+  const sel = document.querySelector('#serieForm [name=frequence]').value;
+  document.getElementById('serie-custom-days-row').style.display = (sel === 'custom') ? '' : 'none';
+}
+
+let _seriePreviewItems = null;
+let _seriePreviewDuree = null;
+
+async function previewSerie() {
+  const f = document.getElementById('serieForm');
+  const data = Object.fromEntries(new FormData(f));
+  if (!f.reportValidity()) return;
+
+  const res = await fetch('/api/planification/serie/preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const j = await res.json();
+  if (!res.ok) {
+    showToast(j.error || 'Erreur', 'error');
+    return;
+  }
+
+  _seriePreviewItems = j.items;
+  _seriePreviewDuree = j.duree_min;
+
+  // Stats
+  const stats = document.getElementById('serieStats');
+  stats.innerHTML = `
+    <span class="pill pill-ok">${j.nb_libres} libre(s)</span>
+    ${j.nb_conflits > 0 ? `<span class="pill pill-redo">${j.nb_conflits} en conflit</span>` : ''}
+    <span class="pill pill-obs">${j.nb_total} au total</span>`;
+
+  // Liste
+  let html = '';
+  for (const it of j.items) {
+    const bg = it.conflicts.length
+      ? 'background:var(--red-bg);border-left:3px solid var(--red);'
+      : 'background:var(--teal-bg);border-left:3px solid var(--teal);';
+    let conflictTxt = '';
+    if (it.conflicts.length) {
+      conflictTxt = ' — conflit : ' + it.conflicts
+        .map(c => `${c.animal_id}/${c.sequence} (${c.heure_debut}${c.user ? ', '+c.user : ''})`)
+        .join(', ');
+    }
+    html += `<div style="${bg}padding:6px 12px;font-family:var(--font-mono);font-size:11px;
+                       border-bottom:1px solid var(--border);display:flex;gap:12px;align-items:center;">
+      <span style="color:var(--hint);min-width:24px;">#${it.n}</span>
+      <span style="min-width:90px;color:var(--text);">${it.date_acq}</span>
+      <span style="min-width:55px;color:var(--muted);">${it.heure_debut}</span>
+      <span style="color:${it.conflicts.length ? 'var(--red)' : 'var(--teal)'};
+                   font-size:10px;">${it.conflicts.length ? '⚠ conflit' : '✓ libre'}${conflictTxt}</span>
+    </div>`;
+  }
+  document.getElementById('serieItems').innerHTML = html;
+  document.getElementById('seriePreview').style.display = 'block';
+  document.getElementById('serieConfirmBtn').disabled = (j.nb_libres === 0 && j.nb_conflits === 0);
+  document.getElementById('serieForceWrap').style.display = j.nb_conflits > 0 ? 'flex' : 'none';
+}
+
+async function confirmSerie() {
+  if (!_seriePreviewItems) return;
+  const f    = document.getElementById('serieForm');
+  const data = Object.fromEntries(new FormData(f));
+  const force = document.getElementById('serieForce').checked;
+
+  const payload = {
+    projet:     data.projet,
+    animal_id:  data.animal_id,
+    sequence:   data.sequence,
+    items:      _seriePreviewItems,
+    duree_min:  _seriePreviewDuree,
+    force:      force,
+  };
+  const res = await fetch('/api/planification/serie/confirm', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const j = await res.json();
+  if (!res.ok) {
+    showToast(j.error || 'Erreur lors de la création', 'error');
+    return;
+  }
+  showToast(`${j.nb_created} acquisition(s) créée(s)${j.nb_skipped ? ', '+j.nb_skipped+' ignorée(s)' : ''}.`, 'success', 5000);
+  closeSerieModal();
+  setTimeout(() => location.reload(), 800);
+}
+
+document.getElementById('serieModal').addEventListener('click', (e) => {
+  if (e.target.id === 'serieModal') closeSerieModal();
+});
+</script>
+
+<!-- Modal : supprimer une série récurrente (CR) -->
+<div id="deleteSerieModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);
+                                   z-index:51000;align-items:center;justify-content:center;padding:20px;">
+  <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;
+              max-width:600px;width:100%;padding:24px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+      <div style="font-size:16px;font-weight:600;color:var(--text);">
+        🗑 Supprimer une série récurrente
+      </div>
+      <button onclick="closeDeleteSerieModal()" style="background:none;border:none;font-size:18px;
+              color:var(--hint);cursor:pointer;">✕</button>
+    </div>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.6;">
+      Sélectionne une série récurrente parmi tes créneaux planifiés.
+      <strong>Tous les créneaux de la série</strong> seront supprimés
+      (et leurs événements Google Calendar associés).
+    </p>
+    <div style="display:flex;gap:10px;align-items:flex-end;margin-bottom:14px;">
+      <div class="form-row" style="flex:1;">
+        <label class="form-label">Animal · Séquence (regroupement)</label>
+        <select id="deleteSerieSelect" class="form-select" onchange="loadSerieItems()">
+          <option value="">— charger les séries détectées —</option>
+        </select>
+      </div>
+      <button type="button" class="btn-ghost" onclick="loadSerieList()">↻ Rafraîchir</button>
+    </div>
+    <div id="deleteSerieList" style="max-height:300px;overflow-y:auto;
+                                       border:1px solid var(--border);border-radius:6px;
+                                       padding:8px;margin-bottom:14px;display:none;">
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:10px;">
+      <button class="btn-ghost" onclick="closeDeleteSerieModal()">Annuler</button>
+      <button id="deleteSerieConfirmBtn" disabled onclick="confirmDeleteSerie()"
+              style="background:var(--red);color:#fff;border:1px solid var(--red);
+                     border-radius:6px;padding:8px 16px;font-family:var(--font-mono);
+                     font-size:12px;cursor:pointer;opacity:0.5;">
+        Supprimer toute la série
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+// CR : modal de suppression de série récurrente
+let _serieGroups = {};
+async function openDeleteSerieModal() {
+  document.getElementById('deleteSerieModal').style.display = 'flex';
+  await loadSerieList();
+}
+function closeDeleteSerieModal() {
+  document.getElementById('deleteSerieModal').style.display = 'none';
+}
+async function loadSerieList() {
+  try {
+    const r = await fetch('/api/planification/series-groups');
+    const j = await r.json();
+    _serieGroups = {};
+    const sel = document.getElementById('deleteSerieSelect');
+    sel.innerHTML = '<option value="">— Choisir une série —</option>';
+    for (const g of (j.groups || [])) {
+      const key = `${g.projet}|${g.animal_id}|${g.sequence}`;
+      _serieGroups[key] = g;
+      sel.innerHTML += `<option value="${key}">
+        ${g.animal_id} · ${g.sequence} · ${g.projet} (${g.count} créneaux planifiés)
+      </option>`;
+    }
+    if (!j.groups || !j.groups.length) {
+      sel.innerHTML += '<option disabled>Aucune série de 2+ créneaux planifiés</option>';
+    }
+  } catch (e) {
+    if (window.showToast) showToast('Erreur chargement séries', 'error');
+  }
+}
+function loadSerieItems() {
+  const key = document.getElementById('deleteSerieSelect').value;
+  const list = document.getElementById('deleteSerieList');
+  const btn  = document.getElementById('deleteSerieConfirmBtn');
+  if (!key) {
+    list.style.display = 'none';
+    btn.disabled = true;
+    btn.style.opacity = '0.5';
+    return;
+  }
+  const g = _serieGroups[key];
+  if (!g) return;
+  list.style.display = 'block';
+  list.innerHTML = g.items.map(it =>
+    `<div style="padding:5px 8px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:11px;">
+       <span style="color:var(--text);">${it.date_acq}</span>
+       <span style="color:var(--hint);"> · ${it.heure_debut || '—'}</span>
+       <span style="color:var(--muted);"> · ${it.statut}</span>
+     </div>`
+  ).join('');
+  btn.disabled = false;
+  btn.style.opacity = '1';
+  btn.dataset.key = key;
+}
+async function confirmDeleteSerie() {
+  const btn = document.getElementById('deleteSerieConfirmBtn');
+  const key = btn.dataset.key;
+  if (!key) return;
+  const g = _serieGroups[key];
+  if (!confirm(`Supprimer DÉFINITIVEMENT les ${g.count} créneaux de la série ${g.animal_id}/${g.sequence} ?`)) return;
+  try {
+    const r = await fetch('/api/planification/serie/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': "{{ csrf_token }}" },
+      body: JSON.stringify({ projet: g.projet, animal_id: g.animal_id, sequence: g.sequence }),
+    });
+    const j = await r.json();
+    if (r.ok) {
+      if (window.showToast) showToast(`${j.deleted} créneaux supprimés`, 'success', 3000);
+      closeDeleteSerieModal();
+      setTimeout(() => location.reload(), 800);
+    } else {
+      if (window.showToast) showToast(j.error || 'Erreur', 'error');
+    }
+  } catch (e) { if (window.showToast) showToast('Erreur réseau', 'error'); }
+}
+</script>
+
+<script>
+// CR : suppression d'alertes individuelle + global
+async function dismissAlerte(key, btn) {
+  try {
+    const r = await fetch('/api/alertes/dismiss', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': "{{ csrf_token }}" },
+      body: JSON.stringify({ key }),
+    });
+    if (r.ok) {
+      const row = btn.closest('.alerte-row');
+      if (row) row.style.display = 'none';
+    } else if (window.showToast) showToast('Erreur', 'error');
+  } catch (e) { if (window.showToast) showToast('Erreur réseau', 'error'); }
+}
+async function dismissAllAlertes() {
+  if (!confirm('Masquer toutes les alertes ?')) return;
+  const keys = Array.from(document.querySelectorAll('.alerte-row[data-key]'))
+                    .map(r => r.dataset.key);
+  if (!keys.length) return;
+  try {
+    const r = await fetch('/api/alertes/dismiss-all', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': "{{ csrf_token }}" },
+      body: JSON.stringify({ keys }),
+    });
+    if (r.ok) {
+      document.querySelectorAll('.alerte-row').forEach(row => row.style.display = 'none');
+      if (window.showToast) showToast('Toutes les alertes masquées', 'success', 2500);
+    }
+  } catch (e) { if (window.showToast) showToast('Erreur réseau', 'error'); }
+}
+</script>
+
+{% endblock %}

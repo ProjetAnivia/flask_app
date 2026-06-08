@@ -34,6 +34,10 @@
       Mise à jour : {{ updated_at }}
       <span class="text-border-strong"> · </span>
       <a href="/archive" class="text-hint hover:text-accent transition-colors no-underline">voir l'archive →</a>
+      <span class="text-border-strong"> · </span>
+      <span title="Toutes les dates sont au format ISO 8601 (YYYY-MM-DD)">
+        format dates : <strong>YYYY-MM-DD</strong>
+      </span>
     </p>
   </div>
   <a href="/api/export/acquisitions.csv"
@@ -327,7 +331,7 @@
         <div class="form-row">
           <label class="form-label">Recherche</label>
           <input class="form-input" type="text" id="search-proj"
-                 placeholder="Nom ou responsable…"
+                 placeholder="Nom ou chercheur…"
                  oninput="applyClientFilters()">
         </div>
         <div style="display:flex;gap:6px;margin-top:4px;">
@@ -351,7 +355,7 @@
           <input class="form-input" type="text" id="proj-nom" placeholder="ex : cardiologie">
         </div>
         <div class="form-row">
-          <label class="form-label">Responsable</label>
+          <label class="form-label">Chercheur</label>
           <input class="form-input" type="text" id="proj-resp" placeholder="ex : Nicolas">
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
@@ -372,34 +376,6 @@
     </div>
     {% endif %}
 
-    <!-- Liens rapides — shadcn-like list -->
-    <div class="card">
-      <div class="card-title">Raccourcis</div>
-      <div class="flex flex-col gap-0.5">
-        {% if current_user.role in ['admin', 'operateur'] %}
-        <a href="/import" class="group flex items-center gap-2 px-2 py-1.5 rounded-md text-xs text-foreground no-underline hover:bg-accent-bg hover:text-accent transition-colors">
-          <span class="text-hint group-hover:text-accent transition-colors">↑</span>
-          <span>Importer une acquisition</span>
-        </a>
-        <a href="/planification" class="group flex items-center gap-2 px-2 py-1.5 rounded-md text-xs text-foreground no-underline hover:bg-accent-bg hover:text-accent transition-colors">
-          <span class="text-hint group-hover:text-accent transition-colors">→</span>
-          <span>Planifier un créneau</span>
-        </a>
-        <a href="/calendrier" class="group flex items-center gap-2 px-2 py-1.5 rounded-md text-xs text-foreground no-underline hover:bg-accent-bg hover:text-accent transition-colors">
-          <span class="text-hint group-hover:text-accent transition-colors">◫</span>
-          <span>Calendrier acquisitions</span>
-        </a>
-        {% endif %}
-        <a href="/animaux" class="group flex items-center gap-2 px-2 py-1.5 rounded-md text-xs text-foreground no-underline hover:bg-accent-bg hover:text-accent transition-colors">
-          <span class="text-hint group-hover:text-accent transition-colors">~</span>
-          <span>Liste des animaux</span>
-        </a>
-        <a href="/archive" class="group flex items-center gap-2 px-2 py-1.5 rounded-md text-xs text-foreground no-underline hover:bg-accent-bg hover:text-accent transition-colors">
-          <span class="text-hint group-hover:text-accent transition-colors">⊡</span>
-          <span>Voir l'archive</span>
-        </a>
-      </div>
-    </div>
   </aside>
 
   <!-- ▶ Colonne droite : projets ────────────────────────────────────────── -->
@@ -422,7 +398,7 @@
     <thead>
       <tr>
         <th>Projet</th>
-        <th>Responsable</th>
+        <th>Chercheur</th>
         <th>Animaux</th>
         <th>Acquisitions</th>
         <th>Avancement</th>

@@ -19,7 +19,7 @@
         <div class="form-row">
           <label class="form-label">Recherche</label>
           <input class="form-input" type="text" id="search-animaux"
-                 placeholder="ID, espèce, projet…"
+                 placeholder="ID, projet, chercheur…"
                  oninput="filterAnimaux(this.value)">
         </div>
         <div class="form-row">
@@ -57,23 +57,36 @@
   {% if animaux %}
   <table class="data-table">
     <thead>
-      <tr><th>ID</th><th>Dossier NAS</th><th>Espèce</th><th>Projet</th><th>1ère acquisition</th><th>Nb acq.</th><th>Statut</th></tr>
+      <tr><th>ID complet (projet_session_animal)</th><th>Chercheur</th><th>Session</th><th>1ère acquisition</th><th>Nb acq.</th><th>Statut</th></tr>
     </thead>
     <tbody id="animaux-tbody">
     {% for a in animaux %}
-      <tr data-search="{{ a.animal_id | lower }} {{ a.espece | lower }} {{ a.projet | lower }} {{ a.statut | lower }}">
+      <tr data-search="{{ a.animal_id | lower }} {{ a.full_id | lower }} {{ a.espece | lower }} {{ a.projet | lower }} {{ a.statut | lower }} {{ (a.projet_resp or '') | lower }}">
         <td>
           <a href="/animal/{{ a.projet }}/{{ a.animal_id }}"
-             style="color:var(--teal);text-decoration:none;font-weight:500;">
-            {{ a.animal_id }}
+             style="color:var(--teal);text-decoration:none;font-weight:500;font-family:var(--font-mono);font-size:12px;">
+            {{ a.full_id }}
           </a>
+          <div class="mono" style="font-size:9px;color:var(--hint);margin-top:1px;">
+            alias court : {{ a.animal_id }}
+          </div>
         </td>
-        <td class="mono" style="font-size:10px;color:var(--hint);">
-          {{ a.date_premiere_acq or "00000000" }}_{{ a.animal_id }}/
+        <td class="mono" style="font-size:11px;">
+          {% if a.projet_resp %}
+            👤 {{ a.projet_resp }}
+          {% else %}<span style="color:var(--hint);">—</span>{% endif %}
         </td>
-        <td>{{ a.espece or "—" }}</td>
-        <td>{{ a.projet | replace("_"," ") | title }}</td>
-        <td class="mono">{{ a.date_premiere_acq or "—" }}</td>
+        <td class="mono" style="font-size:11px;">
+          {% if a.session_nom %}
+            <span class="pill" style="background:var(--teal-bg);color:var(--teal);border-color:var(--teal);">{{ a.session_nom }}</span>
+          {% else %}<span style="color:var(--hint);">—</span>{% endif %}
+        </td>
+        <td class="mono">
+          {% set _d = a.date_premiere_acq or '' %}
+          {% if _d|length == 8 and _d.isdigit() %}{{ _d[:4] }}-{{ _d[4:6] }}-{{ _d[6:8] }}
+          {% elif _d %}{{ _d }}
+          {% else %}—{% endif %}
+        </td>
         <td class="mono">{{ a.nb_acquisitions }}</td>
         <td>
           {% if a.statut == "ok" %}<span class="pill pill-ok">complet</span>

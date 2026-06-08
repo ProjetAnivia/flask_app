@@ -33,7 +33,29 @@
       "Bash(grep -n \"id=\\\\\"no-results\\\\\"\\\\|^</div>$\\\\|^</section>\\\\|^</style>\" /Users/nolan/Documents/flask_app/templates/dashboard.html)",
       "Bash(grep -n \"^}\\)\\(\\);$\\\\|loadMesCreneaux\\\\|fin Mes\\\\|^</script>\" /Users/nolan/Documents/flask_app/templates/dashboard.html)",
       "Bash(grep -n \"loadMesCreneaux\\\\|^}\\)\\(\\);$\\\\|^</script>\" /Users/nolan/Documents/flask_app/templates/dashboard.html)",
-      "Bash(awk 'NR>=363 && NR<=489' /Users/nolan/Documents/flask_app/templates/calendrier.html)"
+      "Bash(awk 'NR>=363 && NR<=489' /Users/nolan/Documents/flask_app/templates/calendrier.html)",
+      "Bash(mv /Users/nolan/Downloads/irm-dashboard-498810-34cb261e08f6.json /Users/nolan/Documents/flask_app/secrets/google_calendar_sa.json)",
+      "Bash(chmod 600 /Users/nolan/Documents/flask_app/secrets/google_calendar_sa.json)",
+      "Bash(python3 -m pip install --user 'google-api-python-client>=2.100' 'google-auth>=2.23')",
+      "Bash(GOOGLE_CALENDAR_CREDENTIALS_PATH=__TRACKED_VAR__/secrets/google_calendar_sa.json GOOGLE_CALENDAR_ID=9c870dc5aad2863563eab1291684377b9fa18bf106f04facef0339a9b5ffb258@group.calendar.google.com python3 -c ' *)",
+      "Bash(find /Users/nolan/Documents/flask_app -maxdepth 3 -name \"activate\" -path \"*/bin/*\" 2>/dev/null; find /Users/nolan/Documents -maxdepth 4 -name \"flask\" -type d 2>/dev/null | head -5)",
+      "Bash(python3 -m py_compile /Users/nolan/Documents/flask_app/app.py)",
+      "Bash(python3 -m py_compile /Users/nolan/Documents/flask_app/google_calendar.py)",
+      "Bash(docker compose *)",
+      "Bash(docker exec irm_fair_app python3 -c ' *)",
+      "Bash(curl -s -o /dev/null -w \"calendrier: HTTP %{http_code}\\\\n\" http://localhost:5001/calendrier)",
+      "Bash(curl -s http://localhost:5001/calendrier -L -c /tmp/cj.txt)",
+      "Bash(curl -s -o /dev/null -w \"login: HTTP %{http_code}\\\\n\" http://localhost:5001/login)",
+      "Bash(curl -s -c /tmp/cj.txt -X POST http://localhost:5001/login -d 'username=admin&password=admin123' -o /dev/null -w 'login POST: %{http_code} → %{redirect_url}\\\\n')",
+      "Bash(curl -s -b /tmp/cj.txt -o /tmp/cal.html -w \"calendrier: %{http_code}\\\\n\" http://localhost:5001/calendrier)",
+      "Read(//tmp/**)",
+      "Bash(curl -s -I \"https://calendar.google.com/calendar/embed?src=9c870dc5aad2863563eab1291684377b9fa18bf106f04facef0339a9b5ffb258%40group.calendar.google.com&ctz=Europe/Paris&mode=WEEK\")",
+      "Bash(curl -s -I http://localhost:5001/login)",
+      "Bash(python3 -m py_compile /Users/nolan/Documents/flask_app/i18n.py)",
+      "Bash(sed -i '' 's|placeholder=\"Nom ou responsable…\"|placeholder=\"Nom ou chercheur…\"|g; s|<label class=\"form-label\">Responsable</label>|<label class=\"form-label\">Chercheur</label>|g; s|<th>Responsable</th>|<th>Chercheur</th>|g' /Users/nolan/Documents/flask_app/templates/dashboard.html /Users/nolan/Documents/flask_app/templates/archive.html)",
+      "Bash(sed -i '' 's|placeholder=\"Rechercher par nom ou responsable…\"|placeholder=\"Rechercher par nom ou chercheur…\"|g' /Users/nolan/Documents/flask_app/templates/archive.html)",
+      "Bash(awk '/<div class=\"card\" id=\"vol-results-section\">/{flag=1} flag{print NR\": \"$0; if\\(/^<\\\\/div>$/\\){close=close+1; if\\(close==2\\) exit}}' /Users/nolan/Documents/flask_app/templates/animal_detail.html)",
+      "Bash(awk -F: '$1>=1055 && $1<=1180')"
     ]
   }
 }

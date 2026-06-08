@@ -1,0 +1,290 @@
+{% extends "base.html" %}
+{% block title %}Sécurité{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <div class="page-title">🛡 Sécurité du Dashboard</div>
+  <div class="page-sub">
+    Vue d'ensemble des protections en place — utile pour présenter aux clients
+    et lors d'audits internes.
+  </div>
+</div>
+
+<!-- ─── Dashboard chiffres live ──────────────────────────────────── -->
+<div class="card" style="padding:14px 20px;">
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;">
+    <div>
+      <div style="font-family:var(--font-mono);font-size:9px;color:var(--hint);
+                  text-transform:uppercase;letter-spacing:0.08em;">Utilisateurs</div>
+      <div style="font-size:22px;font-weight:600;color:var(--text);line-height:1.1;margin-top:2px;">
+        {{ nb_users }}
+      </div>
+    </div>
+    <div>
+      <div style="font-family:var(--font-mono);font-size:9px;color:var(--hint);
+                  text-transform:uppercase;letter-spacing:0.08em;">2FA actifs</div>
+      <div style="font-size:22px;font-weight:600;color:var(--teal);line-height:1.1;margin-top:2px;">
+        {{ nb_2fa_active }}<span style="font-size:12px;color:var(--hint);"> / {{ nb_users }}</span>
+      </div>
+    </div>
+    <div>
+      <div style="font-family:var(--font-mono);font-size:9px;color:var(--hint);
+                  text-transform:uppercase;letter-spacing:0.08em;">Emails vérifiés</div>
+      <div style="font-size:22px;font-weight:600;color:var(--text);line-height:1.1;margin-top:2px;">
+        {{ nb_email_verif }}<span style="font-size:12px;color:var(--hint);"> / {{ nb_users }}</span>
+      </div>
+    </div>
+    <div>
+      <div style="font-family:var(--font-mono);font-size:9px;color:var(--hint);
+                  text-transform:uppercase;letter-spacing:0.08em;">Connexions 24h</div>
+      <div style="font-size:22px;font-weight:600;color:var(--text);line-height:1.1;margin-top:2px;">
+        {{ nb_connexions_24h }}
+      </div>
+    </div>
+    <div>
+      <div style="font-family:var(--font-mono);font-size:9px;color:var(--hint);
+                  text-transform:uppercase;letter-spacing:0.08em;">Dernière action admin</div>
+      <div style="font-family:var(--font-mono);font-size:13px;color:var(--text);line-height:1.1;margin-top:2px;">
+        {{ (last_admin_action or "—")[:16] if last_admin_action else "—" }}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Authentification ─────────────────────────────────────────── -->
+<div class="card">
+  <div class="card-title">🔐 Authentification</div>
+  <table class="data-table">
+    <thead>
+      <tr><th style="width:38%;">Protection</th><th>Implémentation</th><th style="width:90px;">État</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Hash mots de passe</strong></td>
+        <td>bcrypt avec sel aléatoire par utilisateur · facteur de coût 12.
+            Aucune trace en clair, même les logs d'erreur sont nettoyés.</td>
+        <td><span class="pill pill-ok">actif</span></td>
+      </tr>
+      <tr>
+        <td><strong>Authentification à 2 facteurs (TOTP)</strong></td>
+        <td>Compatible Google Authenticator, Authy, 1Password. QR-code généré
+            au setup, secret stocké chiffré côté DB. Codes de récupération
+            disponibles. <strong>{{ nb_2fa_active }}/{{ nb_users }}</strong> utilisateurs l'ont activé.</td>
+        <td><span class="pill pill-ok">disponible</span></td>
+      </tr>
+      <tr>
+        <td><strong>reCAPTCHA v3 sur login</strong></td>
+        <td>Score 0.0–1.0 vérifié sur chaque tentative. Seuil configurable.
+            Action "login" validée pour éviter les rejeux. Désactivable si
+            clés API absentes (mode dev).</td>
+        <td>
+          {% if recaptcha_enabled %}<span class="pill pill-ok">actif</span>
+          {% else %}<span class="pill pill-wait">désactivé</span>{% endif %}
+        </td>
+      </tr>
+      <tr>
+        <td><strong>Rate-limit sur login</strong></td>
+        <td>5 tentatives échouées en 15 min → blocage 30 min de l'IP source.
+            Réinitialisé sur succès. Logs détaillés (IP, user-agent, géoloc).</td>
+        <td><span class="pill pill-ok">actif</span></td>
+      </tr>
+      <tr>
+        <td><strong>Réinitialisation mot de passe</strong></td>
+        <td>Token aléatoire 32 bytes, durée de validité 30 min, usage unique.
+            Envoi par email vérifié uniquement.
+            {% if not email_configured %}<span style="color:var(--amber);">⚠ Email non configuré actuellement.</span>{% endif %}</td>
+        <td>
+          {% if email_configured %}<span class="pill pill-ok">actif</span>
+          {% else %}<span class="pill pill-wait">email KO</span>{% endif %}
+        </td>
+      </tr>
+      <tr>
+        <td><strong>Vérification email à l'inscription</strong></td>
+        <td>Lien à clic unique envoyé après création. Compte inactif tant que
+            non vérifié. <strong>{{ nb_email_verif }}/{{ nb_users }}</strong> vérifiés.</td>
+        <td><span class="pill pill-ok">actif</span></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ─── Sessions & cookies ───────────────────────────────────────── -->
+<div class="card">
+  <div class="card-title">🍪 Sessions & cookies</div>
+  <table class="data-table">
+    <thead>
+      <tr><th style="width:38%;">Protection</th><th>Implémentation</th><th style="width:90px;">État</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Cookies HttpOnly</strong></td>
+        <td>Inaccessibles depuis JS — protège contre le vol de session par XSS.</td>
+        <td><span class="pill pill-ok">actif</span></td>
+      </tr>
+      <tr>
+        <td><strong>Cookies SameSite=Lax</strong></td>
+        <td>Bloque les requêtes cross-site non-GET → protège contre CSRF.</td>
+        <td><span class="pill pill-ok">actif</span></td>
+      </tr>
+      <tr>
+        <td><strong>Cookies Secure (HTTPS)</strong></td>
+        <td>Activé automatiquement si HTTPS_ENABLED=true. À activer en prod.</td>
+        <td><span class="pill pill-wait">selon env</span></td>
+      </tr>
+      <tr>
+        <td><strong>Token CSRF par session</strong></td>
+        <td>Token 32 bytes aléatoires, vérifié sur tous les POST/PUT/PATCH/DELETE
+            sauf endpoints publics explicitement exemptés.</td>
+        <td><span class="pill pill-ok">actif</span></td>
+      </tr>
+      <tr>
+        <td><strong>Inactivité = déconnexion auto</strong></td>
+        <td>Session purgée après 4h sans activité. Reprise demande
+            ré-authentification complète (mot de passe + 2FA).</td>
+        <td><span class="pill pill-ok">actif</span></td>
+      </tr>
+      <tr>
+        <td><strong>Clé secrète Flask (SECRET_KEY)</strong></td>
+        <td>Doit être fournie via variable d'environnement en prod.
+            Sinon valeur par défaut + warning critique au démarrage.</td>
+        <td><span class="pill pill-wait">vérifier env</span></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ─── Headers HTTP ─────────────────────────────────────────────── -->
+<div class="card">
+  <div class="card-title">📜 Headers HTTP de sécurité</div>
+  <table class="data-table">
+    <thead>
+      <tr><th style="width:32%;">Header</th><th>Valeur</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="mono"><strong>Content-Security-Policy</strong></td>
+        <td class="mono" style="font-size:10px;">
+          default-src 'self' ; script-src 'self' 'unsafe-inline' www.google.com www.gstatic.com cdn.tailwindcss.com cdn.jsdelivr.net ;
+          frame-src www.google.com calendar.google.com ; connect-src 'self' …
+        </td>
+      </tr>
+      <tr>
+        <td class="mono"><strong>X-Frame-Options</strong></td>
+        <td class="mono">SAMEORIGIN (anti-clickjacking)</td>
+      </tr>
+      <tr>
+        <td class="mono"><strong>X-Content-Type-Options</strong></td>
+        <td class="mono">nosniff</td>
+      </tr>
+      <tr>
+        <td class="mono"><strong>X-XSS-Protection</strong></td>
+        <td class="mono">1; mode=block</td>
+      </tr>
+      <tr>
+        <td class="mono"><strong>Referrer-Policy</strong></td>
+        <td class="mono">strict-origin-when-cross-origin</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ─── Autorisations & contrôle d'accès ─────────────────────────── -->
+<div class="card">
+  <div class="card-title">🔑 Contrôle d'accès</div>
+  <table class="data-table">
+    <thead>
+      <tr><th style="width:38%;">Mécanisme</th><th>Détail</th><th style="width:90px;">État</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Rôles RBAC</strong></td>
+        <td>3 rôles : admin (tout), opérateur (création/édition), chercheur (lecture).
+            Décorateur <code style="background:var(--bg);padding:1px 4px;border-radius:3px;">@role_required</code>
+            sur chaque route sensible.</td>
+        <td><span class="pill pill-ok">actif</span></td>
+      </tr>
+      <tr>
+        <td><strong>Droits projet par utilisateur</strong></td>
+        <td>Un chercheur ne voit que les projets dont il est membre.
+            Table <code style="background:var(--bg);padding:1px 4px;border-radius:3px;">projet_membres</code>
+            avec rôle par projet. Vérification via
+            <code style="background:var(--bg);padding:1px 4px;border-radius:3px;">user_can_view_projet()</code>
+            sur toutes les routes data.</td>
+        <td><span class="pill pill-ok">actif</span></td>
+      </tr>
+      <tr>
+        <td><strong>Audit log complet</strong></td>
+        <td>Toutes les actions sensibles (création/suppression projet, animal,
+            acquisition, membre, etc.) sont journalisées avec utilisateur, IP,
+            timestamp, détails. Consultable sur <a href="/audit-log" style="color:var(--teal);">/audit-log</a>.</td>
+        <td><span class="pill pill-ok">actif</span></td>
+      </tr>
+      <tr>
+        <td><strong>Logs de connexion</strong></td>
+        <td>Chaque login (succès/échec) tracé : IP, géoloc, user-agent, statut.
+            Consultable sur <a href="/connexions" style="color:var(--teal);">/connexions</a>
+            ({{ nb_connexions_24h }} connexions sur les dernières 24h).</td>
+        <td><span class="pill pill-ok">actif</span></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ─── Données & API ────────────────────────────────────────────── -->
+<div class="card">
+  <div class="card-title">🗄 Données & API</div>
+  <table class="data-table">
+    <thead>
+      <tr><th style="width:38%;">Protection</th><th>Détail</th><th style="width:90px;">État</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Requêtes SQL paramétrées</strong></td>
+        <td>100% des requêtes SQL utilisent des placeholders SQLite (<code>?</code>),
+            aucune concaténation de chaînes → immunisé contre l'injection SQL.</td>
+        <td><span class="pill pill-ok">actif</span></td>
+      </tr>
+      <tr>
+        <td><strong>Validation des entrées</strong></td>
+        <td>Chaque endpoint valide types, bornes, formats (regex pour dates/heures,
+            min/max pour numériques, longueurs pour textes).
+            Erreur 400 explicite si invalide.</td>
+        <td><span class="pill pill-ok">actif</span></td>
+      </tr>
+      <tr>
+        <td><strong>Escape HTML automatique (Jinja)</strong></td>
+        <td>Tous les outputs Jinja sont auto-escapés. Protection contre XSS stocké.
+            Filtre <code>| safe</code> jamais utilisé sur des inputs utilisateur.</td>
+        <td><span class="pill pill-ok">actif</span></td>
+      </tr>
+      <tr>
+        <td><strong>Secrets (Google Calendar, etc.)</strong></td>
+        <td>Stockés dans <code>secrets/</code> avec permissions 600,
+            git-ignored. Jamais loggés.</td>
+        <td><span class="pill pill-ok">actif</span></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ─── Recommandations ─────────────────────────────────────────── -->
+<div class="card" style="border-left:3px solid var(--teal);">
+  <div class="card-title">📋 Recommandations à présenter au client</div>
+  <ul style="margin:0;padding-left:18px;line-height:1.7;font-size:13px;color:var(--text);">
+    <li><strong>2FA obligatoire pour les admins :</strong> on a la fonctionnalité,
+        on peut rendre l'activation obligatoire au prochain login pour le rôle admin.</li>
+    <li><strong>HTTPS en prod :</strong> dès que le Dashboard est exposé hors localhost,
+        activer <code>HTTPS_ENABLED=true</code> + certificat (Let's Encrypt si Internet,
+        certif interne sinon). Active automatiquement <code>Secure</code> sur les cookies.</li>
+    <li><strong>Rotation des credentials Google Calendar :</strong> la clé service-account
+        actuelle a transité par chat — à révoquer et regénérer dans la console GCP
+        avant mise en production.</li>
+    <li><strong>Backups DB :</strong> le script <code>backup.sh</code> existe ;
+        à brancher sur un cron (1×/jour conseillé) avec rétention de 30 jours.</li>
+    <li><strong>SECRET_KEY :</strong> définir une valeur aléatoire forte
+        (<code>python -c "import secrets; print(secrets.token_hex(32))"</code>)
+        dans la variable d'environnement avant le déploiement.</li>
+  </ul>
+</div>
+
+{% endblock %}

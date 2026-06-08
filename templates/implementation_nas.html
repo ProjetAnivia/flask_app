@@ -1,0 +1,368 @@
+{% extends "base.html" %}
+{% block title %}Implémentation sur NAS{% endblock %}
+{% block content %}
+
+<style>
+  .step-card {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 12px; padding: 18px 22px; margin-bottom: 14px;
+  }
+  .step-num {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 28px; height: 28px; border-radius: 50%;
+    background: var(--teal); color: #fff;
+    font-family: var(--font-mono); font-weight: 700; font-size: 14px;
+    margin-right: 10px;
+  }
+  .step-title {
+    display: flex; align-items: center; font-size: 15px; font-weight: 600;
+    color: var(--text); margin-bottom: 10px;
+  }
+  .step-card pre, .step-card code.block {
+    display: block; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 10px 14px; font-family: var(--font-mono);
+    font-size: 11px; color: var(--text); overflow-x: auto; line-height: 1.6;
+    margin: 8px 0;
+  }
+  .step-card code:not(.block) {
+    background: var(--bg); padding: 1px 6px; border-radius: 3px;
+    font-family: var(--font-mono); font-size: 11px; color: var(--teal);
+  }
+  .warn-box {
+    background: var(--amber-bg); border-left: 3px solid var(--amber);
+    padding: 10px 14px; border-radius: 4px; margin: 10px 0; font-size: 12px;
+    color: var(--text); line-height: 1.6;
+  }
+  .ok-box {
+    background: var(--teal-bg); border-left: 3px solid var(--teal);
+    padding: 10px 14px; border-radius: 4px; margin: 10px 0; font-size: 12px;
+    color: var(--text); line-height: 1.6;
+  }
+  .toc-card a {
+    display: block; color: var(--text); text-decoration: none;
+    padding: 4px 0; font-size: 12px;
+  }
+  .toc-card a:hover { color: var(--teal); }
+</style>
+
+<div class="page-header">
+  <div class="page-title">🖥 Implémentation sur NAS Synology</div>
+  <div class="page-sub">
+    Guide complet pour déployer le Dashboard IRM FAIR sur un NAS Synology DSM 7.1+
+    · Estimé : ~45 min · Niveau : intermédiaire
+  </div>
+</div>
+
+<!-- Sommaire -->
+<div class="card toc-card" style="padding:14px 20px;">
+  <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);
+              text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">
+    Sommaire
+  </div>
+  <a href="#prereq">① Pré-requis matériel + DSM</a>
+  <a href="#packages">② Packages Synology à installer</a>
+  <a href="#ssh">③ Activer SSH</a>
+  <a href="#dossiers">④ Créer l'arborescence /volume1/IRM_Dashboard</a>
+  <a href="#code">⑤ Transférer le code du projet</a>
+  <a href="#config">⑥ Configurer les variables d'environnement</a>
+  <a href="#gcal">⑦ Google Calendar (optionnel mais recommandé)</a>
+  <a href="#deploy">⑧ Lancer le déploiement Docker</a>
+  <a href="#access">⑨ Accéder au Dashboard depuis le réseau</a>
+  <a href="#data">⑩ Importer les vraies données IRM</a>
+  <a href="#backup">⑪ Backups et maintenance</a>
+  <a href="#troubleshoot">⑫ Dépannage</a>
+</div>
+
+<!-- ─── 1. Pré-requis ───────────────────────────────────────────────── -->
+<div class="step-card" id="prereq">
+  <div class="step-title"><span class="step-num">1</span>Pré-requis matériel + DSM</div>
+  <ul style="margin:0;padding-left:18px;line-height:1.8;font-size:13px;color:var(--text);">
+    <li><b>NAS Synology</b> compatible Docker (modèles Plus, XS+, FS, SA — voir compatibilité sur synology.com)</li>
+    <li><b>DSM 7.1 minimum</b> (idéalement 7.2+)</li>
+    <li><b>RAM : 2 Go libre minimum</b> recommandé pour les conversions DICOM→NIfTI lourdes</li>
+    <li><b>Espace disque : 50 Go minimum</b> sur le volume1, à augmenter selon le volume de données IRM</li>
+    <li><b>Compte admin DSM</b> avec droits d'installation de packages et accès SSH</li>
+    <li><b>Réseau</b> : NAS accessible depuis le VPN universitaire (la machine cliente doit pouvoir ping le NAS)</li>
+  </ul>
+  <div class="warn-box">
+    ⚠ Vérifier que la fonctionnalité Docker n'est PAS bloquée par la politique sécurité de DSM
+    (Control Panel → Security → Advanced → désactiver la restriction si nécessaire).
+  </div>
+</div>
+
+<!-- ─── 2. Packages Synology ────────────────────────────────────────── -->
+<div class="step-card" id="packages">
+  <div class="step-title"><span class="step-num">2</span>Installer Container Manager (Docker)</div>
+  <ol style="margin:0;padding-left:20px;line-height:1.8;font-size:13px;color:var(--text);">
+    <li>Ouvrir <b>Package Center</b> dans DSM</li>
+    <li>Rechercher « <b>Container Manager</b> » (anciennement « Docker »)</li>
+    <li>Cliquer <b>Installer</b> — l'installation prend ~3 min</li>
+    <li>Une fois installé, lancer <b>Container Manager</b> pour confirmer qu'il démarre bien</li>
+  </ol>
+  <div class="ok-box">
+    ✓ Container Manager intègre maintenant <code>docker compose</code> v2 par défaut sur DSM 7.2+.
+    Sur DSM 7.1 il peut s'appeler <code>docker-compose</code> (avec tiret) selon la version installée.
+  </div>
+</div>
+
+<!-- ─── 3. Activer SSH ──────────────────────────────────────────────── -->
+<div class="step-card" id="ssh">
+  <div class="step-title"><span class="step-num">3</span>Activer SSH</div>
+  <ol style="margin:0;padding-left:20px;line-height:1.8;font-size:13px;color:var(--text);">
+    <li>Aller dans <b>Control Panel</b> → <b>Terminal & SNMP</b></li>
+    <li>Cocher <b>Enable SSH service</b></li>
+    <li>Port par défaut : <code>22</code> (peut être changé pour la sécurité)</li>
+    <li>Cliquer <b>Apply</b></li>
+  </ol>
+  <p style="font-size:12px;color:var(--muted);margin-top:8px;">
+    Connexion depuis ton Mac/PC :
+  </p>
+  <pre>ssh ADMIN_USER@IP_DU_NAS</pre>
+  <p style="font-size:12px;color:var(--muted);">
+    Remplace <code>ADMIN_USER</code> par ton nom d'utilisateur DSM admin et <code>IP_DU_NAS</code>
+    par l'IP locale du NAS (ex : <code>192.168.1.42</code>).
+  </p>
+</div>
+
+<!-- ─── 4. Créer l'arborescence ─────────────────────────────────────── -->
+<div class="step-card" id="dossiers">
+  <div class="step-title"><span class="step-num">4</span>Créer l'arborescence sur le NAS</div>
+  <p style="font-size:13px;color:var(--text);line-height:1.6;">
+    Le Dashboard sera <b>isolé dans un dossier dédié</b> <code>/volume1/IRM_Dashboard/</code>,
+    séparé de vos vraies données existantes. Vous pourrez transférer progressivement.
+  </p>
+  <p style="font-size:13px;color:var(--text);">Connecté en SSH, exécutez :</p>
+  <pre>sudo mkdir -p /volume1/IRM_Dashboard/{structured,raw,db,logs,secrets,backups}
+sudo chown -R $(whoami):users /volume1/IRM_Dashboard
+sudo chmod 755 /volume1/IRM_Dashboard
+sudo chmod 700 /volume1/IRM_Dashboard/secrets   # secrets non lisibles par les autres</pre>
+  <div style="font-family:var(--font-mono);font-size:11px;color:var(--muted);margin-top:8px;">
+    <b>Arborescence créée :</b><br>
+    <code>/volume1/IRM_Dashboard/</code><br>
+    <code>├── structured/</code> <span style="color:var(--hint);">← NIfTI + DICOM convertis (convention &lt;projet&gt;/&lt;date_animal&gt;/&lt;seq&gt;/)</span><br>
+    <code>├── raw/</code> <span style="color:var(--hint);">← données brutes constructeur (Bruker, etc.) avant conversion</span><br>
+    <code>├── db/</code> <span style="color:var(--hint);">← base SQLite — NE JAMAIS SUPPRIMER</span><br>
+    <code>├── logs/</code> <span style="color:var(--hint);">← logs applicatifs</span><br>
+    <code>├── secrets/</code> <span style="color:var(--hint);">← google_calendar_sa.json + autres credentials</span><br>
+    <code>└── backups/</code> <span style="color:var(--hint);">← snapshots automatiques de la DB</span>
+  </div>
+</div>
+
+<!-- ─── 5. Transférer le code ───────────────────────────────────────── -->
+<div class="step-card" id="code">
+  <div class="step-title"><span class="step-num">5</span>Transférer le code du projet</div>
+  <p style="font-size:13px;color:var(--text);">2 options pour copier le code :</p>
+  <p style="font-size:13px;color:var(--text);margin-top:10px;"><b>Option A — Git (recommandée si repo accessible) :</b></p>
+  <pre>cd /volume1/IRM_Dashboard
+git clone &lt;URL_DU_REPO&gt; app
+cd app</pre>
+  <p style="font-size:13px;color:var(--text);margin-top:10px;"><b>Option B — Transfert SCP depuis votre Mac/PC :</b></p>
+  <pre># Depuis votre machine locale (PAS le NAS) :
+cd /Users/nolan/Documents
+scp -r flask_app ADMIN_USER@IP_DU_NAS:/volume1/IRM_Dashboard/app</pre>
+  <div class="warn-box">
+    ⚠ <b>Ne PAS</b> transférer le fichier <code>secrets/google_calendar_sa.json</code> via scp dans
+    le dossier app/ — le placer directement dans <code>/volume1/IRM_Dashboard/secrets/</code>.
+    Et vérifier que <code>.gitignore</code> exclut bien ce dossier.
+  </div>
+</div>
+
+<!-- ─── 6. Variables d'environnement ────────────────────────────────── -->
+<div class="step-card" id="config">
+  <div class="step-title"><span class="step-num">6</span>Configurer les variables d'environnement</div>
+  <p style="font-size:13px;color:var(--text);">Éditer <code>docker-compose.nas.yml</code> et remplacer les valeurs marquées :</p>
+  <pre>cd /volume1/IRM_Dashboard/app
+nano docker-compose.nas.yml</pre>
+
+  <p style="font-size:13px;color:var(--text);margin-top:14px;"><b>1) Générer une SECRET_KEY forte :</b></p>
+  <pre>python3 -c "import secrets; print(secrets.token_hex(32))"</pre>
+  <p style="font-size:13px;color:var(--text);">Copier la sortie dans la ligne <code>SECRET_KEY=…</code></p>
+
+  <p style="font-size:13px;color:var(--text);margin-top:14px;"><b>2) Adresse URL publique :</b></p>
+  <p style="font-size:13px;color:var(--text);">Remplacer <code>APP_URL=http://IP-DU-NAS:5001</code> par l'IP réelle, par ex :</p>
+  <pre>APP_URL=http://192.168.1.42:5001</pre>
+
+  <p style="font-size:13px;color:var(--text);margin-top:14px;"><b>3) SMTP (si vous voulez les emails de reset password) :</b></p>
+  <p style="font-size:13px;color:var(--text);">Sinon laisser vide, la fonctionnalité sera désactivée.</p>
+
+  <p style="font-size:13px;color:var(--text);margin-top:14px;"><b>4) Si vous activez HTTPS via reverse proxy DSM :</b></p>
+  <pre>HTTPS_ENABLED=true</pre>
+</div>
+
+<!-- ─── 7. Google Calendar ──────────────────────────────────────────── -->
+<div class="step-card" id="gcal">
+  <div class="step-title"><span class="step-num">7</span>Google Calendar (sync agenda mobile)</div>
+  <p style="font-size:13px;color:var(--text);line-height:1.6;">
+    Si vous voulez que les chercheurs voient les créneaux dans leur app
+    Google Agenda mobile, suivez ces étapes :
+  </p>
+  <ol style="margin:8px 0 0;padding-left:20px;line-height:1.8;font-size:13px;color:var(--text);">
+    <li>Sur <a href="https://console.cloud.google.com" target="_blank" style="color:var(--teal);">console.cloud.google.com</a>,
+        créer un projet "IRM-Dashboard"</li>
+    <li>Activer l'API <b>Google Calendar</b></li>
+    <li>Créer un <b>Service Account</b> → télécharger la clé JSON</li>
+    <li>Sur <a href="https://calendar.google.com" target="_blank" style="color:var(--teal);">calendar.google.com</a>,
+        créer un calendrier "IRM Dashboard"</li>
+    <li>Partager le calendrier avec :
+      <ul style="margin-top:4px;padding-left:18px;">
+        <li>L'email du <b>service account</b> avec droit <b>"Apporter des modifications"</b></li>
+        <li>Les <b>3 chercheurs</b> avec droit <b>"Apporter des modifications aux événements"</b></li>
+      </ul>
+    </li>
+    <li>Copier le JSON sur le NAS :
+      <pre>scp irm-dashboard-XXXXX.json ADMIN_USER@IP_DU_NAS:/volume1/IRM_Dashboard/secrets/google_calendar_sa.json
+ssh ADMIN_USER@IP_DU_NAS "chmod 600 /volume1/IRM_Dashboard/secrets/google_calendar_sa.json"</pre>
+    </li>
+    <li>Dans <code>docker-compose.nas.yml</code>, remplir <code>GOOGLE_CALENDAR_ID=&lt;ID-DU-CALENDRIER&gt;@group.calendar.google.com</code></li>
+  </ol>
+</div>
+
+<!-- ─── 8. Lancer le déploiement ────────────────────────────────────── -->
+<div class="step-card" id="deploy">
+  <div class="step-title"><span class="step-num">8</span>Lancer le déploiement Docker</div>
+  <pre>cd /volume1/IRM_Dashboard/app
+sudo docker compose -f docker-compose.nas.yml up -d --build</pre>
+  <p style="font-size:13px;color:var(--text);margin-top:8px;">
+    Le premier build prend ~5-10 min (téléchargement de l'image Python et installation des dépendances).
+  </p>
+  <p style="font-size:13px;color:var(--text);"><b>Vérifier le démarrage :</b></p>
+  <pre>sudo docker compose -f docker-compose.nas.yml logs --tail 30 irm-app</pre>
+  <p style="font-size:13px;color:var(--text);">Vous devriez voir :</p>
+  <pre>[scheduler] démarré
+[gcal-pull] démarré (poll 120s)
+[INFO] Listening at: http://0.0.0.0:5000</pre>
+  <div class="ok-box">
+    ✓ Le Dashboard est lancé. Statut du container :
+    <code>sudo docker ps | grep irm_fair_app</code>
+  </div>
+</div>
+
+<!-- ─── 9. Accès réseau ─────────────────────────────────────────────── -->
+<div class="step-card" id="access">
+  <div class="step-title"><span class="step-num">9</span>Accéder au Dashboard depuis le réseau</div>
+  <p style="font-size:13px;color:var(--text);">Ouvrir un navigateur :</p>
+  <pre>http://IP_DU_NAS:5001</pre>
+  <p style="font-size:13px;color:var(--text);">Identifiants par défaut :</p>
+  <ul style="font-family:var(--font-mono);font-size:12px;padding-left:18px;line-height:1.6;">
+    <li><b>admin</b> / admin123 → <span style="color:var(--red);">CHANGER LE MOT DE PASSE IMMÉDIATEMENT</span></li>
+    <li><b>operateur</b> / op123</li>
+    <li><b>chercheur</b> / ch123</li>
+  </ul>
+
+  <p style="font-size:13px;color:var(--text);margin-top:14px;"><b>Accès depuis l'extérieur (VPN universitaire) :</b></p>
+  <ol style="padding-left:18px;line-height:1.8;font-size:13px;">
+    <li>S'assurer que le port 5001 est ouvert dans le firewall DSM</li>
+    <li>Vérifier que le NAS est accessible depuis le VPN (ping IP_DU_NAS)</li>
+    <li>Idéalement : configurer un <b>reverse proxy DSM</b> avec HTTPS
+        (Control Panel → Login Portal → Advanced → Reverse Proxy)</li>
+  </ol>
+</div>
+
+<!-- ─── 10. Importer les vraies données ─────────────────────────────── -->
+<div class="step-card" id="data">
+  <div class="step-title"><span class="step-num">10</span>Importer les vraies données IRM</div>
+  <p style="font-size:13px;color:var(--text);line-height:1.6;">
+    <b>Phase 1 — Tests</b> : commencez par 1 ou 2 acquisitions de test via l'interface
+    <b>Import</b> du Dashboard. Vérifier que tout fonctionne (NIfTI affiché, métadonnées
+    correctes, créneau Google Agenda visible).
+  </p>
+  <p style="font-size:13px;color:var(--text);line-height:1.6;">
+    <b>Phase 2 — Migration en masse</b> :
+  </p>
+  <ol style="padding-left:18px;line-height:1.8;font-size:13px;">
+    <li>Identifier le dossier des vraies données (ex : <code>/volume1/Recherche/IRM/</code>)</li>
+    <li>Choisir si migration <b>par copie</b> ou par <b>lien symbolique</b> :
+      <pre># Copie complète (sécurisé, mais double l'espace)
+sudo cp -r /volume1/Recherche/IRM/* /volume1/IRM_Dashboard/structured/
+
+# Lien symbolique (instantané, mais lie les 2 emplacements)
+sudo ln -s /volume1/Recherche/IRM /volume1/IRM_Dashboard/structured/legacy</pre>
+    </li>
+    <li>Lancer la <b>réparation automatique des noms</b> depuis le Dashboard (admin) :
+      <pre>curl -X POST http://IP_DU_NAS:5001/api/nas/fix-naming \
+     -H "Cookie: session=&lt;votre-cookie-admin&gt;"</pre>
+      Cette commande renomme tous les fichiers pour respecter la convention
+      <code>&lt;projet&gt;/&lt;AAAAMMJJ_AnimalID&gt;/&lt;sequence&gt;/</code>.
+    </li>
+  </ol>
+  <div class="warn-box">
+    ⚠ Faire un <b>snapshot DSM</b> avant la migration en masse (Storage Manager → Snapshot).
+  </div>
+</div>
+
+<!-- ─── 11. Backups ─────────────────────────────────────────────────── -->
+<div class="step-card" id="backup">
+  <div class="step-title"><span class="step-num">11</span>Backups & maintenance</div>
+  <p style="font-size:13px;color:var(--text);"><b>Backup automatique de la DB (Hyper Backup ou cron) :</b></p>
+  <pre># Cron job (1 fois par jour à 3h du matin)
+0 3 * * * cp /volume1/IRM_Dashboard/db/irm_fair.db \
+              /volume1/IRM_Dashboard/backups/irm_fair_$(date +\%Y\%m\%d).db</pre>
+  <p style="font-size:13px;color:var(--text);"><b>Mises à jour du code :</b></p>
+  <pre>cd /volume1/IRM_Dashboard/app
+git pull   # ou re-scp depuis votre machine
+sudo docker compose -f docker-compose.nas.yml up -d --build</pre>
+  <p style="font-size:13px;color:var(--text);"><b>Logs en temps réel :</b></p>
+  <pre>sudo docker compose -f docker-compose.nas.yml logs -f irm-app</pre>
+  <p style="font-size:13px;color:var(--text);"><b>Stop / Restart :</b></p>
+  <pre>sudo docker compose -f docker-compose.nas.yml restart irm-app
+sudo docker compose -f docker-compose.nas.yml stop irm-app</pre>
+</div>
+
+<!-- ─── 12. Dépannage ───────────────────────────────────────────────── -->
+<div class="step-card" id="troubleshoot">
+  <div class="step-title"><span class="step-num">12</span>Dépannage</div>
+  <table class="data-table" style="font-size:12px;">
+    <thead>
+      <tr><th style="width:30%;">Symptôme</th><th>Solution</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><b>Container ne démarre pas</b></td>
+        <td>Voir <code>docker compose logs irm-app</code>. Erreur classique : permissions sur <code>/volume1/IRM_Dashboard/db</code>.
+            Faire <code>sudo chmod -R 755 /volume1/IRM_Dashboard/db</code>.</td>
+      </tr>
+      <tr>
+        <td><b>Port 5001 déjà utilisé</b></td>
+        <td>Changer le port dans <code>docker-compose.nas.yml</code> (ex : <code>"5002:5000"</code>) et mettre à jour <code>APP_URL</code>.</td>
+      </tr>
+      <tr>
+        <td><b>Google Agenda iframe blanche</b></td>
+        <td>Le calendrier doit être <b>partagé publiquement</b> ou les utilisateurs doivent être connectés à un compte Google qui y a accès. Voir page <a href="/calendrier" style="color:var(--teal);">Planning</a>.</td>
+      </tr>
+      <tr>
+        <td><b>SECRET_KEY warning au démarrage</b></td>
+        <td>La SECRET_KEY est restée à la valeur par défaut. Générer une nouvelle clé et l'écrire dans le compose.</td>
+      </tr>
+      <tr>
+        <td><b>Fichiers NIfTI non trouvés</b></td>
+        <td>Vérifier le mount du volume : <code>docker exec irm_fair_app ls /nas/structured</code>. Si vide, le mount échoue → vérifier <code>/volume1/IRM_Dashboard/structured</code>.</td>
+      </tr>
+      <tr>
+        <td><b>DB corrompue</b></td>
+        <td>Restaurer depuis le dernier backup dans <code>/volume1/IRM_Dashboard/backups/</code>, copier vers <code>db/irm_fair.db</code>, restart.</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- Checklist finale -->
+<div class="step-card" style="border-left:3px solid var(--teal);">
+  <div class="step-title">✓ Checklist déploiement</div>
+  <ul style="margin:0;padding-left:18px;line-height:1.8;font-size:13px;color:var(--text);">
+    <li>☐ Container Manager installé</li>
+    <li>☐ SSH actif</li>
+    <li>☐ /volume1/IRM_Dashboard/ créé avec sous-dossiers</li>
+    <li>☐ Code transféré dans /volume1/IRM_Dashboard/app/</li>
+    <li>☐ SECRET_KEY changée (≠ valeur par défaut)</li>
+    <li>☐ APP_URL pointe vers la bonne IP</li>
+    <li>☐ (Optionnel) Google Calendar service account configuré dans secrets/</li>
+    <li>☐ <code>docker compose up -d --build</code> lancé sans erreur</li>
+    <li>☐ Dashboard accessible via http://IP_DU_NAS:5001</li>
+    <li>☐ Mots de passe par défaut changés (admin, operateur, chercheur)</li>
+    <li>☐ 2FA activé pour le compte admin</li>
+    <li>☐ Cron de backup configuré</li>
+    <li>☐ Snapshot DSM créé avant migration des vraies données</li>
+  </ul>
+</div>
+
+{% endblock %}

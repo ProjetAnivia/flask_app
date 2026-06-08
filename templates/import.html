@@ -40,17 +40,51 @@
       </div>
     </div>
 
-    <div class="form-grid">
-      <div class="form-row">
-        <label class="form-label">Espèce</label>
-        <select class="form-select" id="inp-espece">
-          <option value="Rat">Rat</option>
-          <option value="Souris">Souris</option>
-          <option value="Lapin">Lapin</option>
-          <option value="Autre">Autre</option>
-        </select>
+    <!-- CR : Suggestion de la convention de nommage NAS -->
+    <div id="naming-suggest" style="background:var(--teal-bg);border:1px solid var(--teal);
+                                     border-radius:8px;padding:10px 14px;
+                                     font-family:var(--font-mono);font-size:11px;">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;color:var(--teal);font-weight:500;">
+        📁 Chemin NAS prévu pour cet import
       </div>
+      <div style="color:var(--text);" id="naming-path">—</div>
+      <div id="naming-warnings" style="margin-top:6px;color:var(--amber);"></div>
+    </div>
+    <script>
+      // Met à jour la suggestion en live à chaque modification
+      async function refreshNamingSuggestion() {
+        const payload = {
+          projet:    document.getElementById('sel-project')?.value || '',
+          animal_id: document.getElementById('inp-animal')?.value || '',
+          sequence:  document.getElementById('inp-sequence')?.value || '',
+          date_acq:  document.getElementById('inp-date')?.value || '',
+        };
+        try {
+          const r = await fetch('/api/nas/suggest-name', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': "{{ csrf_token }}" },
+            body: JSON.stringify(payload),
+          });
+          const j = await r.json();
+          const pathEl = document.getElementById('naming-path');
+          const warnEl = document.getElementById('naming-warnings');
+          pathEl.textContent = j.suggested || '—';
+          warnEl.innerHTML = (j.warnings || []).map(w => `⚠ ${w}`).join('<br>');
+        } catch (e) {}
+      }
+      // Hook sur tous les inputs concernés
+      document.addEventListener('DOMContentLoaded', () => {
+        ['sel-project','inp-animal','inp-sequence','inp-date'].forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.addEventListener('input', refreshNamingSuggestion);
+          if (el) el.addEventListener('change', refreshNamingSuggestion);
+        });
+        refreshNamingSuggestion();
+      });
+    </script>
 
+    <!-- Champ espèce supprimé : que des rats actuellement (Rat = défaut) -->
+    <div class="form-grid">
       <div class="form-row">
         <label class="form-label">Poids (g) <span style="color:var(--hint);">— optionnel</span></label>
         <input class="form-input" type="number" id="inp-poids" step="0.1" min="0.1" max="5000"
@@ -474,7 +508,7 @@ async function launchImport() {
   fd.append('animal_id', animal);
   fd.append('sequence',  document.getElementById('inp-sequence').value.trim() || 'SEQ');
   fd.append('date_acq',  document.getElementById('inp-date').value);
-  fd.append('espece',    document.getElementById('inp-espece').value);
+  fd.append('espece',    'Rat');  // valeur par défaut, champ retiré de l'UI
 
   // ── Champs enrichis (cahier des charges) ──────────────────────────
   const poids   = document.getElementById('inp-poids').value.trim();

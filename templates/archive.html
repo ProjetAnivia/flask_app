@@ -7,12 +7,24 @@
   <div class="page-sub">{{ projets | length }} projet(s) terminé(s) · <a href="/projets" style="color:var(--hint);text-decoration:none;">← Projets en cours</a></div>
 </div>
 
-<!-- Recherche -->
+<!-- Recherche + tri -->
 <div class="card" style="padding:14px 20px;">
-  <input class="form-input" type="text" id="search-arch"
-         placeholder="Rechercher par nom ou responsable…"
-         oninput="filterArchive(this.value)"
-         style="max-width:400px;">
+  <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
+    <input class="form-input" type="text" id="search-arch"
+           placeholder="Rechercher par nom ou chercheur…"
+           oninput="filterArchive(this.value)"
+           style="max-width:400px;flex:1;">
+    <div style="display:flex;align-items:center;gap:6px;">
+      <label style="font-family:var(--font-mono);font-size:11px;color:var(--hint);">Tri :</label>
+      <select class="form-select" style="width:200px;font-size:12px;"
+              onchange="window.location.href='/archive?sort=' + this.value">
+        <option value="date_desc" {% if sort == 'date_desc' %}selected{% endif %}>Date archivage (+ récent)</option>
+        <option value="date_asc"  {% if sort == 'date_asc' %}selected{% endif %}>Date archivage (+ ancien)</option>
+        <option value="nom"       {% if sort == 'nom' %}selected{% endif %}>Nom du projet</option>
+        <option value="nb_acq"    {% if sort == 'nb_acq' %}selected{% endif %}>Nombre d'acquisitions</option>
+      </select>
+    </div>
+  </div>
 </div>
 
 <!-- Liste des projets archivés -->
@@ -21,9 +33,9 @@
     <thead>
       <tr>
         <th>Projet</th>
-        <th>Responsable</th>
+        <th>Chercheur</th>
+        <th>Date archivage</th>
         <th>Animaux prévus</th>
-        <th>Séq./animal</th>
         <th>Acquisitions</th>
         <th>Avancement final</th>
         <th>Statuts animaux</th>
@@ -41,8 +53,8 @@
                 font-size:9px;margin-left:6px;">terminé</span>
         </td>
         <td class="mono">{{ p.resp or "—" }}</td>
-        <td class="mono">{{ p.nb_prevus }}</td>
-        <td class="mono">{{ p.seq_par_animal }}</td>
+        <td class="mono">{{ p.archived_at or "—" }}</td>
+        <td class="mono">{{ p.nb_prevus or "—" }}</td>
         <td><span class="mono">{{ p.faites }} / {{ p.prevues }}</span></td>
         <td style="min-width:120px;">
           <div style="display:flex;align-items:center;gap:8px;">

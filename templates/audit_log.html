@@ -1,0 +1,186 @@
+{% extends "base.html" %}
+{% block title %}Activité récente{% endblock %}
+{% block content %}
+
+<!-- En-tête shadcn-like -->
+<div style="display:flex;align-items:end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:14px;">
+  <div>
+    <h1 style="font-size:24px;font-weight:600;letter-spacing:-0.01em;color:var(--text);margin:0;">
+      Activité récente
+    </h1>
+    <p style="font-size:12px;color:var(--hint);font-family:var(--font-mono);margin:6px 0 0;">
+      Historique chronologique de toutes les actions · admin uniquement
+    </p>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center;">
+    <select id="filterProjet" onchange="loadFullAuditLog()"
+            style="font-family:var(--font-mono);font-size:12px;padding:6px 10px;
+                   border-radius:6px;background:var(--bg2);color:var(--text);
+                   border:1px solid var(--border2);">
+      <option value="">Tous les projets</option>
+    </select>
+    <select id="filterLimit" onchange="loadFullAuditLog()"
+            style="font-family:var(--font-mono);font-size:12px;padding:6px 10px;
+                   border-radius:6px;background:var(--bg2);color:var(--text);
+                   border:1px solid var(--border2);">
+      <option value="30">30 dernières</option>
+      <option value="60">60 dernières</option>
+      <option value="100">100 dernières</option>
+      <option value="200" selected>200 dernières</option>
+    </select>
+    <button type="button" onclick="loadFullAuditLog()"
+            style="display:inline-flex;align-items:center;gap:6px;
+                   font-family:var(--font-mono);font-size:12px;font-weight:500;
+                   padding:7px 14px;border-radius:6px;
+                   background:var(--btn-primary);color:var(--btn-primary-text);
+                   border:1px solid var(--btn-primary);cursor:pointer;
+                   box-shadow:0 1px 4px var(--btn-primary-shadow);">
+      ↻ Rafraîchir
+    </button>
+  </div>
+</div>
+
+<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;
+            box-shadow:0 1px 3px rgba(0,0,0,0.04);overflow:hidden;flex-shrink:0;">
+  <div id="auditFullList" style="padding:8px;">
+    <div class="ui-skeleton" style="height:42px;margin-bottom:4px;"></div>
+    <div class="ui-skeleton" style="height:42px;opacity:0.8;margin-bottom:4px;"></div>
+    <div class="ui-skeleton" style="height:42px;opacity:0.6;margin-bottom:4px;"></div>
+    <div class="ui-skeleton" style="height:42px;opacity:0.4;"></div>
+  </div>
+</div>
+
+<script>
+const ACTION_LABELS = {
+  create_projet:      { icon:'+', col:'var(--teal)',  label:'a créé le projet' },
+  delete_projet:      { icon:'×', col:'var(--red)',   label:'a supprimé le projet' },
+  create_acquisition: { icon:'⊕', col:'var(--blue)',  label:'a planifié l\'acquisition' },
+  upload_acquisition: { icon:'↑', col:'var(--teal)',  label:'a importé l\'acquisition' },
+  delete_acquisition: { icon:'×', col:'var(--red)',   label:'a supprimé l\'acquisition' },
+  create_session:     { icon:'≡', col:'var(--blue)',  label:'a créé la session' },
+  update_session:     { icon:'✎', col:'var(--muted)', label:'a modifié la session' },
+  delete_session:     { icon:'×', col:'var(--red)',   label:'a supprimé la session' },
+  add_member:         { icon:'@', col:'var(--blue)',  label:'a ajouté un membre' },
+  create_scanner:     { icon:'+', col:'var(--teal)',  label:'a ajouté un appareil' },
+  update_scanner:     { icon:'✎', col:'var(--muted)', label:'a modifié un appareil' },
+};
+
+function escAU(s) { return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function relTimeAudit(iso) {
+  const d = new Date(iso);
+  const diff = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (diff < 60)    return "à l'instant";
+  if (diff < 3600)  return Math.floor(diff/60) + ' min';
+  if (diff < 86400) return Math.floor(diff/3600) + ' h';
+  if (diff < 7*86400) return Math.floor(diff/86400) + ' j';
+  return d.toLocaleString('fr-FR', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' });
+}
+
+function fullDate(iso) {
+  const d = new Date(iso);
+  return d.toLocaleString('fr-FR', {
+    day:'2-digit', month:'2-digit', year:'numeric',
+    hour:'2-digit', minute:'2-digit'
+  });
+}
+
+async function loadProjetsForFilter() {
+  try {
+    const res = await fetch('/api/projets');
+    if (!res.ok) return;
+    const projets = await res.json();
+    const sel = document.getElementById('filterProjet');
+    sel.innerHTML = '<option value="">Tous les projets</option>' +
+      projets.map(p => `<option value="${escAU(p.nom)}">${escAU(p.nom)}</option>`).join('');
+  } catch (e) {}
+}
+
+async function loadFullAuditLog() {
+  const list = document.getElementById('auditFullList');
+  const limit  = document.getElementById('filterLimit').value || '200';
+  const projet = document.getElementById('filterProjet').value || '';
+
+  try {
+    const url = `/api/audit-log?limit=${limit}` + (projet ? `&projet=${encodeURIComponent(projet)}` : '');
+    const res = await fetch(url);
+    if (!res.ok) {
+      list.innerHTML = '<div style="padding:14px;color:var(--red);font-size:11px;">Erreur</div>';
+      return;
+    }
+    const d = await res.json();
+    if (!d.items.length) {
+      list.innerHTML = `
+        <div class="ui-empty">
+          <div class="ui-empty-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg>
+          </div>
+          <div class="ui-empty-title">Aucune activité</div>
+          <div class="ui-empty-desc">Aucune action ne correspond aux filtres.</div>
+        </div>`;
+      return;
+    }
+
+    // Groupe par jour
+    const byDay = {};
+    for (const it of d.items) {
+      const day = it.created_at.substring(0, 10);
+      if (!byDay[day]) byDay[day] = [];
+      byDay[day].push(it);
+    }
+
+    let html = '';
+    for (const day of Object.keys(byDay)) {
+      const dDay = new Date(day + 'T00:00:00');
+      const today = new Date(); today.setHours(0,0,0,0);
+      const diff = Math.round((today - dDay) / 86400000);
+      let dayLabel;
+      if (diff === 0) dayLabel = "Aujourd'hui";
+      else if (diff === 1) dayLabel = 'Hier';
+      // CR #20 : format ISO 8601 (YYYY-MM-DD), avec nom du jour court préfixé pour clarté
+      else if (diff < 7) dayLabel = dDay.toLocaleDateString('fr-FR', { weekday:'short' }) + ' ' + dDay.toISOString().slice(0, 10);
+      else dayLabel = dDay.toISOString().slice(0, 10);
+
+      html += `
+        <div style="padding:10px 12px 4px;font-family:var(--font-mono);font-size:9px;
+                    letter-spacing:0.12em;text-transform:uppercase;color:var(--hint);
+                    border-top:1px solid var(--border);margin-top:2px;">
+          ${dayLabel}
+        </div>`;
+
+      for (const it of byDay[day]) {
+        const meta  = ACTION_LABELS[it.action] || { icon:'•', col:'var(--hint)', label:it.action };
+        const label = it.entity_label || it.action;
+        const projLabel = it.projet ? ` <span style="color:var(--hint);"> · ${escAU(it.projet)}</span>` : '';
+        html += `
+          <div style="display:flex;align-items:flex-start;gap:10px;padding:8px 14px;border-radius:6px;
+                      transition:background 0.12s;" onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background=''">
+            <span style="width:28px;height:28px;border-radius:6px;background:var(--bg3);color:${meta.col};
+                         display:flex;align-items:center;justify-content:center;font-family:var(--font-mono);
+                         font-size:13px;flex-shrink:0;">${meta.icon}</span>
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:13px;color:var(--text);line-height:1.5;">
+                <span style="font-weight:600;">${escAU(it.username)}</span>
+                <span style="color:var(--muted);"> ${meta.label}</span>
+                <span style="font-weight:500;">${escAU(label)}</span>${projLabel}
+              </div>
+              <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-top:2px;"
+                   title="${escAU(fullDate(it.created_at))}">
+                ${relTimeAudit(it.created_at)}
+              </div>
+            </div>
+          </div>`;
+      }
+    }
+    list.innerHTML = html;
+  } catch (e) {
+    list.innerHTML = '<div style="padding:14px;color:var(--red);font-size:11px;">Erreur réseau</div>';
+  }
+}
+
+loadProjetsForFilter();
+loadFullAuditLog();
+setInterval(loadFullAuditLog, 60000);
+</script>
+
+{% endblock %}

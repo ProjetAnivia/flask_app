@@ -3,54 +3,186 @@
 {% block content %}
 
 <div class="page-header">
-  <div style="display:flex;align-items:center;gap:12px;">
+  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
     <a href="/animaux" style="font-family:var(--font-mono);font-size:12px;color:var(--hint);text-decoration:none;">← Animaux</a>
     <span style="color:var(--border2);">/</span>
-    <div class="page-title">{{ animal.animal_id }}</div>
+    <div class="page-title" style="font-family:var(--font-mono);font-size:16px;">{{ animal.full_id }}</div>
     {% if animal.statut == "ok" %}<span class="pill pill-ok">complet</span>
     {% elif animal.statut == "a_refaire" %}<span class="pill pill-redo">à refaire</span>
     {% elif animal.statut == "en_cours" %}<span class="pill pill-prog">en cours</span>
     {% else %}<span class="pill pill-wait">en attente</span>{% endif %}
+    {% if animal.session_nom %}
+      <span class="pill" style="background:var(--teal-bg);color:var(--teal);border-color:var(--teal);">
+        session {{ animal.session_nom }}
+      </span>
+    {% endif %}
   </div>
-  <div class="page-sub">{{ projet | replace("_"," ") | title }} · {{ animal.espece or "Espèce inconnue" }}</div>
+  <div class="page-sub">
+    <a href="/projet/{{ projet }}" style="color:inherit;text-decoration:none;border-bottom:1px dashed var(--border2);">
+      {{ projet | upper }}{% if projet_nom_long %} — {{ projet_nom_long }}{% endif %}
+    </a>
+    {% if projet_resp %}
+      <span style="margin:0 6px;color:var(--border2);">·</span>
+      <span style="font-family:var(--font-mono);font-size:11px;">👤 chercheur :
+        <strong style="color:var(--text);">{{ projet_resp }}</strong>
+      </span>
+    {% endif %}
+    <span style="margin:0 6px;color:var(--border2);">·</span>
+    alias court : <strong style="color:var(--text);">{{ animal.animal_id }}</strong>
+  </div>
 </div>
 
+<!-- ─── Nav sticky : raccourcis vers sections (UX épurée) ─────────────── -->
+<div class="anim-tabs-nav">
+  <a href="#identite"     class="anim-tab-link">Identité</a>
+  <a href="#poids"        class="anim-tab-link" data-needs="weight_series">Évolution poids</a>
+  <a href="#sessions"     class="anim-tab-link">Sessions</a>
+  <a href="#cahier"       class="anim-tab-link" data-needs="acqs">Cahier de manips</a>
+  {% if acqs | selectattr("is_tep") | list %}
+  <a href="#tep"          class="anim-tab-link">TEP</a>
+  {% endif %}
+  <a href="#planning"     class="anim-tab-link" data-needs="acqs">Planning</a>
+  <a href="#commentaires" class="anim-tab-link">Commentaires</a>
+  <a href="#activite"     class="anim-tab-link">Activité</a>
+</div>
+<style>
+  /* Sticky nav fiche animal — fixé en haut, suit le scroll correctement.
+     Important : sticky ne marche que si AUCUN parent n'a overflow:hidden/auto.
+     On utilise position: sticky avec un fallback robuste sur fixed via JS si besoin. */
+  .anim-tabs-nav {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    display: flex; gap: 4px; flex-wrap: wrap;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin: 0 0 14px;
+    padding: 6px 10px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+  }
+  .anim-tab-link {
+    font-family: var(--font-mono); font-size: 11px;
+    padding: 6px 12px; border-radius: 6px;
+    color: var(--muted); text-decoration: none;
+    transition: all .12s;
+    white-space: nowrap;
+  }
+  .anim-tab-link:hover { background: var(--bg3); color: var(--text); }
+  .anim-tab-link.active {
+    background: var(--teal); color: #fff !important; font-weight: 500;
+  }
+  /* Décale les ancres pour qu'elles ne soient pas cachées par la sticky nav */
+  [id="identite"], [id="poids"], [id="sessions"], [id="cahier"],
+  [id="tep"], [id="planning"], [id="commentaires"], [id="activite"] {
+    scroll-margin-top: 70px;
+  }
+</style>
+<script>
+  // CR : highlight robuste du tab actif via scroll listener
+  // (IntersectionObserver buggue dans certaines configs avec sticky parent)
+  (function() {
+    const links = document.querySelectorAll('.anim-tab-link');
+    const sections = Array.from(links)
+      .map(l => ({ link: l, id: l.getAttribute('href').slice(1),
+                   el: document.getElementById(l.getAttribute('href').slice(1)) }))
+      .filter(s => s.el);
+    if (!sections.length) return;
+
+    function setActive(id) {
+      links.forEach(l => l.classList.toggle('active', l.getAttribute('href') === '#' + id));
+    }
+
+    function update() {
+      const offset = 100; // sticky nav height + marge
+      let bestId = sections[0].id;
+      let bestTop = -Infinity;
+      const scrollY = window.scrollY;
+      for (const s of sections) {
+        const top = s.el.getBoundingClientRect().top;
+        // section dont le haut est passé sous l'offset = candidate
+        if (top - offset <= 0 && top > bestTop) {
+          bestTop = top;
+          bestId  = s.id;
+        }
+      }
+      setActive(bestId);
+    }
+
+    let rafPending = false;
+    window.addEventListener('scroll', () => {
+      if (rafPending) return;
+      rafPending = true;
+      requestAnimationFrame(() => { update(); rafPending = false; });
+    }, { passive: true });
+    update();
+  })();
+</script>
+
 <!-- Infos générales -->
-<div class="grid-2">
+<div class="grid-2" id="identite">
   <div class="card">
     <div class="card-title">Identité</div>
     <table class="data-table">
       <tr><td style="color:var(--hint);width:140px;" class="mono">ID animal</td><td><strong>{{ animal.animal_id }}</strong></td></tr>
-      <tr><td class="mono" style="color:var(--hint);">Dossier NAS</td><td class="mono">{{ dossier_nas }}/</td></tr>
-      <tr><td class="mono" style="color:var(--hint);">Projet</td><td>{{ projet | replace("_"," ") | title }}</td></tr>
-      <tr><td class="mono" style="color:var(--hint);">Espèce</td><td>{{ animal.espece or "—" }}</td></tr>
+      <tr><td class="mono" style="color:var(--hint);">Dossier NAS</td>
+          <td class="mono" style="font-size:11px;">
+            <span title="Chemin NAS attendu pour cet animal (convention &lt;projet&gt;/&lt;AAAAMMJJ_AnimalID&gt;/&lt;seq&gt;/)">
+              {{ projet }}/<strong>{{ dossier_nas }}</strong>/
+            </span>
+            {% if nas_coherence_issues %}
+              <span class="pill pill-redo"
+                    style="font-size:9px;padding:1px 6px;margin-left:6px;"
+                    title="{{ nas_coherence_issues | length }} acquisition(s) hors convention. Voir la carte 'Cohérence NAS' plus bas.">
+                ⚠ {{ nas_coherence_issues | length }} hors norme
+              </span>
+            {% else %}
+              <span class="pill pill-ok" style="font-size:9px;padding:1px 6px;margin-left:6px;"
+                    title="Tous les fichiers respectent la convention NAS">
+                ✓ cohérent
+              </span>
+            {% endif %}
+          </td></tr>
+      <tr><td class="mono" style="color:var(--hint);">Projet</td>
+          <td>
+            <a href="/projet/{{ projet }}" style="color:var(--teal);text-decoration:none;">
+              {{ projet | upper }}
+            </a>
+            {% if projet_nom_long %}
+              <span style="color:var(--hint);font-size:11px;"> — {{ projet_nom_long }}</span>
+            {% endif %}
+          </td></tr>
+      <tr><td class="mono" style="color:var(--hint);">Chercheur</td>
+          <td><strong>{{ projet_resp or "—" }}</strong></td></tr>
       <tr><td class="mono" style="color:var(--hint);">1ère acquisition</td><td class="mono">{{ animal.date_premiere_acq or "—" }}</td></tr>
       <tr><td class="mono" style="color:var(--hint);">Nb acquisitions</td><td class="mono">{{ animal.nb_acquisitions }}</td></tr>
     </table>
   </div>
 
-  <div class="card">
-    <div class="card-title">Avancement</div>
-    <div style="display:flex;flex-direction:column;gap:10px;">
-      {% set total_acq = acqs | length %}
-      {% set ok_acq    = acqs | selectattr("statut","equalto","ok") | list | length %}
-      {% set pct = (ok_acq / total_acq * 100) | int if total_acq > 0 else 0 %}
-      <div>
-        <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
-          <span style="font-size:13px;">Acquisitions validées</span>
-          <span class="mono">{{ ok_acq }} / {{ total_acq }}</span>
+  <div class="card" style="padding:14px 18px;">
+    <div class="card-title" style="margin-bottom:8px;padding-bottom:6px;">Avancement</div>
+    {% set total_acq = acqs | length %}
+    {% set ok_acq    = acqs | selectattr("statut","equalto","ok") | list | length %}
+    {% set pct = (ok_acq / total_acq * 100) | int if total_acq > 0 else 0 %}
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div style="flex:1;">
+        <div style="display:flex;justify-content:space-between;font-family:var(--font-mono);font-size:11px;color:var(--hint);margin-bottom:3px;">
+          <span>Acquisitions validées</span>
+          <span style="color:var(--text);">{{ ok_acq }} / {{ total_acq }} ({{ pct }}%)</span>
         </div>
-        <div class="prog-wrap"><div class="prog-bar {{ 'amber' if pct < 75 else '' }}" style="width:{{ pct }}%"></div></div>
-      </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;">
-        {% for a in acqs %}
-          {% if a.statut == "ok" %}<span class="pill pill-ok">{{ a.sequence or "?" }}</span>
-          {% elif a.statut == "a_refaire" %}<span class="pill pill-redo">{{ a.sequence or "?" }}</span>
-          {% elif a.statut == "en_cours" %}<span class="pill pill-prog">{{ a.sequence or "?" }}</span>
-          {% else %}<span class="pill pill-wait">{{ a.sequence or "?" }}</span>{% endif %}
-        {% endfor %}
+        <div class="prog-wrap" style="height:6px;"><div class="prog-bar {{ 'amber' if pct < 75 else '' }}" style="width:{{ pct }}%"></div></div>
       </div>
     </div>
+    {% if acqs %}
+    <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:10px;">
+      {% for a in acqs %}
+        {% if a.statut == "ok" %}<span class="pill pill-ok" style="font-size:10px;padding:1px 6px;">{{ a.sequence or "?" }}</span>
+        {% elif a.statut == "a_refaire" %}<span class="pill pill-redo" style="font-size:10px;padding:1px 6px;">{{ a.sequence or "?" }}</span>
+        {% elif a.statut == "en_cours" %}<span class="pill pill-prog" style="font-size:10px;padding:1px 6px;">{{ a.sequence or "?" }}</span>
+        {% else %}<span class="pill pill-wait" style="font-size:10px;padding:1px 6px;">{{ a.sequence or "?" }}</span>{% endif %}
+      {% endfor %}
+    </div>
+    {% endif %}
   </div>
 </div>
 
@@ -339,9 +471,257 @@ initNiivue();
 </script>
 {% endif %}
 
+<!-- ─── Cet animal dans toutes les sessions (cross-sessions) ─────────────── -->
+<div id="sessions" style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;
+            box-shadow:0 1px 3px rgba(0,0,0,0.04);overflow:hidden;flex-shrink:0;">
+  <div style="display:flex;align-items:center;gap:10px;
+              padding:14px 20px;border-bottom:1px solid var(--border);">
+    <span style="width:32px;height:32px;border-radius:8px;background:var(--teal-bg);color:var(--teal);
+                 display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="9"/></svg>
+    </span>
+    <div>
+      <div style="font-size:14px;font-weight:600;color:var(--text);">Cet animal dans toutes les sessions</div>
+      <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-top:2px;">
+        toutes les acquisitions de {{ animal.animal_id }} au sein du projet {{ projet }}, groupées par session
+      </div>
+    </div>
+  </div>
+  <div id="animalSessionsList" style="padding:12px;">
+    <div class="ui-skeleton" style="height:60px;margin-bottom:6px;"></div>
+    <div class="ui-skeleton" style="height:60px;opacity:0.6;"></div>
+  </div>
+</div>
+
+<script>
+(function loadAnimalSessions() {
+  const list = document.getElementById('animalSessionsList');
+  fetch(`/api/animaux/{{ projet }}/{{ animal.animal_id }}/sessions`)
+    .then(r => r.json())
+    .then(d => {
+      if (!d.sessions || !d.sessions.length) {
+        list.innerHTML = `
+          <div class="ui-empty">
+            <div class="ui-empty-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg>
+            </div>
+            <div class="ui-empty-title">Aucune acquisition</div>
+            <div class="ui-empty-desc">Cet animal n'a pas encore d'acquisition enregistrée.</div>
+          </div>`;
+        return;
+      }
+      const qualColor = { excellente:'var(--teal)', bonne:'var(--blue)',
+                          degradee:'var(--amber)', inutilisable:'var(--red)' };
+      const periodeEmoji = { matin:'🌅', apres_midi:'🌇', journee:'🌞' };
+      list.innerHTML = d.sessions.map(s => {
+        const acqs = s.acquisitions.map(a => {
+          const qcol = qualColor[a.qualite] || 'var(--hint)';
+          const pEmo = periodeEmoji[a.periode] || '';
+          const scannerBadge = a.scanner_nom
+            ? `<span style="display:inline-flex;align-items:center;gap:3px;font-family:var(--font-mono);font-size:10px;
+                            color:${a.scanner_couleur || 'var(--hint)'};
+                            border:1px solid ${a.scanner_couleur || 'var(--border)'};
+                            padding:1px 5px;border-radius:3px;">⬤ ${escAS(a.scanner_nom)}</span>`
+            : '';
+          // CR #12 : chaque acquisition est cliquable → scroll vers le cahier de manips
+          return `
+            <a href="#acq-row-${a.id}" data-acq-id="${a.id}"
+               onclick="highlightAcqRow(${a.id})"
+               style="text-decoration:none;color:inherit;
+                      display:flex;align-items:center;gap:10px;padding:6px 10px;border-radius:6px;
+                      background:var(--bg);margin-bottom:3px;font-size:12px;
+                      border:1px solid transparent;transition:all .12s;cursor:pointer;"
+               onmouseover="this.style.background='var(--bg3)';this.style.borderColor='var(--border2)';"
+               onmouseout="this.style.background='var(--bg)';this.style.borderColor='transparent';"
+               title="Voir cette acquisition dans le cahier de manips">
+              <span style="font-family:var(--font-mono);color:var(--hint);min-width:84px;">${a.date_acq || '—'}${a.heure_debut ? ' '+a.heure_debut : ''}</span>
+              ${pEmo ? `<span title="${a.periode}">${pEmo}</span>` : ''}
+              <span style="font-weight:500;color:var(--text);">${escAS(a.sequence) || '—'}</span>
+              ${scannerBadge}
+              ${a.poids_g ? `<span style="font-family:var(--font-mono);font-size:11px;color:var(--muted);">${a.poids_g}g</span>` : ''}
+              ${a.qualite ? `<span style="font-family:var(--font-mono);font-size:10px;color:${qcol};border:1px solid ${qcol};padding:1px 6px;border-radius:3px;">${a.qualite}</span>` : ''}
+              <span style="margin-left:auto;font-family:var(--font-mono);font-size:10px;color:var(--muted);">${a.statut}</span>
+            </a>`;
+        }).join('');
+        // Lien session : on ouvre la fiche du projet et on filtre sur cette session
+        const sessionHref = s.session_id
+          ? `/projet/{{ projet }}#session-${s.session_id}`
+          : `/projet/{{ projet }}`;
+        return `
+          <div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:8px;">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+              <a href="${sessionHref}"
+                 style="display:inline-flex;align-items:center;padding:3px 10px;border-radius:6px;
+                        background:var(--teal-bg);color:var(--teal);font-family:var(--font-mono);
+                        font-size:11px;font-weight:600;text-decoration:none;"
+                 title="Voir cette session dans la fiche projet">
+                ${escAS(s.session_nom)} →
+              </a>
+              <span style="font-family:var(--font-mono);font-size:10px;color:var(--hint);">
+                ${s.acquisitions.length} acquisition(s)
+              </span>
+              ${s.session_date ? `<span style="font-family:var(--font-mono);font-size:10px;color:var(--hint);">· depuis ${s.session_date}</span>` : ''}
+            </div>
+            ${acqs}
+          </div>`;
+      }).join('');
+    })
+    .catch(() => {
+      list.innerHTML = '<div style="padding:14px;color:var(--red);font-size:11px;">Erreur de chargement</div>';
+    });
+
+  function escAS(s) { return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+})();
+
+// CR #12 : highlight visuel quand on clique sur une acquisition cross-session
+function highlightAcqRow(acqId) {
+  const row = document.getElementById(`acq-row-${acqId}`);
+  if (!row) return;
+  row.style.background = 'var(--teal-bg)';
+  setTimeout(() => { row.style.background = ''; }, 1800);
+}
+</script>
+
+<!-- ─── CR #13 : Évolution du poids ───────────────────────────────────── -->
+<div id="poids"></div>
+{% if weight_series | length >= 1 %}
+{% set _wmin = (weight_series | map(attribute='poids_g') | min) %}
+{% set _wmax = (weight_series | map(attribute='poids_g') | max) %}
+{% set _span = (_wmax - _wmin) if (_wmax - _wmin) > 0 else 1 %}
+{% set _last = weight_series[-1].poids_g %}
+{% set _first = weight_series[0].poids_g %}
+{% set _delta = _last - _first %}
+{% set _vbw = 720 %}
+{% set _vbh = 180 %}
+{% set _padL = 44 %}
+{% set _padR = 14 %}
+{% set _padT = 14 %}
+{% set _padB = 32 %}
+{% set _plotW = _vbw - _padL - _padR %}
+{% set _plotH = _vbh - _padT - _padB %}
+{% set _n = weight_series | length %}
+
+<div class="card">
+  <div class="card-title">
+    Évolution du poids
+    <span style="font-family:var(--font-mono);font-size:9px;color:var(--hint);
+                 margin-left:8px;letter-spacing:0;text-transform:none;">
+      une mesure par acquisition · cliquer un point pour la voir
+    </span>
+  </div>
+
+  <!-- Stats résumées -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:14px;
+              margin-bottom:14px;padding:10px 14px;background:var(--bg2);border-radius:8px;
+              border:1px solid var(--border);">
+    <div>
+      <div style="font-family:var(--font-mono);font-size:9px;color:var(--hint);
+                  text-transform:uppercase;letter-spacing:0.08em;">Mesures</div>
+      <div style="font-size:18px;font-weight:600;color:var(--text);line-height:1.1;margin-top:2px;">
+        {{ _n }}
+      </div>
+    </div>
+    <div>
+      <div style="font-family:var(--font-mono);font-size:9px;color:var(--hint);
+                  text-transform:uppercase;letter-spacing:0.08em;">Min</div>
+      <div style="font-size:18px;font-weight:600;color:var(--text);line-height:1.1;margin-top:2px;">
+        {{ "%.1f"|format(_wmin) }}<span style="font-size:11px;color:var(--hint);"> g</span>
+      </div>
+    </div>
+    <div>
+      <div style="font-family:var(--font-mono);font-size:9px;color:var(--hint);
+                  text-transform:uppercase;letter-spacing:0.08em;">Max</div>
+      <div style="font-size:18px;font-weight:600;color:var(--text);line-height:1.1;margin-top:2px;">
+        {{ "%.1f"|format(_wmax) }}<span style="font-size:11px;color:var(--hint);"> g</span>
+      </div>
+    </div>
+    <div>
+      <div style="font-family:var(--font-mono);font-size:9px;color:var(--hint);
+                  text-transform:uppercase;letter-spacing:0.08em;">Dernier</div>
+      <div style="font-size:18px;font-weight:600;color:var(--text);line-height:1.1;margin-top:2px;">
+        {{ "%.1f"|format(_last) }}<span style="font-size:11px;color:var(--hint);"> g</span>
+      </div>
+    </div>
+    <div>
+      <div style="font-family:var(--font-mono);font-size:9px;color:var(--hint);
+                  text-transform:uppercase;letter-spacing:0.08em;">Évolution</div>
+      <div style="font-size:18px;font-weight:600;line-height:1.1;margin-top:2px;
+                  color:{% if _delta > 0 %}var(--teal){% elif _delta < 0 %}var(--red){% else %}var(--muted){% endif %};">
+        {% if _delta > 0 %}+{% endif %}{{ "%.1f"|format(_delta) }}<span style="font-size:11px;color:var(--hint);"> g</span>
+      </div>
+    </div>
+  </div>
+
+  {% if _n >= 2 %}
+  <div style="overflow-x:auto;">
+    <svg viewBox="0 0 {{ _vbw }} {{ _vbh }}" style="width:100%;height:auto;min-width:500px;"
+         xmlns="http://www.w3.org/2000/svg">
+      <!-- Axes -->
+      <line x1="{{ _padL }}" y1="{{ _padT }}"
+            x2="{{ _padL }}" y2="{{ _padT + _plotH }}"
+            stroke="var(--border2)" stroke-width="1"/>
+      <line x1="{{ _padL }}" y1="{{ _padT + _plotH }}"
+            x2="{{ _vbw - _padR }}" y2="{{ _padT + _plotH }}"
+            stroke="var(--border2)" stroke-width="1"/>
+
+      <!-- Lignes de grille horizontales (4 niveaux) -->
+      {% for i in range(5) %}
+      {% set y = _padT + (_plotH * i / 4) %}
+      {% set val = _wmax - (_span * i / 4) %}
+      <line x1="{{ _padL }}" y1="{{ y }}" x2="{{ _vbw - _padR }}" y2="{{ y }}"
+            stroke="var(--border)" stroke-width="1" stroke-dasharray="2,3" opacity="0.5"/>
+      <text x="{{ _padL - 6 }}" y="{{ y + 3 }}" text-anchor="end"
+            style="font-family:monospace;font-size:9px;fill:var(--hint);">
+        {{ "%.0f"|format(val) }}
+      </text>
+      {% endfor %}
+
+      <!-- Polyline reliant les points -->
+      <polyline fill="none" stroke="var(--teal)" stroke-width="2"
+                points="{% for w in weight_series %}{% set x = _padL + (_plotW * loop.index0 / (_n - 1)) %}{% set y = _padT + _plotH - (_plotH * (w.poids_g - _wmin) / _span) %}{{ "%.2f"|format(x) }},{{ "%.2f"|format(y) }} {% endfor %}"/>
+
+      <!-- Points -->
+      {% for w in weight_series %}
+      {% set x = _padL + (_plotW * loop.index0 / (_n - 1)) %}
+      {% set y = _padT + _plotH - (_plotH * (w.poids_g - _wmin) / _span) %}
+      <a href="#acq-row-{{ w.acq_id }}" onclick="highlightAcqRow({{ w.acq_id }})">
+        <circle cx="{{ "%.2f"|format(x) }}" cy="{{ "%.2f"|format(y) }}" r="4"
+                fill="var(--teal)" stroke="var(--bg2)" stroke-width="2"
+                style="cursor:pointer;">
+          <title>{{ w.date }}{% if w.heure %} {{ w.heure }}{% endif %} · {{ w.sequence }} · {{ "%.1f"|format(w.poids_g) }} g</title>
+        </circle>
+      </a>
+      {% endfor %}
+
+      <!-- Labels date (1er, milieu, dernier seulement pour éviter le chevauchement) -->
+      {% if _n >= 1 %}
+      <text x="{{ _padL }}" y="{{ _vbh - 10 }}" text-anchor="start"
+            style="font-family:monospace;font-size:9px;fill:var(--hint);">{{ weight_series[0].date }}</text>
+      {% if _n >= 3 %}
+      {% set _mid = (_n // 2) %}
+      <text x="{{ _padL + (_plotW / 2) }}" y="{{ _vbh - 10 }}" text-anchor="middle"
+            style="font-family:monospace;font-size:9px;fill:var(--hint);">{{ weight_series[_mid].date }}</text>
+      {% endif %}
+      {% if _n >= 2 %}
+      <text x="{{ _vbw - _padR }}" y="{{ _vbh - 10 }}" text-anchor="end"
+            style="font-family:monospace;font-size:9px;fill:var(--hint);">{{ weight_series[-1].date }}</text>
+      {% endif %}
+      {% endif %}
+    </svg>
+  </div>
+  {% else %}
+  <div class="mono" style="color:var(--hint);padding:14px 0;font-size:11px;">
+    Une seule mesure pour l'instant — le graphique s'affichera dès la 2ème acquisition pesée.
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
 <!-- Cahier de manips : poids / qualité / problèmes (éditables) -->
 {% if acqs %}
-<div class="card">
+<div class="card" id="cahier">
   <div class="card-title">
     Cahier de manips
     <span style="font-family:var(--font-mono);font-size:9px;color:var(--hint);
@@ -363,7 +743,7 @@ initNiivue();
     </thead>
     <tbody>
     {% for a in acqs %}
-      <tr>
+      <tr id="acq-row-{{ a.id }}" style="transition:background .4s;">
         <td class="mono">{{ a.sequence or "—" }}</td>
         <td class="mono">{{ a.date_acq or "—" }}</td>
         <td>
@@ -414,8 +794,115 @@ initNiivue();
 </div>
 {% endif %}
 
+<!-- ─── CR #18 : Cohérence noms NAS ↔ interface ─────────────────────── -->
+{% if nas_coherence_issues %}
+<div class="card" style="border-left:3px solid var(--amber);">
+  <div class="card-title" style="display:flex;align-items:center;gap:8px;">
+    <span style="color:var(--amber);">⚠</span>
+    Cohérence NAS
+    <span style="font-family:var(--font-mono);font-size:9px;color:var(--hint);
+                 margin-left:4px;letter-spacing:0;text-transform:none;">
+      certaines acquisitions ne respectent pas la convention de nommage
+    </span>
+  </div>
+  <div style="background:var(--amber-bg);border:1px solid rgba(180,83,9,0.2);
+              border-radius:6px;padding:10px 12px;margin-bottom:12px;
+              font-family:var(--font-mono);font-size:11px;color:var(--text);line-height:1.6;">
+    <div><strong>Convention attendue :</strong>
+      <code style="background:var(--bg);padding:1px 5px;border-radius:3px;">{{ nas_expected_root }}&lt;sequence&gt;/</code>
+    </div>
+    <div style="margin-top:4px;color:var(--hint);">
+      Les fichiers ci-dessous sont stockés ailleurs sur le NAS — possible import
+      historique ou renommage manuel. Pour réparer : déplacer les fichiers vers
+      le bon dossier et mettre à jour le chemin via l'admin.
+    </div>
+  </div>
+  <table class="data-table">
+    <thead>
+      <tr><th>Séquence</th><th>Chemin actuel sur NAS</th></tr>
+    </thead>
+    <tbody>
+    {% for iss in nas_coherence_issues %}
+      <tr>
+        <td class="mono">{{ iss.sequence or "—" }}</td>
+        <td class="mono" style="font-size:11px;color:var(--amber);">{{ iss.fichier }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<!-- ─── CR #15 : Acquisitions TEP — dose injectée + produit radioactif ── -->
+{% set tep_acqs = acqs | selectattr("is_tep") | list %}
+{% if tep_acqs %}
+<div class="card" id="tep">
+  <div class="card-title">
+    ☢ Acquisitions TEP
+    <span style="font-family:var(--font-mono);font-size:9px;color:var(--hint);
+                 margin-left:8px;letter-spacing:0;text-transform:none;">
+      dose injectée · produit radioactif — édition inline
+    </span>
+  </div>
+  <div style="overflow-x:auto;">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Séquence</th>
+        <th>Date</th>
+        <th style="width:140px;">Dose (MBq)</th>
+        <th style="width:220px;">Produit radioactif</th>
+        <th>Poids animal (g)</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for a in tep_acqs %}
+      <tr id="tep-row-{{ a.id }}" style="transition:background .4s;">
+        <td class="mono">
+          <a href="#acq-row-{{ a.id }}" onclick="highlightAcqRow({{ a.id }})"
+             style="color:var(--teal);text-decoration:none;">
+            {{ a.sequence or "—" }}
+          </a>
+        </td>
+        <td class="mono">{{ a.date_acq or "—" }}</td>
+        <td>
+          <input class="form-input metadata-input" type="number" step="0.1" min="0" max="1000"
+                 data-acq-id="{{ a.id }}" data-field="tep_dose_mbq"
+                 value="{{ a.tep_dose_mbq if a.tep_dose_mbq is not none else '' }}"
+                 placeholder="ex : 18.5"
+                 style="padding:4px 8px;font-size:11px;width:110px;">
+        </td>
+        <td>
+          <input class="form-input metadata-input" type="text" maxlength="80"
+                 data-acq-id="{{ a.id }}" data-field="tep_produit"
+                 value="{{ a.tep_produit or '' }}"
+                 placeholder="ex : 18F-FDG, 11C-Raclopride"
+                 style="padding:4px 8px;font-size:11px;">
+        </td>
+        <td class="mono" style="color:var(--hint);">
+          {% if a.poids_g %}{{ "%.1f"|format(a.poids_g) }} g{% else %}—{% endif %}
+          {% if a.poids_g and a.tep_dose_mbq %}
+            <span style="margin-left:8px;font-size:10px;color:var(--teal);"
+                  title="Dose normalisée par kg : MBq / (poids en kg)">
+              · {{ "%.1f"|format(a.tep_dose_mbq / (a.poids_g / 1000)) }} MBq/kg
+            </span>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <div class="mono" style="margin-top:8px;color:var(--hint);font-size:10px;">
+    Les acquisitions sont détectées comme TEP via mots-clés dans la séquence
+    (tep, pet, fdg, f-18, c-11, psma, suv). Pour ajouter une nouvelle acquisition
+    TEP, renseigne la séquence puis utilise les champs depuis la modal créneau.
+  </div>
+</div>
+{% endif %}
+
 <!-- Planning acquisitions -->
-<div class="card">
+<div class="card" id="planning">
   <div class="card-title">Planning acquisitions</div>
   {% if acqs %}
   <table class="data-table">
@@ -426,6 +913,7 @@ initNiivue();
         <th>Volumétrie</th>
         <th>DTI</th>
         <th>Modifier</th>
+        <th></th>
       </tr>
     </thead>
     <tbody>
@@ -538,6 +1026,22 @@ initNiivue();
           </select>
           {% endif %}
         </td>
+        <td>
+          {% if current_user.role in ['admin','operateur'] %}
+          <button type="button" onclick="deleteAcqRow({{ a.id }}, '{{ a.sequence|e }}', '{{ a.date_acq|e }}')"
+                  title="Supprimer ce créneau"
+                  style="background:none;border:1px solid var(--border2);
+                         border-radius:4px;padding:4px 8px;cursor:pointer;
+                         color:var(--hint);transition:all 0.15s;line-height:1;"
+                  onmouseover="this.style.color='var(--red)';this.style.borderColor='var(--red)';"
+                  onmouseout="this.style.color='var(--hint)';this.style.borderColor='var(--border2)';">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="3 6 5 6 21 6"/>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          </button>
+          {% endif %}
+        </td>
       </tr>
     {% endfor %}
     </tbody>
@@ -551,7 +1055,23 @@ initNiivue();
 {% set vol_results = acqs | selectattr("volumetrie") | selectattr("volumetrie.statut", "equalto", "ok") | list %}
 {% if vol_results %}
 <div class="card" id="vol-results-section">
-  <div class="card-title">Résultats volumétrie</div>
+  <!-- CR : carte repliable pour épurer l'interface -->
+  <button type="button" onclick="toggleVolResults(this)"
+          aria-expanded="false"
+          style="display:flex;align-items:center;justify-content:space-between;width:100%;
+                 background:transparent;border:none;padding:0;cursor:pointer;font-family:inherit;
+                 color:inherit;text-align:left;">
+    <div class="card-title" style="margin:0;padding:0;border:0;display:flex;align-items:center;gap:8px;">
+      <span>Résultats volumétrie</span>
+      <span style="font-family:var(--font-mono);font-size:10px;color:var(--hint);font-weight:400;
+                   text-transform:none;letter-spacing:0;">
+        ({{ vol_results | length }} acquisition(s) calculée(s))
+      </span>
+    </div>
+    <span class="vol-chevron" style="font-family:var(--font-mono);color:var(--hint);
+                                       transition:transform 0.2s;">▾</span>
+  </button>
+  <div class="vol-content" style="display:none;margin-top:14px;">
   {% for a in vol_results %}
   {% set v = a.volumetrie %}
   <div id="vol-results-{{ v.id }}" style="{% if not loop.first %}margin-top:20px;padding-top:20px;border-top:1px solid var(--border);{% endif %}">
@@ -613,7 +1133,20 @@ initNiivue();
     </table>
   </div>
   {% endfor %}
+  </div><!-- /.vol-content -->
 </div>
+<script>
+  // CR : replier/déplier la carte volumétrie
+  function toggleVolResults(btn) {
+    const card = btn.closest('#vol-results-section');
+    const content = card.querySelector('.vol-content');
+    const chevron = btn.querySelector('.vol-chevron');
+    const open = content.style.display !== 'none';
+    content.style.display = open ? 'none' : '';
+    chevron.style.transform = open ? '' : 'rotate(180deg)';
+    btn.setAttribute('aria-expanded', open ? 'false' : 'true');
+  }
+</script>
 {% endif %}
 
 <!-- Modal DTI -->
@@ -643,7 +1176,7 @@ initNiivue();
 </div>
 
 <!-- Commentaires & incidents (F8) -->
-<div class="card">
+<div class="card" id="commentaires">
   <div class="card-title">Commentaires & incidents</div>
 
   <!-- Formulaire ajout -->
@@ -692,7 +1225,7 @@ initNiivue();
 </div>
 
 <!-- Logs pipeline -->
-<div class="card">
+<div class="card" id="activite">
   <div class="card-title">Logs pipeline</div>
   {% if logs %}
   <div style="display:flex;flex-direction:column;">
@@ -789,6 +1322,19 @@ async function updateStatut(acqId, newStatut) {
   if (!res.ok) alert('Erreur lors de la mise à jour du statut.');
 }
 
+async function deleteAcqRow(acqId, sequence, date) {
+  if (!confirm(`Supprimer définitivement l'acquisition "${sequence}" du ${date} ?\n\nLes fichiers sur le NAS ne sont pas supprimés.`)) return;
+  const res = await fetch(`/api/acquisitions/${acqId}`, { method: 'DELETE' });
+  const j   = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (typeof showToast === 'function') showToast(j.error || 'Erreur', 'error');
+    else alert(j.error || 'Erreur lors de la suppression.');
+    return;
+  }
+  document.getElementById(`acq-row-${acqId}`)?.remove();
+  if (typeof showToast === 'function') showToast('Acquisition supprimée', 'success', 2000);
+}
+
 // ── Cahier de manips : sauvegarde inline (poids/qualité/problème) ────────────
 (function initMetadataSave() {
   const inputs = document.querySelectorAll('.metadata-input');
@@ -824,6 +1370,11 @@ async function updateStatut(acqId, newStatut) {
       }
       showStatus('✓ enregistré', 'var(--teal)');
       setTimeout(() => { if (status.textContent === '✓ enregistré') showStatus(''); }, 1500);
+      // CR #13 : si on a touché au poids, on rafraîchit pour mettre à jour
+      // le graphique d'évolution (rendu server-side).
+      if (field === 'poids_g') {
+        setTimeout(() => location.reload(), 700);
+      }
     } catch (e) {
       showStatus('✗ erreur réseau', 'var(--red)');
     }
@@ -840,7 +1391,33 @@ async function updateStatut(acqId, newStatut) {
 })();
 
 // ── Volumétrie ────────────────────────────────────────────────────────────────
-async function startVolumetrie(acqId) {
+// CR #16 : étape de validation humaine avant de lancer le calcul.
+// startVolumetrie(acqId) ouvre une modal de confirmation ;
+// runVolumetrie(acqId) effectue réellement l'appel API.
+function startVolumetrie(acqId) {
+  // Récupère les infos de l'acquisition depuis la rangée correspondante
+  const row = document.getElementById(`acq-row-${acqId}`);
+  const cells = row ? row.querySelectorAll('td') : [];
+  // [0]=Séquence, [1]=Date, [2]=Fichier NAS, [3]=Importé par
+  const seq    = cells[0]?.textContent.trim() || '?';
+  const date   = cells[1]?.textContent.trim() || '?';
+  const fichier = cells[2]?.getAttribute('title') || cells[2]?.textContent.trim() || '?';
+  // Remplit la modal
+  document.getElementById('volConfirmAcqId').value     = acqId;
+  document.getElementById('volConfirmSeq').textContent = seq;
+  document.getElementById('volConfirmDate').textContent = date;
+  document.getElementById('volConfirmFile').textContent = fichier;
+  document.getElementById('volConfirmModal').style.display = 'flex';
+}
+
+function closeVolConfirmModal() {
+  document.getElementById('volConfirmModal').style.display = 'none';
+}
+
+async function runVolumetrie() {
+  const acqId = document.getElementById('volConfirmAcqId').value;
+  closeVolConfirmModal();
+
   const btn  = document.getElementById(`vol-btn-${acqId}`);
   const cell = document.getElementById(`vol-cell-${acqId}`);
   if (btn) { btn.disabled = true; btn.textContent = '⟳ Calcul…'; }
@@ -970,6 +1547,73 @@ function closeDtiModal() {
 }
 document.getElementById('dti-modal').addEventListener('click', e => {
   if (e.target === document.getElementById('dti-modal')) closeDtiModal();
+});
+</script>
+
+<!-- ─── CR #16 : Modal de validation avant calcul volumétrie ────────── -->
+<div id="volConfirmModal"
+     style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);
+            z-index:50000;align-items:center;justify-content:center;padding:20px;">
+  <div style="background:var(--bg2);border-radius:12px;border:1px solid var(--border);
+              max-width:520px;width:100%;padding:24px;box-shadow:0 20px 60px rgba(0,0,0,0.25);">
+    <input type="hidden" id="volConfirmAcqId">
+    <div style="display:flex;align-items:flex-start;gap:14px;margin-bottom:16px;">
+      <span style="width:42px;height:42px;border-radius:10px;background:var(--amber-bg);
+                   color:var(--amber);display:inline-flex;align-items:center;justify-content:center;
+                   font-size:22px;flex-shrink:0;">⚠</span>
+      <div>
+        <div style="font-size:16px;font-weight:600;color:var(--text);">
+          Confirmer le calcul de volumétrie
+        </div>
+        <div style="font-family:var(--font-mono);font-size:11px;color:var(--hint);margin-top:4px;">
+          K-means 3 classes · prend quelques secondes à quelques minutes
+        </div>
+      </div>
+    </div>
+
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;
+                padding:12px 14px;margin-bottom:16px;font-size:12px;line-height:1.6;">
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 14px;">
+        <span style="color:var(--hint);font-family:var(--font-mono);font-size:11px;">Séquence</span>
+        <span class="mono" id="volConfirmSeq" style="color:var(--text);font-weight:500;">—</span>
+
+        <span style="color:var(--hint);font-family:var(--font-mono);font-size:11px;">Date</span>
+        <span class="mono" id="volConfirmDate" style="color:var(--text);">—</span>
+
+        <span style="color:var(--hint);font-family:var(--font-mono);font-size:11px;">Fichier NIfTI</span>
+        <span class="mono" id="volConfirmFile"
+              style="color:var(--text);word-break:break-all;font-size:11px;">—</span>
+      </div>
+    </div>
+
+    <div style="background:var(--teal-bg);border:1px solid rgba(234,124,28,0.28);
+                border-radius:6px;padding:10px 12px;margin-bottom:18px;
+                font-size:11px;color:var(--teal);line-height:1.5;">
+      Vérifie que l'acquisition est complète et que le fichier NIfTI est correct
+      avant de lancer. Le calcul ne peut pas être annulé une fois démarré.
+    </div>
+
+    <div style="display:flex;gap:10px;justify-content:flex-end;">
+      <button type="button" class="btn-ghost" onclick="closeVolConfirmModal()"
+              style="padding:8px 16px;font-size:12px;">Annuler</button>
+      <button type="button" class="btn-primary" onclick="runVolumetrie()"
+              style="padding:8px 18px;font-size:12px;">
+        ▶ Lancer le calcul
+      </button>
+    </div>
+  </div>
+</div>
+<script>
+// Click hors modal → ferme
+document.getElementById('volConfirmModal').addEventListener('click', e => {
+  if (e.target === document.getElementById('volConfirmModal')) closeVolConfirmModal();
+});
+// ESC → ferme
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' &&
+      document.getElementById('volConfirmModal').style.display === 'flex') {
+    closeVolConfirmModal();
+  }
 });
 </script>
 

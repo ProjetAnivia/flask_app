@@ -113,12 +113,14 @@
       --blue:     #1d4ed8;
       --blue-bg:  rgba(29,78,216,0.08);
 
-      --sidebar-bg:        #1a2035;
-      --sidebar-bg-hover:  #242c4a;
-      --sidebar-text:      rgba(255,255,255,0.6);
-      --sidebar-text-hover:rgba(255,255,255,0.98);
-      --sidebar-section:   rgba(255,255,255,0.35);
-      --main-bg:           #eef0f4;
+      /* Sidebar claire mais légèrement distincte du fond principal */
+      --sidebar-bg:        #e6e8ee;
+      --sidebar-bg-hover:  #d8dbe3;
+      --sidebar-text:      #3b4252;
+      --sidebar-text-hover:#0b0f17;
+      --sidebar-section:   #6b7484;
+      --sidebar-border:    #cdd1da;
+      --main-bg:           #f5f6f9;
 
       --btn-primary:       #ea7c1c;
       --btn-primary-dim:   #c8651a;
@@ -159,6 +161,7 @@
       --sidebar-text:      rgba(255,255,255,0.65);
       --sidebar-text-hover:rgba(255,255,255,0.98);
       --sidebar-section:   rgba(255,255,255,0.35);
+      --sidebar-border:    rgba(255,255,255,0.06);
       --main-bg:           #0a0e18;
 
       --btn-primary:       #f59e0b;
@@ -200,6 +203,7 @@
       --sidebar-text:      rgba(245,232,200,0.7);
       --sidebar-text-hover:rgba(245,232,200,0.99);
       --sidebar-section:   rgba(245,232,200,0.42);
+      --sidebar-border:    rgba(245,232,200,0.12);
       --main-bg:           #ece1c5;
 
       --btn-primary:       #b8651a;
@@ -372,14 +376,14 @@
     /* ── Sidebar ── */
     .sidebar {
       background: var(--sidebar-bg);
-      border-right: none;
+      border-right: 1px solid var(--sidebar-border, transparent);
       padding: 16px 0;
       display: flex;
       flex-direction: column;
       gap: 1px;
       overflow-y: auto;
       overflow-x: hidden;
-      transition: width 0.22s ease, background 0.25s ease;
+      transition: width 0.22s ease, background 0.25s ease, border-color 0.25s ease;
     }
     .nav-section {
       font-family: var(--font-mono);
@@ -394,11 +398,11 @@
     }
     .shell.collapsed .nav-section { opacity: 0; padding: 8px 0; pointer-events: none; }
 
-    /* ── Widget NAS dans la sidebar ──────────────────────────────────────── */
+    /* ── Widget NAS dans la sidebar (utilise les vars sidebar) ──────────── */
     .nav-nas-widget {
       margin-top: auto;
       padding: 12px 14px 14px;
-      border-top: 1px solid rgba(255,255,255,0.07);
+      border-top: 1px solid var(--sidebar-border, rgba(255,255,255,0.07));
     }
     .nav-nas-title {
       display: flex;
@@ -406,21 +410,23 @@
       justify-content: space-between;
       padding: 4px 0 8px;
       gap: 8px;
+      color: var(--sidebar-section);
     }
     .nav-nas-title #nav-nas-host {
       font-family: var(--font-mono);
       font-size: 8px;
-      color: rgba(255,255,255,0.4);
+      color: var(--sidebar-section);
       letter-spacing: 0;
       text-transform: none;
       overflow: hidden;
       text-overflow: ellipsis;
       max-width: 120px;
       white-space: nowrap;
+      opacity: 0.7;
     }
     .nav-nas-loading {
       font-family: var(--font-mono); font-size: 10px;
-      color: rgba(255,255,255,0.4); padding: 4px 0;
+      color: var(--sidebar-section); padding: 4px 0;
     }
     .nav-nas-body {
       display: flex; flex-direction: column; gap: 8px;
@@ -432,10 +438,11 @@
       display: flex; justify-content: space-between;
       font-family: var(--font-mono); font-size: 10px;
     }
-    .nav-nas-row-head .nav-nas-label { color: rgba(255,255,255,0.55); }
-    .nav-nas-row-head .nav-nas-value { color: rgba(255,255,255,0.92); font-weight: 500; }
+    .nav-nas-row-head .nav-nas-label { color: var(--sidebar-text); }
+    .nav-nas-row-head .nav-nas-value { color: var(--sidebar-text-hover); font-weight: 500; }
     .nav-nas-bar {
-      height: 4px; background: rgba(255,255,255,0.08);
+      height: 4px;
+      background: color-mix(in srgb, var(--sidebar-text) 12%, transparent);
       border-radius: 2px; overflow: hidden;
     }
     .nav-nas-bar > div {
@@ -444,16 +451,16 @@
     }
     .nav-nas-detail {
       font-family: var(--font-mono); font-size: 9px;
-      color: rgba(255,255,255,0.4); margin-top: 1px;
+      color: var(--sidebar-section); margin-top: 1px; opacity: 0.85;
     }
     .nav-nas-uptime {
       display: flex; justify-content: space-between;
       font-family: var(--font-mono); font-size: 10px;
       padding-top: 8px; margin-top: 2px;
-      border-top: 1px solid rgba(255,255,255,0.06);
+      border-top: 1px solid var(--sidebar-border, rgba(255,255,255,0.06));
     }
-    .nav-nas-uptime .nav-nas-label { color: rgba(255,255,255,0.55); }
-    .nav-nas-uptime .nav-nas-value { color: rgba(255,255,255,0.92); }
+    .nav-nas-uptime .nav-nas-label { color: var(--sidebar-text); }
+    .nav-nas-uptime .nav-nas-value { color: var(--sidebar-text-hover); }
     .nav-nas-note {
       font-family: var(--font-mono); font-size: 9px;
       color: rgba(255,255,255,0.35); font-style: italic;
@@ -920,6 +927,27 @@
         <div class="user-dropdown" style="min-width: 260px;">
           <div class="user-dropdown-header">{{ current_user.username }}</div>
           <a href="/profil" class="user-dropdown-item">Mon profil &amp; mot de passe</a>
+
+          <!-- CR #21 : sélecteur de langue (FR/EN) -->
+          <div class="user-dropdown-sep"></div>
+          <div style="padding:8px 14px;">
+            <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);
+                        text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">
+              Langue / Language
+            </div>
+            <div style="display:flex;gap:6px;">
+              {% for L in supported_langs %}
+              <button type="button" onclick="setAppLang('{{ L.code }}')"
+                      style="flex:1;background:{% if lang == L.code %}var(--teal-bg){% else %}var(--bg){% endif %};
+                             border:1px solid {% if lang == L.code %}var(--teal){% else %}var(--border){% endif %};
+                             color:{% if lang == L.code %}var(--teal){% else %}var(--text){% endif %};
+                             border-radius:6px;padding:5px 8px;font-size:11px;cursor:pointer;
+                             display:flex;align-items:center;gap:4px;justify-content:center;">
+                <span>{{ L.flag }}</span><span>{{ L.code | upper }}</span>
+              </button>
+              {% endfor %}
+            </div>
+          </div>
           <div class="user-dropdown-sep"></div>
 
           <div class="theme-switcher">
@@ -952,6 +980,8 @@
           <a href="#" onclick="event.preventDefault();startTour(true);" class="user-dropdown-item">🎓 Refaire le tour</a>
           {% if current_user.role == 'admin' %}
           <a href="/api/docs" target="_blank" class="user-dropdown-item">📖 Documentation API</a>
+          <a href="/implementation-nas" class="user-dropdown-item">🖥 Implémentation sur NAS</a>
+          <a href="/securite" class="user-dropdown-item">🛡 {{ "Sécurité" | t }}</a>
           {% endif %}
           <a href="/unlock?force=1" class="user-dropdown-item">🔒 Verrouiller</a>
           <a href="/logout" class="user-dropdown-item danger">Déconnexion</a>
@@ -997,44 +1027,49 @@
   </div>
 
   <nav class="sidebar" id="sidebar" data-tour="sidebar">
-    <div class="nav-section">Vue générale</div>
+    <!-- Réorganisation par axe mental : Opérationnel / Données / Système -->
+    <div class="nav-section">{{ "Opérationnel" | t }}</div>
     <a href="/" class="nav-item {% if request.path == '/' %}active{% endif %}">
-      <span class="nav-icon">#</span><span class="nav-label"> Dashboard : projets</span>
+      <span class="nav-icon">▦</span><span class="nav-label"> {{ "Tableau de bord" | t }}</span>
     </a>
-    <a href="/animaux" class="nav-item {% if request.path == '/animaux' %}active{% endif %}">
-      <span class="nav-icon">~</span><span class="nav-label"> Animaux</span>
+    {% if current_user.role in ['admin', 'operateur'] %}
+    <a href="/planning" class="nav-item {% if request.path == '/planning' or request.path == '/planification' or request.path == '/calendrier' %}active{% endif %}">
+      <span class="nav-icon">📅</span><span class="nav-label"> {{ "Planning" | t }}</span>
+    </a>
+    {% endif %}
+    <a href="/projets" class="nav-item {% if request.path.startswith('/projet') %}active{% endif %}">
+      <span class="nav-icon">▣</span><span class="nav-label"> {{ "Projets" | t }}</span>
+    </a>
+    <a href="/animaux" class="nav-item {% if request.path == '/animaux' or request.path.startswith('/animal/') %}active{% endif %}">
+      <span class="nav-icon">~</span><span class="nav-label"> {{ "Animaux" | t }}</span>
     </a>
     <a href="/archive" class="nav-item {% if request.path == '/archive' %}active{% endif %}">
-      <span class="nav-icon">⊡</span><span class="nav-label"> Archive</span>
+      <span class="nav-icon">⊡</span><span class="nav-label"> {{ "Archive" | t }}</span>
     </a>
 
     {% if current_user.role in ['admin', 'operateur'] %}
-    <a href="/planification" class="nav-item {% if request.path == '/planification' %}active{% endif %}">
-      <span class="nav-icon">→</span><span class="nav-label"> Planification</span>
-    </a>
-    <a href="/calendrier" class="nav-item {% if request.path == '/calendrier' %}active{% endif %}">
-      <span class="nav-icon">◫</span><span class="nav-label"> Planning acquisitions</span>
-    </a>
-    <a href="/nas-explorer" class="nav-item {% if request.path == '/nas-explorer' %}active{% endif %}">
-      <span class="nav-icon">⊞</span><span class="nav-label"> Explorateur NAS</span>
-    </a>
-
-    <div class="nav-section">Pipeline</div>
+    <div class="nav-section">{{ "Données" | t }}</div>
     <a href="/import" class="nav-item {% if request.path == '/import' %}active{% endif %}">
       <span class="nav-icon">↑</span><span class="nav-label"> Import</span>
     </a>
+    <a href="/nas-explorer" class="nav-item {% if request.path == '/nas-explorer' %}active{% endif %}">
+      <span class="nav-icon">⊞</span><span class="nav-label"> {{ "Explorateur NAS" | t }}</span>
+    </a>
     <a href="/logs" class="nav-item {% if request.path == '/logs' %}active{% endif %}">
-      <span class="nav-icon">!</span><span class="nav-label"> Logs</span>
+      <span class="nav-icon">!</span><span class="nav-label"> Logs pipeline</span>
     </a>
     {% endif %}
 
     {% if current_user.role == 'admin' %}
-    <div class="nav-section">Administration</div>
+    <div class="nav-section">{{ "Système" | t }}</div>
     <a href="/users" class="nav-item {% if request.path == '/users' %}active{% endif %}">
-      <span class="nav-icon">@</span><span class="nav-label"> Utilisateurs</span>
+      <span class="nav-icon">@</span><span class="nav-label"> {{ "Utilisateurs" | t }}</span>
+    </a>
+    <a href="/audit-log" class="nav-item {% if request.path == '/audit-log' %}active{% endif %}">
+      <span class="nav-icon">⏱</span><span class="nav-label"> {{ "Audit" | t }}</span>
     </a>
     <a href="/connexions" class="nav-item {% if request.path == '/connexions' %}active{% endif %}">
-      <span class="nav-icon">§</span><span class="nav-label"> Logs de connexion</span>
+      <span class="nav-icon">§</span><span class="nav-label"> {{ "Connexions" | t }}</span>
     </a>
 
     <!-- Utilisation du NAS — admin uniquement, en bas de la nav -->
@@ -1108,6 +1143,27 @@ if (!isMobile() && localStorage.getItem('sidebar-collapsed') === '1') {
 function toggleUserMenu(e) {
   e.stopPropagation();
   document.getElementById('userMenuWrap').classList.toggle('open');
+}
+
+// CR #21 : changement de langue (sync DB + session puis reload)
+async function setAppLang(code) {
+  try {
+    const r = await fetch('/api/lang', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': "{{ csrf_token }}",
+      },
+      body: JSON.stringify({ lang: code }),
+    });
+    if (!r.ok) {
+      if (typeof showToast === 'function') showToast('Erreur changement de langue', 'error');
+      return;
+    }
+    location.reload();
+  } catch (e) {
+    if (typeof showToast === 'function') showToast('Erreur réseau', 'error');
+  }
 }
 document.addEventListener('click', () => {
   document.getElementById('userMenuWrap')?.classList.remove('open');
@@ -1405,12 +1461,22 @@ async function refreshDashboardMetrics() {
   }
   function isOpen() { return !modal.classList.contains('hidden'); }
 
-  // Raccourci global ⌘+K / Ctrl+K
+  // Raccourci global ⌘+K / Ctrl+K (+ '/' pour ouvrir, comme GitHub)
   document.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
       e.preventDefault();
       isOpen() ? close() : open();
       return;
+    }
+    // Touche '/' ouvre la recherche (sauf si déjà dans un input/textarea/contenteditable)
+    if (e.key === '/' && !isOpen()) {
+      const t = e.target;
+      const isInput = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+      if (!isInput) {
+        e.preventDefault();
+        open();
+        return;
+      }
     }
     if (isOpen() && e.key === 'Escape') { e.preventDefault(); close(); return; }
     if (isOpen() && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {

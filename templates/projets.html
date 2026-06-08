@@ -14,16 +14,16 @@
   <div id="proj-success" style="display:none;" class="msg-box msg-success"></div>
   <div style="display:grid;grid-template-columns:1fr 1fr 130px 120px 120px;gap:12px;align-items:flex-end;">
     <div class="form-row">
-      <label class="form-label">Nom du projet</label>
-      <input class="form-input" type="text" id="proj-nom" placeholder="ex : cardiologie">
+      <label class="form-label">Acronyme du projet</label>
+      <input class="form-input" type="text" id="proj-nom" placeholder="ex : EPI">
     </div>
     <div class="form-row">
-      <label class="form-label">Responsable</label>
+      <label class="form-label">Chercheur</label>
       <input class="form-input" type="text" id="proj-resp" placeholder="ex : Nicolas">
     </div>
     <div class="form-row">
       <label class="form-label">Nb animaux prévus</label>
-      <input class="form-input" type="number" id="proj-nb" placeholder="20" min="0">
+      <input class="form-input" type="number" id="proj-nb" placeholder="(optionnel)" min="0">
     </div>
     <div class="form-row">
       <label class="form-label">Séq. / animal</label>
@@ -31,8 +31,16 @@
     </div>
     <button class="btn-primary" onclick="createProjet()" style="height:38px;">Créer →</button>
   </div>
+  <!-- CR #10 : nom long en deuxième ligne -->
+  <div style="margin-top:10px;">
+    <label class="form-label">Nom complet du projet (facultatif)</label>
+    <input class="form-input" type="text" id="proj-nom-long"
+           placeholder="ex : Épilepsie pharmaco-résistante chez la souris C57BL/6"
+           style="width:100%;">
+  </div>
   <div class="mono" style="margin-top:10px;color:var(--hint);font-size:10px;">
-    Le nom sera converti en minuscules sans espaces · Séq./animal = nombre de passages IRM prévus (défaut 3)
+    L'acronyme sera converti en minuscules sans espaces (ex: « EPI-2 » → « epi-2 »).
+    Le nom complet apparaîtra dans les fiches projet et la légende du planning.
   </div>
 </div>
 
@@ -40,7 +48,7 @@
 <div class="card" style="padding:14px 20px;">
   <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
     <input class="form-input" type="text" id="search-proj"
-           placeholder="Rechercher par nom ou responsable…"
+           placeholder="Rechercher par nom ou chercheur…"
            oninput="applyFilters()"
            style="flex:1;min-width:200px;max-width:340px;">
     <select class="form-select" id="filter-resp" onchange="applyFilters()" style="width:190px;">
@@ -65,7 +73,7 @@
     <thead>
       <tr>
         <th>Projet</th>
-        <th>Responsable</th>
+        <th>Chercheur</th>
         <th>Animaux</th>
         <th>Séq./animal</th>
         <th>Acquisitions</th>
@@ -237,19 +245,20 @@ async function saveDate(inp) {
 }
 
 async function createProjet() {
-  const nom    = document.getElementById('proj-nom').value.trim();
-  const resp   = document.getElementById('proj-resp').value.trim();
-  const nb     = parseInt(document.getElementById('proj-nb').value) || 0;
-  const seq    = parseInt(document.getElementById('proj-seq').value) || 3;
-  const errDiv = document.getElementById('proj-error');
-  const okDiv  = document.getElementById('proj-success');
+  const nom      = document.getElementById('proj-nom').value.trim();
+  const nom_long = document.getElementById('proj-nom-long').value.trim();
+  const resp     = document.getElementById('proj-resp').value.trim();
+  const nb       = parseInt(document.getElementById('proj-nb').value) || 0;
+  const seq      = parseInt(document.getElementById('proj-seq').value) || 3;
+  const errDiv   = document.getElementById('proj-error');
+  const okDiv    = document.getElementById('proj-success');
   errDiv.style.display = 'none'; okDiv.style.display = 'none';
 
-  if (!nom) { errDiv.textContent = 'Nom du projet requis.'; errDiv.style.display = 'block'; return; }
+  if (!nom) { errDiv.textContent = 'Acronyme du projet requis.'; errDiv.style.display = 'block'; return; }
 
   const res  = await fetch('/api/projets', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({nom, resp, nb_animaux: nb, seq_par_animal: seq})
+    body: JSON.stringify({nom, nom_long, resp, nb_animaux: nb, seq_par_animal: seq})
   });
   const data = await res.json();
 
@@ -259,7 +268,7 @@ async function createProjet() {
     const seqReal = data.seq_par_animal || seq;
     okDiv.textContent = `Projet « ${data.nom} » créé (${seqReal} séq./animal).`;
     okDiv.style.display = 'block';
-    ['proj-nom','proj-resp','proj-nb'].forEach(id => document.getElementById(id).value = '');
+    ['proj-nom','proj-nom-long','proj-resp','proj-nb'].forEach(id => document.getElementById(id).value = '');
     document.getElementById('proj-seq').value = '3';
 
     // Supprimer la ligne "aucun projet" si présente

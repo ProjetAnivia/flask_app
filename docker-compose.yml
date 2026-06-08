@@ -22,6 +22,12 @@ services:
     environment:
       - NAS_ROOT=/nas/structured
       - DB_DIR=/data
+      # ── Synchronisation Google Calendar ─────────────────────────────
+      # Le fichier JSON du service account est monté en lecture seule
+      # depuis ./secrets (voir volumes ci-dessous). On peut surcharger
+      # GOOGLE_CALENDAR_ID dans le .env.
+      - GOOGLE_CALENDAR_CREDENTIALS_PATH=/secrets/google_calendar_sa.json
+      - GOOGLE_CALENDAR_ENABLED=true
 
     volumes:
       # ── LOCAL MAC ──────────────────────────────
@@ -30,6 +36,9 @@ services:
 
       # Base SQLite persistée en local
       - ./db:/data
+
+      # Credentials Google Calendar (lecture seule, jamais commités)
+      - ./secrets:/secrets:ro
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/login"]

@@ -275,13 +275,42 @@ async function browse(path) {
 function browseRoot() { browse(''); }
 
 // ── Aperçu fichier ────────────────────────────────────────────────────────────
+// CR : essaie d'extraire <projet>/<AAAAMMJJ_AnimalID>/<sequence>/<file>
+// puis propose un lien vers la fiche animal correspondante
+function parseAnimalFromPath(path) {
+  if (!path) return null;
+  const parts = path.replace(/^\/+/, '').split('/');
+  if (parts.length < 2) return null;
+  const projet = parts[0];
+  const folder = parts[1];
+  // Folder format expected: AAAAMMJJ_AnimalID or AnimalID_AAAAMMJJ
+  const m = folder.match(/^(\d{8})_(.+)$/) || folder.match(/^(.+)_(\d{8})$/);
+  if (!m) return { projet, animal_id: folder };
+  const animal_id = /^\d{8}$/.test(m[1]) ? m[2] : m[1];
+  return { projet, animal_id };
+}
+
 function showFile(el) {
   const panel = document.getElementById('file-preview');
   document.getElementById('preview-title').textContent = el.dataset.name;
+  const path = el.dataset.path || '';
+  const ctx  = parseAnimalFromPath(path);
+  let animalLink = '';
+  if (ctx && ctx.projet && ctx.animal_id) {
+    animalLink = `
+      <a href="/animal/${encodeURIComponent(ctx.projet)}/${encodeURIComponent(ctx.animal_id)}"
+         style="display:inline-flex;align-items:center;gap:6px;font-family:var(--font-mono);
+                font-size:11px;color:var(--teal);text-decoration:none;background:var(--teal-bg);
+                border:1px solid var(--teal);padding:5px 12px;border-radius:6px;margin-top:8px;">
+        → Voir la fiche animal ${escHtml(ctx.animal_id)} (projet ${escHtml(ctx.projet)})
+      </a>
+    `;
+  }
   document.getElementById('preview-meta').innerHTML = `
-    <span>Chemin : <code style="font-family:var(--font-mono);font-size:10px;">${escHtml(el.dataset.path)}</code></span>
+    <span>Chemin : <code style="font-family:var(--font-mono);font-size:10px;">${escHtml(path)}</code></span>
     <span>Taille : <strong>${fmtSize(el.dataset.size)}</strong></span>
     <span>Modifié : ${escHtml(el.dataset.modified) || '—'}</span>
+    ${animalLink ? '<br>' + animalLink : ''}
   `;
   panel.style.display = 'block';
   panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -358,31 +387,7 @@ async function addAlias() {
 })();
 </script>
 
-<!-- Aliases panel -->
-<div class="card">
-  <div class="card-title">Mes alias NAS — arborescence personnalisée</div>
-  <p style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.6;">
-    Renommez les dossiers via <strong>✎ Alias</strong> dans l'arborescence, ou ajoutez manuellement ci-dessous.
-    Ces alias ne sont visibles que par vous.
-  </p>
-  <div id="aliases-list" style="margin-bottom:14px;">
-    <div style="font-family:var(--font-mono);font-size:12px;color:var(--hint);">Chargement…</div>
-  </div>
-  <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
-    <div class="form-row" style="flex:2;min-width:200px;">
-      <label class="form-label">Chemin réel (ex : tumorigenese/20250301_B3)</label>
-      <input class="form-input" type="text" id="new-alias-path" placeholder="projet/dossier">
-    </div>
-    <div class="form-row" style="flex:1;min-width:160px;">
-      <label class="form-label">Mon nom personnalisé</label>
-      <input class="form-input" type="text" id="new-alias-name" placeholder="Mon nom">
-    </div>
-    <button class="btn-primary" onclick="addAlias()" style="white-space:nowrap;">Ajouter →</button>
-  </div>
-  <div id="alias-error" style="display:none;margin-top:8px;font-family:var(--font-mono);font-size:11px;
-       color:var(--red);background:var(--red-bg);border:1px solid rgba(220,38,38,0.2);
-       border-radius:3px;padding:8px 12px;"></div>
-</div>
+<!-- Aliases panel retiré sur demande UX (CR) -->
 
 <style>
   .alias-row {

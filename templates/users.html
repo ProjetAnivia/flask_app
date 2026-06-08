@@ -368,13 +368,86 @@ async function addUser() {
 }
 
 async function deleteUser(userId, username) {
-  if (!confirm(`Supprimer le compte « ${username} » ?`)) return;
+  // CR : double confirmation pour suppression de compte
+  if (!confirm(`Êtes-vous sûr de vouloir supprimer le compte « ${username} » ?\n\nLe compte sera désactivé mais récupérable depuis la corbeille.`)) return;
+  if (!confirm(`Confirmation finale : supprimer « ${username} » ?\n\nClic sur "OK" pour confirmer la mise en corbeille.`)) return;
   const res  = await fetch(`/api/users/${userId}`, {method: 'DELETE'});
   const data = await res.json();
   if (!res.ok) { alert(data.error || 'Erreur.'); return; }
-  document.getElementById(`row-${userId}`)?.remove();
-  document.getElementById(`reset-row-${userId}`)?.remove();
+  showToast(`Compte « ${username} » mis en corbeille (récupérable)`, 'success', 4000);
+  setTimeout(() => location.reload(), 1200);
+}
+
+// CR : restauration d'un compte soft-deleted
+async function restoreUser(userId, username) {
+  if (!confirm(`Restaurer le compte « ${username} » avec tous ses paramètres ?`)) return;
+  const res = await fetch(`/api/users/${userId}/restore`, {method: 'POST'});
+  const data = await res.json();
+  if (!res.ok) { alert(data.error || 'Erreur.'); return; }
+  showToast(`Compte « ${username} » restauré`, 'success', 3000);
+  setTimeout(() => location.reload(), 800);
+}
+
+// CR : suppression définitive depuis la corbeille
+async function hardDeleteUser(userId, username) {
+  if (!confirm(`Supprimer DÉFINITIVEMENT « ${username} » ?\n\nCette action est IRRÉVERSIBLE.\nLe compte ne pourra plus être restauré.`)) return;
+  if (!confirm(`Dernière chance. Supprimer définitivement « ${username} » ?`)) return;
+  const res = await fetch(`/api/users/${userId}/hard-delete`, {method: 'DELETE'});
+  const data = await res.json();
+  if (!res.ok) { alert(data.error || 'Erreur.'); return; }
+  showToast(`« ${username} » supprimé définitivement`, 'success', 3000);
+  setTimeout(() => location.reload(), 800);
 }
 </script>
+
+<!-- ─── Corbeille : comptes supprimés récupérables (CR) ──────────────── -->
+{% if users_deleted %}
+<div class="card" style="border-left:3px solid var(--amber);">
+  <div class="card-title" style="display:flex;align-items:center;gap:8px;">
+    🗑 Corbeille — comptes supprimés
+    <span style="font-family:var(--font-mono);font-size:10px;color:var(--hint);
+                 font-weight:400;text-transform:none;letter-spacing:0;">
+      {{ users_deleted | length }} compte(s) récupérable(s)
+    </span>
+  </div>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Identifiant</th>
+        <th>Rôle</th>
+        <th>Email</th>
+        <th>Supprimé le</th>
+        <th>Par</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for u in users_deleted %}
+      <tr>
+        <td><strong style="color:var(--muted);">{{ u.username }}</strong></td>
+        <td><span class="pill pill-wait">{{ u.role }}</span></td>
+        <td class="mono" style="color:var(--hint);">{{ u.email or "—" }}</td>
+        <td class="mono" style="font-size:11px;">{{ (u.deleted_at or "")[:16] }}</td>
+        <td class="mono" style="color:var(--hint);">{{ u.deleted_by or "—" }}</td>
+        <td>
+          <button onclick="restoreUser({{ u.id }}, '{{ u.username }}')"
+                  style="background:var(--teal);color:#fff;border:none;border-radius:4px;
+                         padding:5px 12px;cursor:pointer;font-family:var(--font-mono);
+                         font-size:11px;margin-right:6px;">
+            ↺ Restaurer
+          </button>
+          <button onclick="hardDeleteUser({{ u.id }}, '{{ u.username }}')"
+                  style="background:transparent;color:var(--red);border:1px solid var(--red);
+                         border-radius:4px;padding:5px 12px;cursor:pointer;font-family:var(--font-mono);
+                         font-size:11px;">
+            ✕ Suppr. définitive
+          </button>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
 
 {% endblock %}

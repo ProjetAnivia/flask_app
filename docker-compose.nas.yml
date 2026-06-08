@@ -1,12 +1,17 @@
 # ─────────────────────────────────────────────────────────────────────────────
 #  docker-compose.nas.yml — IRM FAIR
-#  Version NAS SYNOLOGY — à utiliser pour le déploiement en production
+#  Version NAS SYNOLOGY DSM 7.1+ — déploiement en production
 #
 #  Usage :
-#    docker compose -f docker-compose.nas.yml up -d --build
+#    cd /volume1/IRM_Dashboard
+#    sudo docker compose -f docker-compose.nas.yml up -d --build
 #
-#  Avant de lancer, créer les dossiers sur le NAS (une seule fois) :
-#    mkdir -p /volume1/IRM_preclinique/{structured,raw,db,logs}
+#  Pré-requis sur le NAS (cf page /implementation-nas pour les détails) :
+#    1. Container Manager installé (Package Center → Container Manager)
+#    2. SSH activé (Control Panel → Terminal & SNMP)
+#    3. Dossier dédié créé : /volume1/IRM_Dashboard/
+#       avec sous-dossiers : structured/  raw/  db/  logs/  secrets/
+#    4. Le service account Google Calendar JSON placé dans secrets/google_calendar_sa.json
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
@@ -47,12 +52,21 @@ services:
       # ── URL publique de l'app (pour les liens dans les emails)
       - APP_URL=http://IP-DU-NAS:5001
 
+      # ── Google Calendar (sync bidirectionnelle)
+      - GOOGLE_CALENDAR_ENABLED=true
+      - GOOGLE_CALENDAR_CREDENTIALS_PATH=/secrets/google_calendar_sa.json
+      - GOOGLE_CALENDAR_ID=
+      - GOOGLE_CALENDAR_TZ=Europe/Paris
+
     volumes:
       # Données IRM structurées (NIfTI, DICOM)
-      - /volume1/IRM_preclinique:/nas
+      - /volume1/IRM_Dashboard:/nas
 
       # Base SQLite persistée (ne JAMAIS supprimer ce dossier)
-      - /volume1/IRM_preclinique/db:/data
+      - /volume1/IRM_Dashboard/db:/data
+
+      # Secrets (Google Calendar service account, etc.) — perms 600 recommandées
+      - /volume1/IRM_Dashboard/secrets:/secrets:ro
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/login"]

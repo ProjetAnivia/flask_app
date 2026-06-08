@@ -24,6 +24,9 @@ env/
 .env
 backend/.env
 secrets.env
+secrets/
+*-service-account*.json
+google_calendar_sa.json
 
 # SQLite à la racine (doublon local) — la DB de prod est dans db/irm_fair.db
 /irm_fair.db

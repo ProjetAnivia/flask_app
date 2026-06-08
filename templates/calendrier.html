@@ -41,21 +41,106 @@
       </select>
     </form>
 
-    <!-- Légende couleurs -->
-    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+    <!-- Légende couleurs — filtrée au mois courant (CR #9) avec acronyme + nom long (CR #10) -->
+    <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;">
+      {% if not projets %}
+        <span style="font-family:var(--font-mono);font-size:10px;color:var(--hint);">
+          Aucun projet actif ce mois
+        </span>
+      {% endif %}
       {% for p in projets %}
-      <span style="font-family:var(--font-mono);font-size:10px;display:flex;align-items:center;gap:4px;">
+      <span style="font-family:var(--font-mono);font-size:10px;display:flex;align-items:center;gap:5px;"
+            title="{{ nom_long_map.get(p) or (p | replace('_',' ') | title) }}{% if resp_map.get(p) %} · resp. {{ resp_map[p] }}{% endif %}">
         <span style="width:8px;height:8px;border-radius:50%;display:inline-block;
                      background:{% if color_map[p] == 'teal' %}var(--teal)
                                 {% elif color_map[p] == 'blue' %}var(--blue)
                                 {% elif color_map[p] == 'amber' %}var(--amber)
                                 {% else %}var(--red){% endif %};"></span>
-        {{ p | replace("_"," ") | title }}
+        <strong style="color:var(--text);">{{ p | upper }}</strong>
+        {% if nom_long_map.get(p) %}
+          <span style="color:var(--hint);">— {{ nom_long_map[p] }}</span>
+        {% endif %}
       </span>
       {% endfor %}
     </div>
   </div>
 </div>
+
+<!-- ─── Stats d'occupation du mois (CR #11) ──────────────────────────── -->
+{% if stats_occupation.total > 0 %}
+<div class="card" style="padding:14px 20px;">
+  <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px;">
+    <span style="font-family:var(--font-mono);font-size:10px;color:var(--hint);
+                 text-transform:uppercase;letter-spacing:0.08em;">
+      Occupation — {{ month_name }} {{ year }}
+    </span>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">
+    <!-- Total -->
+    <div>
+      <div style="font-size:22px;font-weight:600;color:var(--text);line-height:1;">
+        {{ stats_occupation.total }}
+      </div>
+      <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-top:3px;">
+        créneau{{ 'x' if stats_occupation.total > 1 else '' }}
+        sur {{ stats_occupation.jours_occupes }} jour{{ 's' if stats_occupation.jours_occupes > 1 else '' }}
+      </div>
+    </div>
+
+    <!-- Répartition matin/après-midi/journée -->
+    <div>
+      <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-bottom:4px;">
+        Répartition demi-journée
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;">
+        {% set p = stats_occupation.par_periode %}
+        {% if p.matin %}<span title="Matin">🌅 {{ p.matin }}</span>{% endif %}
+        {% if p.apres_midi %}<span title="Après-midi">🌇 {{ p.apres_midi }}</span>{% endif %}
+        {% if p.journee %}<span title="Journée">🌞 {{ p.journee }}</span>{% endif %}
+        {% if p.custom_ou_none %}
+          <span title="Personnalisé / non défini"
+                style="color:var(--hint);font-family:var(--font-mono);font-size:10px;">
+            ⏱ {{ p.custom_ou_none }}
+          </span>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Top scanners -->
+    <div>
+      <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-bottom:4px;">
+        Par appareil IRM
+      </div>
+      <div style="display:flex;flex-direction:column;gap:3px;">
+        {% for sname, info in stats_occupation.par_scanner.items() %}
+        <div style="display:flex;align-items:center;gap:6px;font-size:11px;">
+          <span style="width:8px;height:8px;border-radius:50%;background:{{ info.couleur }};"></span>
+          <span style="color:var(--text);">{{ sname }}</span>
+          <span style="margin-left:auto;font-family:var(--font-mono);color:var(--hint);">
+            {{ info.count }}
+          </span>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- Jour le plus chargé -->
+    {% if stats_occupation.jour_max %}
+    <div>
+      <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-bottom:4px;">
+        Journée la plus chargée
+      </div>
+      <div style="font-size:13px;color:var(--text);">
+        <strong>{{ stats_occupation.jour_max.date }}</strong>
+        <span style="font-family:var(--font-mono);font-size:11px;color:var(--teal);margin-left:6px;">
+          {{ stats_occupation.jour_max.count }} créneaux
+        </span>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
 
 <!-- ─── Mes créneaux à venir (remonté en haut pour visibilité) ─────────── -->
 <div id="mes-creneaux-card"
@@ -154,11 +239,22 @@
         const proj   = escHtml(c.projet || '');
         const aut    = escHtml(c.importé_par || '—');
         const dur    = c.duree_min ? ` · ${c.duree_min} min` : '';
+        // CR #14 : chercheur affiché si dispo
+        const resp   = c.projet_resp
+          ? `<span style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-left:6px;">· 👤 ${escHtml(c.projet_resp)}</span>`
+          : '';
+        const scannerBadge = c.scanner_nom
+          ? `<span style="display:inline-flex;align-items:center;gap:4px;
+                          font-family:var(--font-mono);font-size:10px;color:${c.scanner_couleur};
+                          border:1px solid ${c.scanner_couleur};padding:1px 6px;border-radius:4px;
+                          margin-left:6px;">⬤ ${escHtml(c.scanner_nom)}</span>`
+          : '';
+        const barColor = c.scanner_couleur || 'var(--teal)';
         return `
-        <a href="/animal/${encodeURIComponent(c.projet)}/${encodeURIComponent(c.animal_id)}"
-           class="creneau-item"
+        <div class="creneau-item"
            style="display:flex;align-items:center;gap:12px;padding:8px 12px;border-radius:8px;
-                  text-decoration:none;color:inherit;border:1px solid transparent;
+                  color:inherit;border:1px solid transparent;
+                  border-left:4px solid ${barColor};
                   margin-bottom:4px;transition:background 0.12s,border 0.12s;">
           <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
                       flex-shrink:0;background:var(--teal-bg);color:var(--teal);
@@ -168,18 +264,33 @@
             <div style="font-family:var(--font-mono);font-size:12px;font-weight:600;
                         line-height:1.1;margin-top:2px;">${heure}</div>
           </div>
-          <div style="flex:1;min-width:0;">
+          <a href="/animal/${encodeURIComponent(c.projet)}/${encodeURIComponent(c.animal_id)}"
+             style="flex:1;min-width:0;text-decoration:none;color:inherit;">
             <div style="font-size:13px;font-weight:500;color:var(--text);
                         overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-              ${animal}<span style="color:var(--hint);font-weight:400;"> · ${seq}</span>
+              ${animal}<span style="color:var(--hint);font-weight:400;"> · ${seq}</span>${scannerBadge}
             </div>
             <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-top:2px;
                         overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-              ${proj} · ${aut}${dur}
+              ${proj} · ${aut}${dur}${resp}
             </div>
+          </a>
+          <div style="flex-shrink:0;display:flex;gap:6px;align-items:center;">
+            ${statutPill(c.statut)}
+            <button type="button" onclick="deleteCreneau(${c.id}, '${animal}', '${seq}')"
+                    title="Supprimer ce créneau"
+                    style="background:none;border:1px solid var(--border2);
+                           border-radius:4px;padding:4px 6px;cursor:pointer;
+                           color:var(--hint);transition:all 0.15s;line-height:1;"
+                    onmouseover="this.style.color='var(--red)';this.style.borderColor='var(--red)';"
+                    onmouseout="this.style.color='var(--hint)';this.style.borderColor='var(--border2)';">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                   stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="3 6 5 6 21 6"/>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            </button>
           </div>
-          <div style="flex-shrink:0;">${statutPill(c.statut)}</div>
-        </a>`;
+        </div>`;
       }).join('');
     })
     .catch(err => {
@@ -187,11 +298,193 @@
       $body.innerHTML = `<div style="padding:14px;color:var(--red);font-family:var(--font-mono);font-size:12px;">Erreur de chargement</div>`;
     });
 })();
+
+// Suppression d'un créneau (dispo aussi depuis planification)
+async function deleteCreneau(acqId, animalLabel, seqLabel) {
+  if (!confirm(`Supprimer le créneau ${animalLabel} · ${seqLabel} ?`)) return;
+  try {
+    const res = await fetch(`/api/acquisitions/${acqId}`, { method: 'DELETE' });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      showToast(j.error || 'Erreur lors de la suppression', 'error');
+      return;
+    }
+    showToast('Créneau supprimé', 'success', 2000);
+    setTimeout(() => location.reload(), 600);
+  } catch (e) {
+    showToast('Erreur réseau', 'error');
+  }
+}
 </script>
 
-<!-- Grille calendrier -->
+<!-- ─── Google Calendar embed (bidirectionnel) ─────────────────────────── -->
+{% if gcal_enabled %}
+<div class="card" style="padding:0;overflow:hidden;">
+  <div style="display:flex;align-items:center;justify-content:space-between;
+              padding:10px 16px;border-bottom:1px solid var(--border);
+              background:var(--bg2);flex-wrap:wrap;gap:8px;">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span style="width:24px;height:24px;border-radius:6px;background:var(--teal-bg);
+                   color:var(--teal);display:inline-flex;align-items:center;justify-content:center;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="4" width="18" height="18" rx="2"/>
+          <line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/>
+          <line x1="3" y1="10" x2="21" y2="10"/></svg>
+      </span>
+      <div>
+        <div style="font-size:13px;font-weight:600;color:var(--text);">Google Agenda — IRM Dashboard</div>
+        <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-top:2px;">
+          Synchronisé bidirectionnellement · accès mobile via l'app Google Agenda
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center;">
+      <!-- Switcher de vue -->
+      <div id="gcal-view-switcher" style="display:flex;gap:0;border:1px solid var(--border);border-radius:6px;overflow:hidden;">
+        <button onclick="setGcalView('WEEK')"  data-view="WEEK"  class="gcal-view-btn">Semaine</button>
+        <button onclick="setGcalView('MONTH')" data-view="MONTH" class="gcal-view-btn">Mois</button>
+        <button onclick="setGcalView('AGENDA')" data-view="AGENDA" class="gcal-view-btn">Agenda</button>
+      </div>
+      {% if current_user.role == 'admin' %}
+      <button onclick="resyncGcal()" title="Re-pousser tous les créneaux vers Google Calendar"
+              style="background:var(--bg);border:1px solid var(--border);border-radius:6px;
+                     padding:5px 10px;font-family:var(--font-mono);font-size:11px;
+                     color:var(--hint);cursor:pointer;">↻ resync</button>
+      {% endif %}
+      <a href="https://calendar.google.com/calendar/u/0/r?cid={{ gcal_calendar_id }}"
+         target="_blank" rel="noopener"
+         style="background:var(--bg);border:1px solid var(--border);border-radius:6px;
+                padding:5px 10px;font-family:var(--font-mono);font-size:11px;
+                color:var(--hint);text-decoration:none;">↗ ouvrir dans Google</a>
+    </div>
+  </div>
+  <div style="position:relative;">
+    <iframe id="gcal-iframe"
+            src=""
+            style="border:0;width:100%;height:700px;display:block;background:var(--bg);"
+            frameborder="0" scrolling="no"
+            onload="onGcalLoaded()"></iframe>
+
+    <!-- Message d'aide affiché si iframe reste blanche (droits manquants) -->
+    <div id="gcal-help" style="display:none;position:absolute;top:0;left:0;right:0;bottom:0;
+                                background:var(--bg2);padding:32px;
+                                display:flex;align-items:center;justify-content:center;">
+      <div style="max-width:520px;text-align:center;">
+        <div style="font-size:42px;margin-bottom:12px;">📅</div>
+        <div style="font-size:16px;font-weight:600;color:var(--text);margin-bottom:8px;">
+          L'agenda Google ne s'affiche pas ?
+        </div>
+        <div style="font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:16px;">
+          C'est probablement un problème de <b>droits d'accès</b>. Le calendrier
+          partagé doit soit être <b>public en lecture</b>, soit être partagé avec
+          le compte Google auquel tu es connecté dans ce navigateur.
+        </div>
+        <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;
+                    padding:14px;text-align:left;font-size:12px;color:var(--text);
+                    margin-bottom:14px;">
+          <div style="font-weight:600;margin-bottom:6px;">Solution rapide (recommandée) :</div>
+          <ol style="margin:0;padding-left:18px;line-height:1.7;">
+            <li>Ouvre <a href="https://calendar.google.com" target="_blank" style="color:var(--teal);">calendar.google.com</a> sur le compte qui détient le calendrier</li>
+            <li>Côté gauche → survole "IRM Dashboard" → ⋮ → <b>Paramètres et partage</b></li>
+            <li>Coche <b>"Rendre disponible publiquement"</b> → "Afficher tous les détails"</li>
+            <li>Recharge cette page</li>
+          </ol>
+        </div>
+        <a href="https://calendar.google.com/calendar/u/0/r?cid={{ gcal_calendar_id }}"
+           target="_blank" rel="noopener"
+           style="display:inline-block;background:var(--teal);color:white;
+                  text-decoration:none;padding:8px 16px;border-radius:6px;
+                  font-family:var(--font-mono);font-size:12px;">
+          Ouvrir directement dans Google Calendar →
+        </a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+  .gcal-view-btn {
+    background: var(--bg); border: none; padding: 5px 12px;
+    font-family: var(--font-mono); font-size: 11px;
+    color: var(--hint); cursor: pointer; transition: all .12s;
+    border-right: 1px solid var(--border);
+  }
+  .gcal-view-btn:last-child { border-right: none; }
+  .gcal-view-btn:hover { background: var(--bg3); color: var(--text); }
+  .gcal-view-btn.active {
+    background: var(--teal); color: white;
+  }
+</style>
+
+<script>
+  const GCAL_ID = {{ gcal_calendar_id | tojson }};
+  const GCAL_TZ = {{ gcal_tz | tojson }};
+
+  // Affiche le message d'aide si l'iframe n'a pas chargé après 5s
+  // (Google renvoie une page d'erreur silencieuse si pas de droits)
+  let _gcalLoadOK = false;
+  function onGcalLoaded() {
+    _gcalLoadOK = true;
+    const help = document.getElementById('gcal-help');
+    if (help) help.style.display = 'none';
+  }
+  setTimeout(() => {
+    if (!_gcalLoadOK) {
+      const help = document.getElementById('gcal-help');
+      if (help) help.style.display = 'flex';
+    }
+  }, 5000);
+  function setGcalView(mode) {
+    const iframe = document.getElementById('gcal-iframe');
+    const params = new URLSearchParams({
+      src:          GCAL_ID,
+      ctz:          GCAL_TZ,
+      mode:         mode,
+      wkst:         '2',         // semaine commence lundi
+      showTitle:    '0',
+      showNav:      '1',
+      showDate:     '1',
+      showPrint:    '0',
+      showTabs:     '0',
+      showCalendars:'0',
+      showTz:       '0',
+    });
+    iframe.src = 'https://calendar.google.com/calendar/embed?' + params.toString();
+    // Marque le bouton actif
+    document.querySelectorAll('.gcal-view-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.view === mode);
+    });
+    try { localStorage.setItem('gcal_view', mode); } catch(e) {}
+  }
+  // Restaure la dernière vue choisie, défaut = WEEK
+  let _savedView = 'WEEK';
+  try { _savedView = localStorage.getItem('gcal_view') || 'WEEK'; } catch(e) {}
+  setGcalView(_savedView);
+
+  async function resyncGcal() {
+    if (!confirm('Re-pousser tous les créneaux planifiés vers Google Calendar ?')) return;
+    try {
+      const r = await fetch('/api/google-calendar/resync', { method: 'POST' });
+      const j = await r.json();
+      if (j.ok) {
+        showToast(`Resync OK : ${j.synced} créneaux poussés`, 'success', 4000);
+        setTimeout(() => document.getElementById('gcal-iframe').src += '', 1500); // reload iframe
+      } else {
+        showToast(j.message || 'Resync échoué', 'error');
+      }
+    } catch (e) { showToast('Erreur réseau', 'error'); }
+  }
+</script>
+{% else %}
+<!-- Fallback : Google Calendar non configuré → on garde la grille interne -->
 <div class="card" style="padding:16px;">
-  <!-- Jours de la semaine -->
+  <div style="background:var(--amber-bg);color:var(--amber);padding:8px 12px;border-radius:6px;
+              font-family:var(--font-mono);font-size:11px;margin-bottom:12px;">
+    ⚠ Google Calendar non configuré — affichage de la grille locale.
+    Définissez GOOGLE_CALENDAR_ID et GOOGLE_CALENDAR_CREDENTIALS_PATH pour activer la synchro.
+  </div>
+  <!-- Grille calendrier locale (fallback) -->
   <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:6px;">
     {% for day in ["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"] %}
     <div style="text-align:center;font-family:var(--font-mono);font-size:9px;
@@ -200,45 +493,26 @@
     </div>
     {% endfor %}
   </div>
-
-  <!-- Semaines -->
   <div style="display:flex;flex-direction:column;gap:4px;">
     {% for week in cal_weeks %}
     <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;">
       {% for day in week %}
       {% set day_acqs = acqs_by_day.get(day, []) if day > 0 else [] %}
-      <div
-        onclick="{% if day > 0 and day_acqs %}showDay({{ day }}){% endif %}"
+      <div onclick="{% if day > 0 and day_acqs %}showDay({{ day }}){% endif %}"
         style="min-height:80px;border-radius:4px;padding:6px;cursor:{% if day > 0 and day_acqs %}pointer{% else %}default{% endif %};
                border:1px solid {% if day == today_day %}var(--teal){% else %}var(--border){% endif %};
-               background:{% if day == 0 %}var(--bg){% elif day == today_day %}var(--teal-bg){% else %}var(--bg2){% endif %};
-               transition:background .12s;">
+               background:{% if day == 0 %}var(--bg){% elif day == today_day %}var(--teal-bg){% else %}var(--bg2){% endif %};">
         {% if day > 0 %}
-          <div style="font-family:var(--font-mono);font-size:11px;font-weight:{% if day == today_day %}500{% else %}400{% endif %};
-                      color:{% if day == today_day %}var(--teal){% else %}var(--muted){% endif %};margin-bottom:4px;">
-            {{ day }}
-          </div>
+          <div style="font-family:var(--font-mono);font-size:11px;color:{% if day == today_day %}var(--teal){% else %}var(--muted){% endif %};margin-bottom:4px;">{{ day }}</div>
           {% if day_acqs %}
             <div style="display:flex;flex-direction:column;gap:2px;">
               {% for a in day_acqs[:4] %}
               <div style="font-family:var(--font-mono);font-size:9px;padding:1px 5px;border-radius:2px;
-                          overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-                          background:{% if color_map.get(a.projet,'teal') == 'teal' %}rgba(234,124,28,0.14)
-                                     {% elif color_map.get(a.projet,'teal') == 'blue' %}rgba(29,78,216,0.1)
-                                     {% elif color_map.get(a.projet,'teal') == 'amber' %}rgba(180,83,9,0.1)
-                                     {% else %}rgba(220,38,38,0.1){% endif %};
-                          color:{% if color_map.get(a.projet,'teal') == 'teal' %}var(--teal)
-                                {% elif color_map.get(a.projet,'teal') == 'blue' %}var(--blue)
-                                {% elif color_map.get(a.projet,'teal') == 'amber' %}var(--amber)
-                                {% else %}var(--red){% endif %};"
-                   title="{{ a.animal_id }} — {{ a.sequence }}">
-                {{ a.animal_id }}
-              </div>
+                          overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:var(--bg3);color:var(--text);"
+                   title="{{ a.animal_id }} — {{ a.sequence }}">{{ a.animal_id }}</div>
               {% endfor %}
               {% if day_acqs | length > 4 %}
-              <div style="font-family:var(--font-mono);font-size:9px;color:var(--hint);padding-left:2px;">
-                +{{ day_acqs | length - 4 }} autres
-              </div>
+              <div style="font-family:var(--font-mono);font-size:9px;color:var(--hint);">+{{ day_acqs | length - 4 }}</div>
               {% endif %}
             </div>
           {% endif %}
@@ -249,6 +523,7 @@
     {% endfor %}
   </div>
 </div>
+{% endif %}
 
 <!-- Panneau détail jour -->
 <div id="day-panel" style="display:none;" class="card">
@@ -276,6 +551,7 @@
       <tr>
         <th>Animal</th>
         <th>Projet</th>
+        <th>Chercheur</th>
         <th>Séquence</th>
         <th>Date</th>
         <th>Importé par</th>
@@ -292,8 +568,11 @@
         </td>
         <td>
           <a href="/projet/{{ a.projet }}" style="color:var(--text);text-decoration:none;">
-            {{ a.projet | replace("_", " ") | title }}
+            {{ a.projet | upper }}
           </a>
+        </td>
+        <td class="mono" style="font-size:11px;">
+          {% if a.projet_resp %}👤 {{ a.projet_resp }}{% else %}<span style="color:var(--hint);">—</span>{% endif %}
         </td>
         <td class="mono">{{ a.sequence or "—" }}</td>
         <td class="mono">{{ a.date_acq or "—" }}</td>
