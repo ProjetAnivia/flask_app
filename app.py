@@ -3714,6 +3714,74 @@ def api_gcal_status():
     return jsonify(gcal.test_connection())
 
 
+@app.route("/api/google-calendar/diag")
+@login_required
+def api_gcal_diag():
+    """
+    Diagnostic public (utilisateurs connectés) : vérifie chaque maillon de la
+    chaîne pour faciliter le dépannage. NE PAS exposer le contenu des credentials.
+    """
+    import os
+    out = {
+        "module_loaded":     bool(gcal),
+        "gcal_id_present":   False,
+        "gcal_id_preview":   "",
+        "creds_present":     False,
+        "creds_source":      None,
+        "creds_valid":       False,
+        "enabled":           False,
+        "message":           "",
+        "hint":              "",
+    }
+    gcal_id = os.environ.get("GOOGLE_CALENDAR_ID", "").strip()
+    if gcal_id:
+        out["gcal_id_present"] = True
+        # Affiche seulement le début (sécurité) — l'ID est déjà semi-public
+        out["gcal_id_preview"] = gcal_id[:16] + "…" if len(gcal_id) > 20 else gcal_id
+
+    # Détection credentials
+    cred_path = os.environ.get("GOOGLE_CALENDAR_CREDENTIALS_PATH", "").strip()
+    cred_json = (
+        os.environ.get("GOOGLE_CALENDAR_CREDENTIALS_JSON")
+        or os.environ.get("GOOGLE_CALENDAR_CREDENTIALS")
+        or os.environ.get("GOOGLE_CALENDAR_SA_JSON")
+        or ""
+    )
+    if cred_json:
+        out["creds_present"] = True
+        out["creds_source"]  = "JSON inline (env var)"
+        if gcal:
+            try:
+                parsed = gcal._parse_creds_json(cred_json)
+                out["creds_valid"] = bool(parsed and parsed.get("private_key") and parsed.get("client_email"))
+                if not out["creds_valid"]:
+                    out["message"] = "Le JSON ne contient pas private_key ou client_email"
+            except Exception as exc:
+                out["message"] = f"Échec parsing JSON : {exc}"
+    elif cred_path:
+        out["creds_present"] = True
+        out["creds_source"]  = f"Fichier : {cred_path}"
+        out["creds_valid"]   = os.path.isfile(cred_path)
+        if not out["creds_valid"]:
+            out["message"] = f"Le fichier {cred_path} est introuvable"
+
+    if not out["gcal_id_present"]:
+        out["hint"] = "Ajoute GOOGLE_CALENDAR_ID dans les variables d'environnement (ex: 9c870…@group.calendar.google.com)."
+    elif not out["creds_present"]:
+        out["hint"] = ("Pour Railway : colle le JSON complet de la clé service-account "
+                       "dans une variable nommée GOOGLE_CALENDAR_CREDENTIALS_JSON "
+                       "(ou GOOGLE_CALENDAR_CREDENTIALS).")
+    elif not out["creds_valid"]:
+        out["hint"] = "Vérifie que la variable contient bien le JSON COMPLET du service account, sans guillemets externes ajoutés par Railway."
+    elif gcal:
+        out["enabled"] = gcal.is_enabled()
+        if not out["enabled"]:
+            out["message"] = "Auth Google échouée (clé révoquée ou pas de droits sur le calendrier ?)"
+            out["hint"]    = "Vérifie que le calendrier est bien partagé avec l'email du service account avec droit Modifier."
+
+    return jsonify(out)
+
+
 @app.route("/api/google-calendar/resync", methods=["POST"])
 @login_required
 @role_required("admin")

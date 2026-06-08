@@ -235,13 +235,43 @@
   }
 </script>
 {% else %}
-<!-- Fallback : Google Calendar non configuré → on garde la grille interne -->
+<!-- Fallback : Google Calendar non configuré → diagnostic + grille locale -->
 <div class="card" style="padding:16px;">
-  <div style="background:var(--amber-bg);color:var(--amber);padding:8px 12px;border-radius:6px;
-              font-family:var(--font-mono);font-size:11px;margin-bottom:12px;">
-    ⚠ Google Calendar non configuré — affichage de la grille locale.
-    Définissez GOOGLE_CALENDAR_ID et GOOGLE_CALENDAR_CREDENTIALS_PATH pour activer la synchro.
+  <div style="background:var(--amber-bg);color:var(--amber);padding:12px 16px;border-radius:6px;
+              font-family:var(--font-mono);font-size:11px;margin-bottom:12px;line-height:1.7;">
+    ⚠ <strong>Google Calendar non configuré</strong> — affichage de la grille locale.
+    <div id="gcal-diag-box" style="margin-top:8px;color:var(--text);">
+      <span style="color:var(--hint);">Chargement du diagnostic…</span>
+    </div>
   </div>
+  <script>
+  (async function loadGcalDiag() {
+    const $b = document.getElementById('gcal-diag-box');
+    if (!$b) return;
+    try {
+      const r = await fetch('/api/google-calendar/diag');
+      if (!r.ok) {
+        $b.innerHTML = '<span style="color:var(--red);">Diagnostic indisponible (réservé admin).</span>';
+        return;
+      }
+      const d = await r.json();
+      const v = (b) => b ? '<span style="color:var(--teal);">✓</span>'
+                         : '<span style="color:var(--red);">✗</span>';
+      $b.innerHTML = `
+        <div>${v(d.module_loaded)} Module Python <code>google_calendar</code> chargé</div>
+        <div>${v(d.gcal_id_present)} <code>GOOGLE_CALENDAR_ID</code> défini ${d.gcal_id_preview ? '<span style="color:var(--hint);">('+d.gcal_id_preview+')</span>' : ''}</div>
+        <div>${v(d.creds_present)} Credentials présentes
+          <span style="color:var(--hint);">(${d.creds_source || 'aucune'})</span></div>
+        <div>${v(d.creds_valid)} Credentials parseables</div>
+        <div>${v(d.enabled)} <strong>État final : ${d.enabled ? 'activé' : 'désactivé'}</strong></div>
+        ${d.message ? '<div style="margin-top:6px;color:var(--red);">→ '+d.message+'</div>' : ''}
+        ${d.hint ? '<div style="margin-top:6px;color:var(--text);background:var(--bg2);padding:6px 10px;border-radius:4px;">💡 '+d.hint+'</div>' : ''}
+      `;
+    } catch (e) {
+      $b.innerHTML = '<span style="color:var(--red);">Erreur de chargement : '+e+'</span>';
+    }
+  })();
+  </script>
   <!-- Grille calendrier locale (fallback) -->
   <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:6px;">
     {% for day in ["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"] %}
