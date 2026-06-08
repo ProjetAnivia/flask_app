@@ -578,22 +578,7 @@ async function deleteCreneau(acqId, animalLabel, seqLabel) {
 }
 </script>
 
-<!-- Panneau détail jour -->
-<div id="day-panel" style="display:none;" class="card">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-    <div class="card-title" id="day-panel-title" style="margin-bottom:0;padding-bottom:0;border:none;"></div>
-    <button onclick="document.getElementById('day-panel').style.display='none'"
-            style="background:none;border:none;font-size:16px;cursor:pointer;color:var(--hint);">✕</button>
-  </div>
-  <table class="data-table">
-    <thead>
-      <tr>
-        <th>Animal</th><th>Projet</th><th>Séquence</th><th>Statut</th><th>Importé par</th>
-      </tr>
-    </thead>
-    <tbody id="day-panel-body"></tbody>
-  </table>
-</div>
+<!-- (Panneau "détail jour" supprimé — résidu de l'ancienne grille calendrier) -->
 
 <!-- ─── Avancement par SESSION (CR : préférence cliente) ──────────────── -->
 <div class="card" id="avancement">
@@ -664,75 +649,6 @@ async function deleteCreneau(acqId, animalLabel, seqLabel) {
   </div>
   {% else %}
     <div class="mono" style="color:var(--hint);padding:16px 0;">Aucune session accessible.</div>
-  {% endif %}
-</div>
-
-<!-- Ancienne version : Avancement par projet (cachée, conservée pour compat) -->
-<div class="card" id="avancement-par-projet-legacy" style="display:none;">
-  <div class="card-title">📋 Avancement par projet (legacy)</div>
-  {% if projets_plan %}
-  <div style="display:flex;flex-direction:column;gap:10px;">
-    {% for pp in projets_plan %}
-    <a href="/projet/{{ pp.nom }}" style="text-decoration:none;color:inherit;">
-      <div style="display:grid;grid-template-columns:180px 1fr 220px auto;gap:12px;align-items:center;
-                  padding:10px 14px;border:1px solid var(--border);border-radius:8px;
-                  background:var(--bg2);transition:all .12s;"
-           onmouseover="this.style.background='var(--bg3)';"
-           onmouseout="this.style.background='var(--bg2)';">
-        <!-- Acronyme + nom long -->
-        <div>
-          <div style="font-weight:600;color:var(--text);font-size:13px;">{{ pp.nom | upper }}</div>
-          {% if pp.nom_long %}
-          <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-top:2px;
-                      overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ pp.nom_long }}</div>
-          {% endif %}
-          {% if pp.resp %}
-          <div style="font-family:var(--font-mono);font-size:10px;color:var(--muted);margin-top:2px;">
-            👤 {{ pp.resp }}
-          </div>
-          {% endif %}
-        </div>
-        <!-- Barre de progression -->
-        <div>
-          {% if pp.nb_prevus > 0 %}
-          <div style="display:flex;align-items:center;gap:8px;">
-            <div style="flex:1;height:8px;background:var(--bg);border-radius:4px;overflow:hidden;">
-              <div style="height:100%;width:{{ pp.pct }}%;
-                          background:{% if pp.couleur == 'teal' %}var(--teal)
-                                     {% elif pp.couleur == 'amber' %}var(--amber)
-                                     {% else %}var(--red){% endif %};"></div>
-            </div>
-            <span style="font-family:var(--font-mono);font-size:11px;color:var(--text);min-width:34px;text-align:right;">
-              {{ pp.pct }}%
-            </span>
-          </div>
-          <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-top:4px;">
-            {{ pp.faites }} / {{ pp.prevues }} acquisitions · {{ pp.nb_inscrits }} animal(aux) inscrit(s)
-          </div>
-          {% else %}
-          <div style="font-family:var(--font-mono);font-size:11px;color:var(--hint);font-style:italic;">
-            Nombre d'animaux prévus non précisé
-          </div>
-          <div style="font-family:var(--font-mono);font-size:10px;color:var(--hint);margin-top:4px;">
-            {{ pp.faites }} acquisitions · {{ pp.nb_inscrits }} animal(aux)
-          </div>
-          {% endif %}
-        </div>
-        <!-- Stats statuts -->
-        <div style="display:flex;gap:6px;flex-wrap:wrap;font-family:var(--font-mono);font-size:10px;">
-          {% if pp.nb_ok %}<span class="pill pill-ok" style="font-size:10px;padding:1px 6px;">✓ {{ pp.nb_ok }}</span>{% endif %}
-          {% if pp.nb_cours %}<span class="pill pill-prog" style="font-size:10px;padding:1px 6px;">▶ {{ pp.nb_cours }}</span>{% endif %}
-          {% if pp.nb_attente %}<span class="pill pill-wait" style="font-size:10px;padding:1px 6px;">⌛ {{ pp.nb_attente }}</span>{% endif %}
-          {% if pp.nb_refaire %}<span class="pill pill-redo" style="font-size:10px;padding:1px 6px;">⚠ {{ pp.nb_refaire }}</span>{% endif %}
-        </div>
-        <!-- Flèche -->
-        <span style="color:var(--hint);font-family:var(--font-mono);">→</span>
-      </div>
-    </a>
-    {% endfor %}
-  </div>
-  {% else %}
-    <div class="mono" style="color:var(--hint);padding:16px 0;">Aucun projet accessible.</div>
   {% endif %}
 </div>
 
@@ -833,53 +749,7 @@ async function deleteCreneau(acqId, animalLabel, seqLabel) {
 </div>
 {% endif %}
 
-<style>
-  .day-cell:hover { background: var(--bg3) !important; }
-</style>
-
-<script>
-const acqsByDay = {{ acqs_by_day | tojson }};
-const colorMap  = {{ color_map | tojson }};
-
-const colorStyle = {
-  teal:  { bg: 'rgba(234,124,28,0.12)',  text: 'var(--teal)' },
-  blue:  { bg: 'rgba(29,78,216,0.1)',   text: '#1d4ed8' },
-  amber: { bg: 'rgba(180,83,9,0.1)',    text: '#b45309' },
-  red:   { bg: 'rgba(220,38,38,0.1)',   text: '#dc2626' },
-};
-
-const statuts = {
-  ok:         '<span class="pill pill-ok">OK</span>',
-  en_cours:   '<span class="pill pill-prog">en cours</span>',
-  en_attente: '<span class="pill pill-wait">en attente</span>',
-  a_refaire:  '<span class="pill pill-redo">à refaire</span>',
-};
-
-function showDay(day) {
-  const acqs  = acqsByDay[day] || [];
-  const panel = document.getElementById('day-panel');
-  const title = document.getElementById('day-panel-title');
-  const tbody = document.getElementById('day-panel-body');
-
-  title.textContent = `{{ month_name }} {{ year }} — jour ${day} (${acqs.length} acquisition(s))`;
-
-  tbody.innerHTML = acqs.map(a => {
-    const col = colorMap[a.projet] || 'teal';
-    const cs  = colorStyle[col];
-    return `<tr>
-      <td><strong>${a.animal_id}</strong></td>
-      <td><span style="font-family:var(--font-mono);font-size:10px;padding:1px 6px;border-radius:2px;
-                       background:${cs.bg};color:${cs.text};">${a.projet.replace(/_/g,' ')}</span></td>
-      <td class="mono">${a.sequence || '—'}</td>
-      <td>${statuts[a.statut] || a.statut}</td>
-      <td class="mono">${a.importé_par || '—'}</td>
-    </tr>`;
-  }).join('');
-
-  panel.style.display = 'block';
-  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-}
-</script>
+<!-- (CSS .day-cell + JS showDay supprimés — résidu de l'ancienne grille calendrier) -->
 
 
 
@@ -899,8 +769,8 @@ function showDay(day) {
         <label class="form-label">Projet *</label>
         <select class="form-select" name="projet" required>
           <option value="">— sélectionner —</option>
-          {% for p in projets %}
-            <option value="{{ p.nom }}">{{ p.nom }}</option>
+          {% for p in projets_plan %}
+            <option value="{{ p.nom }}">{{ p.nom | upper }}{% if p.nom_long %} — {{ p.nom_long }}{% endif %}</option>
           {% endfor %}
         </select>
       </div>
@@ -1253,8 +1123,8 @@ document.getElementById('creneauModal').addEventListener('click', (e) => {
         <label class="form-label">Projet *</label>
         <select class="form-select" name="projet" required>
           <option value="">— sélectionner —</option>
-          {% for p in projets %}
-            <option value="{{ p.nom }}">{{ p.nom }}</option>
+          {% for p in projets_plan %}
+            <option value="{{ p.nom }}">{{ p.nom | upper }}{% if p.nom_long %} — {{ p.nom_long }}{% endif %}</option>
           {% endfor %}
         </select>
       </div>
