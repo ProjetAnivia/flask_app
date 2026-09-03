@@ -31,20 +31,6 @@ ENV FLASK_ENV=production
 ENV DB_DIR=/app/db
 ENV NAS_ROOT=/app/nas_simule/structured
 
-# Render (et la plupart des PaaS) imposent le port via $PORT.
-# En local, docker-compose ne definit pas PORT : on retombe sur 5000.
-ENV PORT=5000
-
-# gthread : les connexions SSE longues ne bloquent pas les autres requetes.
-# WEB_CONCURRENCY pilote le nombre de workers :
-#   - 1 sur une instance 512 Mo (Render free) pour eviter l'OOM
-#   - 2 ou plus des qu'on a de la RAM (NAS, instance payante)
-ENV WEB_CONCURRENCY=2
-
-# Forme shell obligatoire pour que $PORT et $WEB_CONCURRENCY soient substitues.
-CMD gunicorn --bind 0.0.0.0:${PORT} \
-    --worker-class gthread \
-    --workers ${WEB_CONCURRENCY} \
-    --threads 4 \
-    --timeout 300 \
-    app:app
+# Gunicorn gthread : 2 workers × 4 threads = 8 requêtes simultanées
+# gthread permet les connexions SSE longues sans bloquer les autres workers
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--worker-class", "gthread", "--workers", "2", "--threads", "4", "--timeout", "300", "app:app"]

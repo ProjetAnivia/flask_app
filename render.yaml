@@ -1,0 +1,73 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  render.yaml — Blueprint Render pour la plateforme IRM FAIR
+#
+#  Utilisation : Render Dashboard → New → Blueprint → sélectionner ce repo.
+#  Render lit ce fichier et crée le service automatiquement.
+#
+#  Voir RENDER_DEPLOY.md pour la procédure complète et les variables secrètes.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  - type: web
+    name: irm-fair
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    region: frankfurt          # le plus proche de Lille parmi les régions Render
+    plan: free                 # 512 Mo RAM, mise en veille après 15 min d'inactivité
+    autoDeployTrigger: commit  # redéploie à chaque push sur la branche par défaut
+    healthCheckPath: /login
+
+    envVars:
+      # ── Runtime ────────────────────────────────────────────────────────────
+      - key: FLASK_ENV
+        value: production
+
+      # 1 seul worker : sur 512 Mo, deux workers qui chargent numpy + scipy +
+      # scikit-learn (route de segmentation) font tomber l'instance en OOM.
+      - key: WEB_CONCURRENCY
+        value: "1"
+
+      # Render sert en HTTPS : active le flag Secure sur le cookie de session.
+      - key: HTTPS_ENABLED
+        value: "true"
+
+      # ── Chemins (données embarquées dans l'image, pas de volume) ───────────
+      - key: DB_DIR
+        value: /app/db
+      - key: NAS_ROOT
+        value: /app/nas_simule/structured
+
+      # ── Sécurité ──────────────────────────────────────────────────────────
+      # Générée une fois par Render à la création du service, puis stable.
+      - key: SECRET_KEY
+        generateValue: true
+
+      # ── À renseigner à la main dans le dashboard Render ────────────────────
+      # sync: false = Render ne les écrase pas et ne les stocke pas dans le repo.
+      - key: APP_URL                 # https://irm-fair.onrender.com (une fois l'URL connue)
+        sync: false
+      - key: RECAPTCHA_SITE_KEY
+        sync: false
+      - key: RECAPTCHA_SECRET_KEY
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+
+      # ── Google Calendar ───────────────────────────────────────────────────
+      # Désactivé par défaut : le service account n'est pas dans le repo.
+      # Pour l'activer, passer à "true" et coller le JSON complet du service
+      # account dans GOOGLE_CALENDAR_CREDENTIALS_JSON (variable secrète).
+      - key: GOOGLE_CALENDAR_ENABLED
+        value: "false"
+      - key: GOOGLE_CALENDAR_TZ
+        value: Europe/Paris
+      - key: GOOGLE_CALENDAR_ID
+        sync: false
+      - key: GOOGLE_CALENDAR_CREDENTIALS_JSON
+        sync: false
